@@ -64,6 +64,7 @@ class BrowserExtractOutput:
 class MapFieldsInput:
     run_id: str
     form_schema_dict: dict   # FormSchema serialized to dict
+    job_description: str = ""
 
 
 @dataclass
@@ -88,6 +89,7 @@ class BrowserFillInput:
     run_id: str
     job_url: str
     field_mappings: list[dict]
+    form_schema_dict: dict        # passed so the filler can use element_id/name/placeholder
     cover_letter_path: str | None
 
 

@@ -62,7 +62,7 @@ class BrowserRegistry:
 
     async def open_page(self, run_id: str, url: str) -> Page:
         if run_id in self._pages:
-            logger.warning("Page already open for run %s — closing old one", run_id)
+            logger.warning(f"Page already open for run {run_id} — closing old one")
             await self.close_page(run_id)
 
         assert self._browser is not None, "BrowserRegistry.start() was not called"
@@ -78,7 +78,7 @@ class BrowserRegistry:
         await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
 
         self._pages[run_id] = (context, page)
-        logger.info("Opened page for run %s: %s", run_id, url)
+        logger.info(f"Opened page for run {run_id}: {url}")
         return page
 
     def get_page(self, run_id: str) -> Page | None:
@@ -104,4 +104,4 @@ class BrowserRegistry:
         except Exception:
             pass
         await context.close()
-        logger.info("Closed page and saved trace for run %s", run_id)
+        logger.info(f"Closed page and saved trace for run {run_id}")

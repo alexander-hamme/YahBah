@@ -10,6 +10,7 @@ from yahbah.llm.cover_letter import CoverLetterGenerator
 from yahbah.schemas import (
     CoverLetterInput,
     CoverLetterOutput,
+    FormField,
     FormSchema,
     MapFieldsInput,
     MapFieldsOutput,
@@ -33,10 +34,15 @@ async def _load_profile() -> ApplicantProfile:
 @activity.defn
 async def map_fields_activity(input: MapFieldsInput) -> MapFieldsOutput:
     profile = await _load_profile()
-    form_schema = FormSchema(**input.form_schema_dict)
+    raw = input.form_schema_dict
+    form_schema = FormSchema(
+        fields=[FormField(**f) for f in raw.get("fields", [])],
+        page_url=raw.get("page_url", ""),
+        page_title=raw.get("page_title", ""),
+    )
 
     mapper = FieldMapper()
-    result = await mapper.map(form_schema, profile)
+    result = await mapper.map(form_schema, profile, job_description=input.job_description)
 
     # Persist mappings as artifact
     import json

@@ -41,7 +41,7 @@ Edit `.env` — defaults work for local dev if your Postgres user matches your O
 DATABASE_URL=postgresql+psycopg://localhost/yahbah
 TEMPORAL_HOST=localhost:7233
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=llama3.3:70b
+OLLAMA_MODEL=llama3:70b
 ARTIFACTS_DIR=./artifacts
 ```
 
@@ -65,7 +65,7 @@ uv run python scripts/seed_profile.py
 ### 5. Pull the LLM model
 
 ```bash
-ollama pull llama3.3:70b
+ollama pull llama3:70b
 ```
 
 ---

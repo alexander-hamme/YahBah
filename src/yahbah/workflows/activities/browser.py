@@ -1,10 +1,12 @@
 """
 Browser activities — Playwright-based.
 
-Design note: browser_extract_activity and browser_fill_and_submit_activity
-are intentionally separate so that LLM activities (map_fields, cover_letter)
-can run between them. Page state is managed by the BrowserRegistry in
-browser/manager.py, keyed by run_id.
+Activity sequence:
+  browser_open_and_auth_activity  → opens page, handles auth wall if present
+  browser_extract_activity        → extracts form schema (page already open)
+  browser_fill_and_submit_activity → fills, uploads, submits, confirms
+
+Page state is managed by BrowserRegistry (worker-level singleton), keyed by run_id.
 """
 import json
 from dataclasses import asdict
@@ -12,8 +14,21 @@ from dataclasses import asdict
 from temporalio import activity
 
 from yahbah.browser.manager import BrowserRegistry
-from yahbah.browser.greenhouse import GreenhouseExtractor, GreenhouseFiller
+from yahbah.browser.greenhouse import (
+    GreenhouseAuthHandler,
+    GreenhouseExtractor,
+    GreenhouseFiller,
+)
+from yahbah.credentials import (
+    company_slug_from_url,
+    generate_email_alias,
+    generate_password,
+)
+from yahbah.db.models import ApplicantProfile
+from yahbah.db.session import AsyncSessionLocal
 from yahbah.schemas import (
+    AuthInput,
+    AuthOutput,
     BrowserExtractInput,
     BrowserExtractOutput,
     BrowserFillInput,
@@ -21,17 +36,73 @@ from yahbah.schemas import (
     FormSchema,
     FieldMapping,
 )
-from yahbah.workflows.activities.db_ops import persist_artifact_activity
+from yahbah.workflows.activities.db_ops import (
+    persist_artifact_activity,
+    store_credentials_activity,
+)
+from sqlalchemy import select
+
+
+async def _base_email() -> str:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(ApplicantProfile).limit(1))
+        profile = result.scalar_one_or_none()
+        if profile is None:
+            raise RuntimeError("No ApplicantProfile found")
+        return profile.email
+
+
+@activity.defn
+async def browser_open_and_auth_activity(input: AuthInput) -> AuthOutput:
+    """
+    Opens the job page and handles auth walls if present.
+
+    If an auth wall is detected:
+      - generates a unique email alias + strong password
+      - creates the account via GreenhouseAuthHandler
+      - persists credentials to DB via store_credentials_activity
+    """
+    registry = BrowserRegistry.instance()
+    page = await registry.open_page(input.run_id, input.job_url)
+
+    handler = GreenhouseAuthHandler(page)
+    if not await handler.needs_auth():
+        activity.logger.info(f"No auth wall detected for run {input.run_id}")
+        return AuthOutput(auth_required=False, account_email=None, account_password=None)
+
+    activity.logger.info(f"Auth wall detected for run {input.run_id} — creating account")
+
+    base_email = await _base_email()
+    company_slug = company_slug_from_url(input.job_url)
+    email = generate_email_alias(base_email, company_slug)
+    password = generate_password()
+
+    await handler.create_account(email, password)
+
+    # Screenshot after auth
+    await registry.screenshot(input.run_id, "after_auth")
+
+    # Persist to DB
+    await store_credentials_activity(input.run_id, email, password)
+
+    return AuthOutput(auth_required=True, account_email=email, account_password=password)
 
 
 @activity.defn
 async def browser_extract_activity(input: BrowserExtractInput) -> BrowserExtractOutput:
     """
-    Opens the job application page, extracts the form schema, captures a
-    screenshot, and keeps the page alive for the fill step.
+    Extracts the form schema from the already-open page.
+    Assumes browser_open_and_auth_activity has run first.
     """
     registry = BrowserRegistry.instance()
-    page = await registry.open_page(input.run_id, input.job_url)
+    page = registry.get_page(input.run_id)
+
+    if page is None:
+        # Fallback: page lost between activities (e.g. worker bounce)
+        activity.logger.warning(
+            f"Page not in registry for run {input.run_id} — re-opening",
+        )
+        page = await registry.open_page(input.run_id, input.job_url)
 
     extractor = GreenhouseExtractor(page)
     form_schema, job_description = await extractor.extract()
@@ -73,15 +144,23 @@ async def browser_fill_and_submit_activity(input: BrowserFillInput) -> BrowserFi
     if page is None:
         # Page was lost (e.g. worker restart) — re-navigate
         activity.logger.warning(
-            "Page not found in registry for run %s — re-opening", input.run_id
+            f"Page not found in registry for run {input.run_id} — re-opening"
         )
         page = await registry.open_page(input.run_id, input.job_url)
 
-    field_mappings = [
-        FieldMapping(**m) for m in input.field_mappings
-    ]
+    from yahbah.schemas import FormField
 
-    filler = GreenhouseFiller(page)
+    field_mappings = [FieldMapping(**m) for m in input.field_mappings]
+    form_schema: FormSchema | None = None
+    if input.form_schema_dict:
+        raw = input.form_schema_dict
+        form_schema = FormSchema(
+            fields=[FormField(**f) for f in raw.get("fields", [])],
+            page_url=raw.get("page_url", ""),
+            page_title=raw.get("page_title", ""),
+        )
+
+    filler = GreenhouseFiller(page, form_schema=form_schema)
 
     # Screenshot before fill
     await registry.screenshot(input.run_id, "before_fill")

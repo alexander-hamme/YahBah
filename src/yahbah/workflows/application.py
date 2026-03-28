@@ -2,8 +2,8 @@
 ApplicationWorkflow — one instance per application_run.
 
 State machine:
-  OPEN_PAGE → EXTRACT_FORM → MAP_FIELDS → GENERATE_COVER_LETTER
-  → FILL_FIELDS → SUBMIT → CONFIRM → PERSIST_RESULT
+  AUTH_CHECK → EXTRACT_FORM → MAP_FIELDS → GENERATE_COVER_LETTER
+  → FILL_AND_SUBMIT → DONE
 """
 from dataclasses import dataclass
 from datetime import timedelta
@@ -13,12 +13,14 @@ from temporalio.exceptions import ActivityError
 
 with workflow.unsafe.imports_passed_through():
     from yahbah.schemas import (
+        AuthInput,
         BrowserExtractInput,
         BrowserFillInput,
         CoverLetterInput,
         MapFieldsInput,
     )
     from yahbah.workflows.activities.browser import (
+        browser_open_and_auth_activity,
         browser_extract_activity,
         browser_fill_and_submit_activity,
     )
@@ -52,7 +54,19 @@ class ApplicationWorkflow:
         long = timedelta(minutes=10)
 
         try:
-            # ── OPEN_PAGE + EXTRACT_FORM ─────────────────────────────────────
+            # ── AUTH_CHECK (open page + handle auth wall if present) ──────────
+            await workflow.execute_activity(
+                update_run_state_activity,
+                args=[run_id, "AUTH_CHECK"],
+                start_to_close_timeout=short,
+            )
+            await workflow.execute_activity(
+                browser_open_and_auth_activity,
+                AuthInput(run_id=run_id, job_url=job_url),
+                start_to_close_timeout=long,
+            )
+
+            # ── EXTRACT_FORM ─────────────────────────────────────────────────
             await workflow.execute_activity(
                 update_run_state_activity,
                 args=[run_id, "EXTRACT_FORM"],
@@ -75,6 +89,7 @@ class ApplicationWorkflow:
                 MapFieldsInput(
                     run_id=run_id,
                     form_schema_dict=extract_output.form_schema_dict,
+                    job_description=extract_output.job_description,
                 ),
                 start_to_close_timeout=medium,
             )
@@ -106,6 +121,7 @@ class ApplicationWorkflow:
                     run_id=run_id,
                     job_url=job_url,
                     field_mappings=map_output.field_mappings,
+                    form_schema_dict=extract_output.form_schema_dict,
                     cover_letter_path=cover_output.cover_letter_path,
                 ),
                 start_to_close_timeout=long,

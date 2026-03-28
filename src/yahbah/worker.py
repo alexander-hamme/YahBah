@@ -17,6 +17,7 @@ from yahbah.config import settings
 from yahbah.browser.manager import BrowserRegistry
 from yahbah.workflows.application import ApplicationWorkflow
 from yahbah.workflows.activities.browser import (
+    browser_open_and_auth_activity,
     browser_extract_activity,
     browser_fill_and_submit_activity,
 )
@@ -29,6 +30,7 @@ from yahbah.workflows.activities.db_ops import (
     mark_run_completed_activity,
     mark_run_failed_activity,
     persist_artifact_activity,
+    store_credentials_activity,
 )
 
 
@@ -43,10 +45,9 @@ async def main() -> None:
             namespace=settings.temporal_namespace,
         )
         logger.info(
-            "Worker connected to Temporal at %s (namespace=%s, queue=%s)",
-            settings.temporal_host,
-            settings.temporal_namespace,
-            settings.temporal_task_queue,
+            f"Worker connected to Temporal at {settings.temporal_host} "
+            f"(namespace={settings.temporal_namespace}, "
+            f"queue={settings.temporal_task_queue})"
         )
 
         worker = Worker(
@@ -59,7 +60,9 @@ async def main() -> None:
                 mark_run_completed_activity,
                 mark_run_failed_activity,
                 persist_artifact_activity,
+                store_credentials_activity,
                 # Browser
+                browser_open_and_auth_activity,
                 browser_extract_activity,
                 browser_fill_and_submit_activity,
                 # LLM
@@ -73,7 +76,6 @@ async def main() -> None:
 
     finally:
         await registry.stop()
-
 
 if __name__ == "__main__":
     asyncio.run(main())

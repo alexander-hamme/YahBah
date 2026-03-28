@@ -1,7 +1,8 @@
 """
-Greenhouse-specific form extraction and deterministic filling.
+Greenhouse-specific form extraction, auth handling, and deterministic filling.
 
 Extraction: reads the DOM to produce a FormSchema.
+Auth: detects login/signup walls and creates an account with generated credentials.
 Filling: takes FieldMappings and applies them via Playwright locators.
 No LLM involvement here.
 """
@@ -13,6 +14,96 @@ from yahbah.schemas import FieldMapping, FormField, FormSchema
 
 # Confidence threshold below which we refuse to fill a required field
 MIN_CONFIDENCE = 0.7
+
+
+class _FieldNotFoundError(Exception):
+    """Raised when no locator strategy can find a field on the page."""
+
+
+class GreenhouseAuthHandler:
+    """
+    Detects Greenhouse auth walls and creates a new account.
+
+    Greenhouse shows a sign-in/sign-up page when the job requires an account.
+    We detect this by looking for password inputs or known auth form selectors,
+    then fill the registration form with generated credentials.
+    """
+
+    # Selectors that indicate an auth wall is present
+    _AUTH_INDICATORS = [
+        "input[type='password']",
+        "#new_user",
+        "form[action*='sign_in']",
+        "form[action*='users']",
+        "[data-testid='sign-in-form']",
+    ]
+
+    # Selectors for the sign-up / create-account link
+    _SIGNUP_LINK_SELECTORS = [
+        "a[href*='sign_up']",
+        "a[href*='register']",
+        "a[href*='new_user']",
+        "a:has-text('Create account')",
+        "a:has-text('Sign up')",
+    ]
+
+    def __init__(self, page: Page) -> None:
+        self._page = page
+
+    async def needs_auth(self) -> bool:
+        """Returns True if the current page has an auth wall."""
+        for selector in self._AUTH_INDICATORS:
+            el = await self._page.query_selector(selector)
+            if el:
+                return True
+        return False
+
+    async def create_account(self, email: str, password: str) -> None:
+        """
+        Creates a new account using the provided credentials.
+        Raises RuntimeError if the form cannot be located or submitted.
+        """
+        # Try navigating to sign-up form if we're on the sign-in page
+        for selector in self._SIGNUP_LINK_SELECTORS:
+            link = await self._page.query_selector(selector)
+            if link:
+                await link.click()
+                await self._page.wait_for_load_state("networkidle", timeout=10_000)
+                logger.debug("Navigated to sign-up form via '%s'", selector)
+                break
+
+        # Locate email input
+        email_input = (
+            await self._page.query_selector("input[type='email']")
+            or await self._page.query_selector("input[name='user[email]']")
+            or await self._page.query_selector("input[name='email']")
+        )
+        # Locate all password inputs (password + confirm password)
+        password_inputs = await self._page.query_selector_all("input[type='password']")
+
+        if not email_input:
+            raise RuntimeError("Auth wall detected but no email input found")
+        if not password_inputs:
+            raise RuntimeError("Auth wall detected but no password input found")
+
+        await email_input.fill(email)
+        for pw_input in password_inputs:
+            await pw_input.fill(password)
+
+        # Submit the form
+        submit = (
+            await self._page.query_selector("input[type='submit']")
+            or await self._page.query_selector("button[type='submit']")
+        )
+        if not submit:
+            raise RuntimeError("Auth form submit button not found")
+
+        async with self._page.expect_navigation(
+            timeout=15_000, wait_until="domcontentloaded"
+        ):
+            await submit.click()
+
+        logger.info("Account created for %s", email)
 
 
 class GreenhouseExtractor:
@@ -180,11 +271,25 @@ class GreenhouseExtractor:
 class GreenhouseFiller:
     """
     Fills a Greenhouse form deterministically from FieldMappings.
-    No LLM involvement — pure Playwright.
+
+    Locator strategy (tried in order, each with a short 3 s timeout):
+      1. #element_id  (most precise — from extracted FormField)
+      2. [name="x"]   (HTML name attribute)
+      3. get_by_label (fuzzy)
+      4. get_by_placeholder (fuzzy)
+
+    Non-required fields that can't be located are skipped with a warning.
+    Required fields that can't be located raise immediately.
     """
 
-    def __init__(self, page: Page) -> None:
+    _LOCATE_TIMEOUT = 3_000  # ms per locator attempt
+
+    def __init__(self, page: Page, form_schema: FormSchema | None = None) -> None:
         self._page = page
+        # label → FormField lookup for precise targeting
+        self._field_by_label: dict[str, FormField] = (
+            {f.label: f for f in form_schema.fields} if form_schema else {}
+        )
 
     async def fill(
         self,
@@ -195,75 +300,104 @@ class GreenhouseFiller:
             if mapping.confidence < MIN_CONFIDENCE:
                 if mapping.mapped_to not in ("cover_letter", "resume"):
                     logger.warning(
-                        "Skipping field '%s' — confidence %.2f below threshold",
-                        mapping.form_label,
-                        mapping.confidence,
+                        "Skipping '%s' — confidence %.2f below threshold",
+                        mapping.form_label, mapping.confidence,
                     )
                     continue
 
+            form_field = self._field_by_label.get(mapping.form_label)
             try:
-                await self._fill_field(mapping, cover_letter_path)
+                await self._fill_field(mapping, form_field, cover_letter_path)
+            except _FieldNotFoundError:
+                if form_field and form_field.required:
+                    raise RuntimeError(
+                        f"Could not locate required field '{mapping.form_label}'"
+                    )
+                logger.warning("Could not locate optional field '%s' — skipping", mapping.form_label)
             except Exception as exc:
-                logger.error(
-                    "Failed to fill field '%s': %s", mapping.form_label, exc
-                )
+                logger.error("Failed to fill '%s': %s", mapping.form_label, exc)
                 raise
 
     async def _fill_field(
         self,
         mapping: FieldMapping,
+        form_field: FormField | None,
         cover_letter_path: str | None,
     ) -> None:
-        label = mapping.form_label
         value = mapping.value
         mapped_to = mapping.mapped_to
 
-        # Locate by label text first, then by placeholder
-        locator = (
-            self._page.get_by_label(label, exact=False)
-            or self._page.get_by_placeholder(label, exact=False)
-        )
-
+        # ── File uploads ──────────────────────────────────────────────────────
         if mapped_to == "resume":
-            # File upload — locate the file input
             file_input = self._page.locator("input[type='file']").first
-            await file_input.set_input_files(value)
+            await file_input.set_input_files(value, timeout=self._LOCATE_TIMEOUT)
             logger.debug("Uploaded resume: %s", value)
             return
 
         if mapped_to == "cover_letter" and cover_letter_path:
-            # Cover letter can be a file upload or a textarea
             file_inputs = self._page.locator("input[type='file']")
-            count = await file_inputs.count()
-            if count > 1:
-                # Second file input is usually cover letter
-                await file_inputs.nth(1).set_input_files(cover_letter_path)
-                logger.debug("Uploaded cover letter file: %s", cover_letter_path)
+            if await file_inputs.count() > 1:
+                await file_inputs.nth(1).set_input_files(
+                    cover_letter_path, timeout=self._LOCATE_TIMEOUT
+                )
+                logger.debug("Uploaded cover letter: %s", cover_letter_path)
                 return
-            # Otherwise fill it as text in a textarea
-            await self._fill_text_or_textarea(label, cover_letter_path)
-            return
+            # Fall through to text fill if no second file input
 
-        # Determine element type and fill accordingly
-        tag = await self._get_tag(label)
-        if tag == "select":
-            await self._page.get_by_label(label, exact=False).select_option(label=value)
-        else:
-            await self._fill_text_or_textarea(label, value)
+        # ── Build locator chain ───────────────────────────────────────────────
+        locator = await self._resolve_locator(mapping.form_label, form_field)
 
-        logger.debug("Filled '%s' → '%s'", label, value[:40] if value else "")
-
-    async def _fill_text_or_textarea(self, label: str, value: str) -> None:
-        loc = self._page.get_by_label(label, exact=False)
-        await loc.first.fill(value)
-
-    async def _get_tag(self, label: str) -> str:
-        loc = self._page.get_by_label(label, exact=False)
+        # Determine tag to decide fill vs select_option
         try:
-            tag = await loc.first.evaluate("el => el.tagName.toLowerCase()")
-            return tag
+            tag = await locator.evaluate(
+                "el => el.tagName.toLowerCase()", timeout=self._LOCATE_TIMEOUT
+            )
         except Exception:
-            return "input"
+            tag = "input"
+
+        fill_value = cover_letter_path if mapped_to == "cover_letter" else value
+
+        if tag == "select":
+            try:
+                await locator.select_option(label=fill_value, timeout=self._LOCATE_TIMEOUT)
+            except Exception:
+                # Try selecting by value if label match fails
+                await locator.select_option(value=fill_value, timeout=self._LOCATE_TIMEOUT)
+        else:
+            await locator.fill(fill_value, timeout=self._LOCATE_TIMEOUT)
+
+        logger.debug("Filled '%s' → '%s'", mapping.form_label, fill_value[:40])
+
+    async def _resolve_locator(self, label: str, form_field: FormField | None):
+        """
+        Tries locators in priority order. Returns the first one that resolves
+        to a visible element. Raises _FieldNotFoundError if none match.
+        """
+        candidates = []
+
+        if form_field:
+            if form_field.element_id:
+                candidates.append(self._page.locator(f"#{form_field.element_id}"))
+            if form_field.name:
+                candidates.append(self._page.locator(f"[name='{form_field.name}']"))
+            if form_field.placeholder:
+                candidates.append(
+                    self._page.get_by_placeholder(form_field.placeholder, exact=False)
+                )
+
+        candidates.append(self._page.get_by_label(label, exact=False))
+        candidates.append(self._page.get_by_placeholder(label, exact=False))
+
+        for loc in candidates:
+            try:
+                # Use .first to avoid strict-mode errors on multi-match
+                resolved = loc.first
+                await resolved.wait_for(state="visible", timeout=self._LOCATE_TIMEOUT)
+                return resolved
+            except Exception:
+                continue
+
+        raise _FieldNotFoundError(label)
 
     async def submit(self) -> tuple[str | None, str | None]:
         """

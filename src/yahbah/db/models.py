@@ -60,6 +60,8 @@ class ApplicationRun(Base):
     current_state: Mapped[str | None] = mapped_column(String)
     # mirrors workflow step names: OPEN_PAGE | EXTRACT_FORM | MAP_FIELDS | etc
     temporal_workflow_id: Mapped[str | None] = mapped_column(String)
+    account_email: Mapped[str | None] = mapped_column(String)
+    account_password: Mapped[str | None] = mapped_column(String)
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow

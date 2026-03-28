@@ -52,6 +52,21 @@ async def mark_run_failed_activity(run_id: str, error_message: str) -> None:
 
 
 @activity.defn
+async def store_credentials_activity(
+    run_id: str, account_email: str, account_password: str
+) -> None:
+    """Persists the generated account credentials onto the ApplicationRun row."""
+    async with AsyncSessionLocal() as session:
+        run = await session.get(ApplicationRun, uuid.UUID(run_id))
+        if run is None:
+            raise ValueError(f"ApplicationRun {run_id} not found")
+        run.account_email = account_email
+        run.account_password = account_password
+        run.updated_at = datetime.now(timezone.utc)
+        await session.commit()
+
+
+@activity.defn
 async def persist_artifact_activity(
     run_id: str,
     artifact_type: str,

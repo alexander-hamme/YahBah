@@ -25,6 +25,8 @@ class RunResponse(BaseModel):
     status: str
     current_state: str | None
     temporal_workflow_id: str | None
+    account_email: str | None
+    account_password: str | None
     error_message: str | None
     created_at: str
     updated_at: str
@@ -74,6 +76,8 @@ async def get_run(
         status=run.status,
         current_state=run.current_state,
         temporal_workflow_id=run.temporal_workflow_id,
+        account_email=run.account_email,
+        account_password=run.account_password,
         error_message=run.error_message,
         created_at=run.created_at.isoformat(),
         updated_at=run.updated_at.isoformat(),

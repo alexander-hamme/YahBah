@@ -14,7 +14,7 @@ class Settings(BaseSettings):
 
     # Ollama
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "llama3.3:70b"
+    ollama_model: str = "llama3:70b"
     ollama_timeout: int = 120  # seconds
 
     # Safety
@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     artifacts_dir: str = "./artifacts"
 
     # App
-    app_env: str = "dev"
+    app_env: str = "dev"  # TODO READ from env file
     log_level: str = "INFO"
 
 

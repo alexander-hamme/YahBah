@@ -57,7 +57,7 @@ PROFILE = {
     ],
     "education": [
         {
-            "degree": "B.S. Computer Science",
+            "degree": "B.A. Computer Science",
             "institution": "Bard College",
             "year": "2019",
             "gpa": "3.8",
