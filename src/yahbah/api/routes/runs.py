@@ -1,0 +1,138 @@
+"""
+GET /runs/{id}         — run status + current state
+GET /runs/{id}/steps   — all steps with logs
+GET /runs/{id}/artifacts — all artifacts
+"""
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from yahbah.db.models import ApplicationRun, ApplicationStep, ApplicationArtifact
+from yahbah.db.session import get_session
+
+router = APIRouter()
+
+
+# ── Response models ────────────────────────────────────────────────────────
+
+class RunResponse(BaseModel):
+    id: str
+    job_url: str
+    status: str
+    current_state: str | None
+    temporal_workflow_id: str | None
+    error_message: str | None
+    created_at: str
+    updated_at: str
+    completed_at: str | None
+
+
+class StepResponse(BaseModel):
+    id: str
+    step_name: str
+    status: str
+    logs: str | None
+    started_at: str | None
+    completed_at: str | None
+
+
+class ArtifactResponse(BaseModel):
+    id: str
+    artifact_type: str
+    path: str
+    metadata: dict | None
+    created_at: str
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+def _run_id(run_id: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(run_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid run_id format")
+
+
+# ── Routes ─────────────────────────────────────────────────────────────────
+
+@router.get("/{run_id}", response_model=RunResponse)
+async def get_run(
+    run_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> RunResponse:
+    run = await session.get(ApplicationRun, _run_id(run_id))
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    return RunResponse(
+        id=str(run.id),
+        job_url=run.job_url,
+        status=run.status,
+        current_state=run.current_state,
+        temporal_workflow_id=run.temporal_workflow_id,
+        error_message=run.error_message,
+        created_at=run.created_at.isoformat(),
+        updated_at=run.updated_at.isoformat(),
+        completed_at=run.completed_at.isoformat() if run.completed_at else None,
+    )
+
+
+@router.get("/{run_id}/steps", response_model=list[StepResponse])
+async def get_steps(
+    run_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> list[StepResponse]:
+    run = await session.get(ApplicationRun, _run_id(run_id))
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    result = await session.execute(
+        select(ApplicationStep)
+        .where(ApplicationStep.run_id == _run_id(run_id))
+        .order_by(ApplicationStep.created_at)
+    )
+    steps = result.scalars().all()
+
+    return [
+        StepResponse(
+            id=str(s.id),
+            step_name=s.step_name,
+            status=s.status,
+            logs=s.logs,
+            started_at=s.started_at.isoformat() if s.started_at else None,
+            completed_at=s.completed_at.isoformat() if s.completed_at else None,
+        )
+        for s in steps
+    ]
+
+
+@router.get("/{run_id}/artifacts", response_model=list[ArtifactResponse])
+async def get_artifacts(
+    run_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> list[ArtifactResponse]:
+    run = await session.get(ApplicationRun, _run_id(run_id))
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    result = await session.execute(
+        select(ApplicationArtifact)
+        .where(ApplicationArtifact.run_id == _run_id(run_id))
+        .order_by(ApplicationArtifact.created_at)
+    )
+    artifacts = result.scalars().all()
+
+    return [
+        ArtifactResponse(
+            id=str(a.id),
+            artifact_type=a.artifact_type,
+            path=a.path,
+            metadata=a.artifact_metadata,
+            created_at=a.created_at.isoformat(),
+        )
+        for a in artifacts
+    ]
