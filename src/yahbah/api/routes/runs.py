@@ -26,7 +26,6 @@ class RunResponse(BaseModel):
     current_state: str | None
     temporal_workflow_id: str | None
     account_email: str | None
-    account_password: str | None
     error_message: str | None
     created_at: str
     updated_at: str
@@ -77,7 +76,6 @@ async def get_run(
         current_state=run.current_state,
         temporal_workflow_id=run.temporal_workflow_id,
         account_email=run.account_email,
-        account_password=run.account_password,
         error_message=run.error_message,
         created_at=run.created_at.isoformat(),
         updated_at=run.updated_at.isoformat(),
@@ -90,13 +88,14 @@ async def get_steps(
     run_id: str,
     session: AsyncSession = Depends(get_session),
 ) -> list[StepResponse]:
-    run = await session.get(ApplicationRun, _run_id(run_id))
+    uid = _run_id(run_id)
+    run = await session.get(ApplicationRun, uid)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
     result = await session.execute(
         select(ApplicationStep)
-        .where(ApplicationStep.run_id == _run_id(run_id))
+        .where(ApplicationStep.run_id == uid)
         .order_by(ApplicationStep.created_at)
     )
     steps = result.scalars().all()
@@ -119,13 +118,14 @@ async def get_artifacts(
     run_id: str,
     session: AsyncSession = Depends(get_session),
 ) -> list[ArtifactResponse]:
-    run = await session.get(ApplicationRun, _run_id(run_id))
+    uid = _run_id(run_id)
+    run = await session.get(ApplicationRun, uid)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
     result = await session.execute(
         select(ApplicationArtifact)
-        .where(ApplicationArtifact.run_id == _run_id(run_id))
+        .where(ApplicationArtifact.run_id == uid)
         .order_by(ApplicationArtifact.created_at)
     )
     artifacts = result.scalars().all()

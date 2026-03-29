@@ -70,7 +70,7 @@ class BrowserRegistry:
         trace_path = self.artifact_path(run_id, "trace.zip")
         context = await self._browser.new_context(
             viewport={"width": 1280, "height": 900},
-            record_video_dir=None,
+            device_scale_factor=1.5,  # 2
         )
         await context.tracing.start(screenshots=True, snapshots=True, sources=True)
 
@@ -90,7 +90,7 @@ class BrowserRegistry:
         page = self.get_page(run_id)
         if page:
             await page.screenshot(path=path, full_page=True)
-            logger.debug("Screenshot saved: %s", path)
+            logger.debug(f"Screenshot saved: {path}", )
         return path
 
     async def close_page(self, run_id: str) -> None:

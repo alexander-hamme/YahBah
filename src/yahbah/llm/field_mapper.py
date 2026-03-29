@@ -6,11 +6,36 @@ It maps each field to either a profile key or a known-answer key.
 We resolve values at the end — one lookup, no substring matching.
 """
 from pydantic import BaseModel, Field
+from sqlalchemy import inspect as sa_inspect
 
 from yahbah.config import settings
 from yahbah.db.models import ApplicantProfile
 from yahbah.llm.client import LLMError, OllamaClient
 from yahbah.schemas import FieldMapping, FieldMappingResult, FormSchema
+
+# ── Profile key derivation ────────────────────────────────────────────────────
+# Infrastructure columns on ApplicantProfile that are never form-fill targets.
+_EXCLUDED_PROFILE_COLUMNS = {"id", "created_at", "updated_at"}
+
+# Keys derived from profile data but not stored as their own DB columns.
+_DERIVED_PROFILE_KEYS = {"first_name", "last_name"}
+
+# Special sentinels for file-upload fields — not profile columns.
+_UPLOAD_KEYS = {"resume", "cover_letter"}
+
+
+def _profile_keys() -> list[str]:
+    """
+    Returns the full list of valid mapped_to keys for the LLM prompt,
+    derived directly from ApplicantProfile's mapped columns.
+    Derived and upload keys are appended after the DB columns.
+    """
+    cols = [
+        c.key
+        for c in sa_inspect(ApplicantProfile).mapper.columns
+        if c.key not in _EXCLUDED_PROFILE_COLUMNS
+    ]
+    return cols + sorted(_DERIVED_PROFILE_KEYS) + sorted(_UPLOAD_KEYS)
 
 
 # ── Pydantic models for LLM response validation ──────────────────────────────
@@ -42,11 +67,22 @@ class _FallbackAnswer(BaseModel):
 # We never do substring matching on field labels.
 # ---------------------------------------------------------------------------
 KNOWN_ANSWERS: dict[str, str] = {
+    # Compensation
     "salary_expectation": (
-        "My base salary expectation is $150K and up, pending further negotiation "
-        "to find a mutually satisfactory total compensation package."
+        "Open to negotiation- for this location and role level, between 140K - 250K total compensation."
     ),
-    # TODO: willingness to relocate / areas willing to work
+    # Work authorization
+    "country": "United States",
+    "work_authorization": "Yes",
+    "sponsorship_required": "No",
+    "work_status": "US Citizen",
+    # Voluntary self-identification (EEO) — decline all by default
+    "gender_identity": "Decline to self-identify",
+    "transgender_identity": "Decline to self-identify",
+    "preferred_pronouns": "He/Him",
+    "disability_status": "No",
+    "veteran_status": "I am not a protected veteran",
+    "race_ethnicity": "Decline to self-identify",
 }
 
 
@@ -55,6 +91,7 @@ def _build_system_prompt() -> str:
         f'  - "{key}": use this for questions about {key.replace("_", " ")}'
         for key in KNOWN_ANSWERS
     )
+    profile_keys_block = ", ".join(_profile_keys())
     return f"""\
 You are a form-filling assistant. Given a list of form fields and an applicant profile,
 map each field to the correct profile key or known-answer key.
@@ -63,9 +100,7 @@ Available known-answer keys (use these when the field matches semantically):
 {known_keys_block}
 
 Available profile keys:
-  full_name, first_name, last_name, email, phone, location,
-  linkedin_url, github_url, resume_path, resume, cover_letter,
-  years_of_experience, skills, bio
+  {profile_keys_block}
 
 Rules:
 - Prefer known-answer keys when the field matches semantically (e.g. a salary
@@ -128,6 +163,16 @@ class FieldMapper:
         first_name = name_parts[0]
         last_name = name_parts[1] if len(name_parts) > 1 else ""
 
+        exp_lines = "\n".join(
+            "  - {title} at {company}{location} ({duration})".format(
+                title=e.get("title", ""),
+                company=e.get("company", ""),
+                location=f", {e['location']}" if e.get("location") else "",
+                duration=e.get("duration", ""),
+            )
+            for e in profile.work_experience
+        )
+
         profile_text = f"""
 full_name: {profile.full_name}
 first_name: {first_name}
@@ -141,6 +186,8 @@ resume_path: {profile.resume_path}
 years_of_experience: {profile.years_of_experience}
 skills: {', '.join(profile.skills)}
 bio: {profile.bio or 'N/A'}
+work_experience:
+{exp_lines}
 education:
 {edu_lines}
 """

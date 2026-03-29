@@ -33,8 +33,9 @@ from yahbah.schemas import (
     BrowserExtractOutput,
     BrowserFillInput,
     BrowserFillOutput,
-    FormSchema,
     FieldMapping,
+    FormField,
+    FormSchema,
 )
 from yahbah.workflows.activities.db_ops import (
     persist_artifact_activity,
@@ -147,8 +148,6 @@ async def browser_fill_and_submit_activity(input: BrowserFillInput) -> BrowserFi
             f"Page not found in registry for run {input.run_id} — re-opening"
         )
         page = await registry.open_page(input.run_id, input.job_url)
-
-    from yahbah.schemas import FormField
 
     field_mappings = [FieldMapping(**m) for m in input.field_mappings]
     form_schema: FormSchema | None = None

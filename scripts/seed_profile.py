@@ -31,6 +31,7 @@ PROFILE = {
         {
             "title": "Senior Machine Learning Engineer",
             "company": "The Charles Stark Draper Laboratory",
+            "location": "Cambridge, MA",
             "duration": "Nov, 2023 - Present",
             "summary": \
 """
@@ -44,6 +45,7 @@ PROFILE = {
         {
             "title": "Machine Learning Engineer",
             "company": "The Charles Stark Draper Laboratory",
+            "location": "Cambridge, MA",
             "duration": "May, 2019 – Nov, 2023",
             "summary": \
 """
@@ -52,6 +54,18 @@ PROFILE = {
 ➢ Embedded quantized deep-learning speech transcription models into Android ATAK framework to enable real-time voice streaming and command recognition, deployed to search & rescue teams in the field (DeepSpeech, Tensorflow /TFLite) 
 
 ➢ Delivered high-throughput data streaming pipeline to ingest multimodal biometric Big Datasets into Cassandra database; trained deep learning models to predict stress from feature extraction set (AWS Kinesis, Spark, Keras, NoSQL/Cassandra)
+""",
+        },
+        {
+            "title": "Software Architectures & NLP Intern",
+            "company": "MIT Lincoln Laboratory",
+            "location": "Lexington, MA",
+            "duration": "Jun 2018 – Aug 2018",
+            "summary": \
+"""
+➢ Applied NLP and machine learning algorithms in Java (DeepLearning4J) to free-form
+text analysis challenges; augmented Air Force reconnaissance data pipelines and
+mission simulation frameworks
 """,
         },
     ],

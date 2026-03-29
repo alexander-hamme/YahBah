@@ -56,24 +56,28 @@ class OllamaClient:
             ) from exc
 
     async def generate_text(self, system_prompt: str, user_prompt: str) -> str:
-        """Plain text generation (no JSON enforcement)."""
-        return await self._call_ollama(system_prompt, user_prompt)
+        """Plain text generation — no JSON format enforcement."""
+        return await self._call_ollama(system_prompt, user_prompt, json_format=False)
 
-    async def _call_ollama(self, system_prompt: str, user_prompt: str) -> str:
-        payload = {
+    async def _call_ollama(
+        self, system_prompt: str, user_prompt: str, json_format: bool = True
+    ) -> str:
+        payload: dict = {
             "model": self._model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             "stream": False,
-            "format": "json",
-            "options": {"temperature": 0.1},
+            "options": {"temperature": 0.1 if json_format else 0.7},
         }
+        if json_format:
+            payload["format"] = "json"
 
-        logger.debug("Ollama request to model %s", self._model)
+        logger.debug(f"Ollama request to model {self._model}")
 
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        timeout = httpx.Timeout(connect=10.0, read=self._timeout, write=30.0, pool=10.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             try:
                 resp = await client.post(
                     f"{self._base_url}/api/chat",
@@ -87,5 +91,9 @@ class OllamaClient:
                     f"Ollama HTTP error {exc.response.status_code}: {exc.response.text[:300]}"
                 ) from exc
 
-        body = resp.json()
-        return body["message"]["content"]
+            body = resp.json()
+
+        try:
+            return body["message"]["content"]
+        except KeyError as exc:
+            raise LLMError(f"Unexpected Ollama response shape: {body}") from exc

@@ -2,13 +2,19 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from loguru import logger
+from temporalio.client import Client as TemporalClient
 
+from yahbah.config import settings
 from yahbah.api.routes import jobs, runs
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("API starting up")
+    app.state.temporal = await TemporalClient.connect(
+        settings.temporal_host,
+        namespace=settings.temporal_namespace,
+    )
     yield
     logger.info("API shutting down")
 

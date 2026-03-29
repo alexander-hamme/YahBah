@@ -4,11 +4,10 @@ POST /jobs — enqueue a new application run.
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, HttpUrl
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from temporalio.client import Client as TemporalClient
 
 from yahbah.config import settings
 from yahbah.db.models import ApplicationRun, JobPosting
@@ -28,15 +27,9 @@ class EnqueueJobResponse(BaseModel):
     job_url: str
 
 
-async def _get_temporal_client() -> TemporalClient:
-    return await TemporalClient.connect(
-        settings.temporal_host,
-        namespace=settings.temporal_namespace,
-    )
-
-
 @router.post("", response_model=EnqueueJobResponse, status_code=201)
 async def enqueue_job(
+    request: Request,
     body: EnqueueJobRequest,
     session: AsyncSession = Depends(get_session),
 ) -> EnqueueJobResponse:
@@ -73,9 +66,9 @@ async def enqueue_job(
     session.add(run)
     await session.commit()
 
-    # Kick off Temporal workflow
+    # Kick off Temporal workflow using the shared client from app lifespan
     try:
-        temporal = await _get_temporal_client()
+        temporal = request.app.state.temporal
         await temporal.start_workflow(
             ApplicationWorkflow.run,
             ApplicationWorkflowInput(run_id=str(run_id), job_url=body.job_url),
@@ -84,10 +77,9 @@ async def enqueue_job(
         )
     except Exception as exc:
         # Mark run failed if we can't reach Temporal
-        async with session.begin_nested():
-            run.status = "FAILED"
-            run.error_message = f"Failed to start workflow: {exc}"
-            await session.commit()
+        run.status = "FAILED"
+        run.error_message = f"Failed to start workflow: {exc}"
+        await session.commit()
         raise HTTPException(status_code=503, detail=f"Temporal unavailable: {exc}") from exc
 
     return EnqueueJobResponse(

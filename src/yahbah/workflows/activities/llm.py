@@ -1,6 +1,7 @@
 """
 LLM activities — stateless, retryable.
 """
+import json
 from dataclasses import asdict
 
 from temporalio import activity
@@ -45,7 +46,6 @@ async def map_fields_activity(input: MapFieldsInput) -> MapFieldsOutput:
     result = await mapper.map(form_schema, profile, job_description=input.job_description)
 
     # Persist mappings as artifact
-    import json
     registry = BrowserRegistry.instance()
     mappings_path = registry.artifact_path(input.run_id, "field_mappings.json")
     with open(mappings_path, "w") as f:

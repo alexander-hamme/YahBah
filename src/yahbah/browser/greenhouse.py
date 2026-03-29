@@ -4,16 +4,22 @@ Greenhouse-specific form extraction, auth handling, and deterministic filling.
 Extraction: reads the DOM to produce a FormSchema.
 Auth: detects login/signup walls and creates an account with generated credentials.
 Filling: takes FieldMappings and applies them via Playwright locators.
-No LLM involvement here.
+Select fields use an LLM fallback to pick the closest option when exact match fails.
 """
 from loguru import logger
 from playwright.async_api import Page
+from pydantic import BaseModel
 
+from yahbah.llm.client import OllamaClient
 from yahbah.schemas import FieldMapping, FormField, FormSchema
 
 
 # Confidence threshold below which we refuse to fill a required field
 MIN_CONFIDENCE = 0.7
+
+
+class _SelectPick(BaseModel):
+    selected: str
 
 
 class _FieldNotFoundError(Exception):
@@ -282,10 +288,17 @@ class GreenhouseFiller:
     Required fields that can't be located raise immediately.
     """
 
-    _LOCATE_TIMEOUT = 3_000  # ms per locator attempt
+    _LOCATE_TIMEOUT = 5_000   # ms per locator attempt
+    _UPLOAD_TIMEOUT = 15_000  # ms — file inputs may be lazily rendered
 
-    def __init__(self, page: Page, form_schema: FormSchema | None = None) -> None:
+    def __init__(
+        self,
+        page: Page,
+        form_schema: FormSchema | None = None,
+        llm_client: OllamaClient | None = None,
+    ) -> None:
         self._page = page
+        self._llm = llm_client or OllamaClient()
         # label → FormField lookup for precise targeting
         self._field_by_label: dict[str, FormField] = (
             {f.label: f for f in form_schema.fields} if form_schema else {}
@@ -314,9 +327,21 @@ class GreenhouseFiller:
                         f"Could not locate required field '{mapping.form_label}'"
                     )
                 logger.warning("Could not locate optional field '%s' — skipping", mapping.form_label)
+                continue
             except Exception as exc:
                 logger.error("Failed to fill '%s': %s", mapping.form_label, exc)
                 raise
+
+            # Best-effort settle wait — lets React/Vue controlled inputs re-render.
+            # Timeout is intentionally swallowed; missing it just risks a stale screenshot.
+            try:
+                await self._page.wait_for_load_state("domcontentloaded", timeout=2_000)
+            except Exception:
+                pass
+
+        # Scroll to bottom so all filled values are rendered before caller screenshots
+        await self._page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        await self._page.wait_for_load_state("networkidle", timeout=5_000)
 
     async def _fill_field(
         self,
@@ -328,45 +353,192 @@ class GreenhouseFiller:
         mapped_to = mapping.mapped_to
 
         # ── File uploads ──────────────────────────────────────────────────────
+        # Greenhouse uses a custom React file upload component. Directly calling
+        # set_input_files() on the hidden input bypasses the component's click
+        # lifecycle and crashes it. The correct approach is expect_file_chooser():
+        # click-trigger the input so the component opens the OS dialog, then
+        # intercept that dialog and inject the file — satisfying the component's
+        # expected flow. set_input_files() is kept as a fallback for plain inputs.
         if mapped_to == "resume":
-            file_input = self._page.locator("input[type='file']").first
-            await file_input.set_input_files(value, timeout=self._LOCATE_TIMEOUT)
-            logger.debug("Uploaded resume: %s", value)
+            await self._upload_file(
+                self._page.locator("input[type='file']").first, value
+            )
+            logger.debug(f"Uploaded resume: {value}", )
             return
 
         if mapped_to == "cover_letter" and cover_letter_path:
-            file_inputs = self._page.locator("input[type='file']")
-            if await file_inputs.count() > 1:
-                await file_inputs.nth(1).set_input_files(
-                    cover_letter_path, timeout=self._LOCATE_TIMEOUT
-                )
-                logger.debug("Uploaded cover letter: %s", cover_letter_path)
-                return
-            # Fall through to text fill if no second file input
+            # File inputs are hidden — _resolve_locator requires visible, so
+            # we target the cover letter input directly using form_field metadata,
+            # then fall back to the second generic file input (first = resume).
+            candidates = []
+            if form_field:
+                if form_field.element_id:
+                    candidates.append(self._page.locator(f"#{form_field.element_id}"))
+                if form_field.name:
+                    candidates.append(self._page.locator(f"[name='{form_field.name}']"))
+            candidates.append(self._page.locator("input[type='file']").nth(1))
+
+            for loc in candidates:
+                try:
+                    await loc.wait_for(state="attached", timeout=self._LOCATE_TIMEOUT)
+                    await self._upload_file(loc, cover_letter_path)
+                    logger.debug("Uploaded cover letter: %s", cover_letter_path)
+                    return
+                except Exception:
+                    continue
+
+            raise _FieldNotFoundError(mapping.form_label)
 
         # ── Build locator chain ───────────────────────────────────────────────
         locator = await self._resolve_locator(mapping.form_label, form_field)
 
-        # Determine tag to decide fill vs select_option
-        try:
-            tag = await locator.evaluate(
-                "el => el.tagName.toLowerCase()", timeout=self._LOCATE_TIMEOUT
-            )
-        except Exception:
-            tag = "input"
+        # form_field.field_type is the authoritative signal: custom React dropdowns
+        # expose a visible <input type="text"> trigger whose live tag comes back as
+        # "input", causing fill() to silently type into the search box.  Fall back
+        # to a live tag check only when no form_field metadata is available.
+        if form_field and form_field.field_type == "select":
+            is_select = True
+        else:
+            try:
+                is_select = await locator.evaluate(
+                    "el => el.tagName.toLowerCase()", timeout=self._LOCATE_TIMEOUT
+                ) == "select"
+            except Exception:
+                is_select = False
 
-        fill_value = cover_letter_path if mapped_to == "cover_letter" else value
+        if is_select:
+            await self._select_best_option(locator, mapping.form_label, value)
+        else:
+            await locator.fill(value, timeout=self._LOCATE_TIMEOUT)
+
+        printable = value if len(value) <= 40 else f"{value[:40]}–"
+        logger.debug(f"Filled '{mapping.form_label}' → '{printable}'")
+
+    async def _select_best_option(self, locator, field_label: str, value: str) -> None:
+        """
+        Selects the best matching option for both native <select> and custom
+        React dropdown components.
+
+        Native <select>:
+          1. Exact label / value-attribute match (no LLM, fastest)
+          2. Read live option list → LLM picks → select by exact string
+
+        Custom dropdown (tag != "select"):
+          1. Click trigger to open the dropdown
+          2. Collect visible option elements (text → DOM index, one pass)
+          3. LLM picks best match → click that option by index
+        """
+        # CSS selector covering the most common custom-dropdown option patterns
+        _CUSTOM_OPT = (
+            "[role='option'], [role='listbox'] li, "
+            "[role='menu'] [role='menuitem'], "
+            ".select__option, .dropdown-item"
+        )
+
+        tag = await locator.evaluate(
+            "el => el.tagName.toLowerCase()", timeout=self._LOCATE_TIMEOUT
+        )
 
         if tag == "select":
-            try:
-                await locator.select_option(label=fill_value, timeout=self._LOCATE_TIMEOUT)
-            except Exception:
-                # Try selecting by value if label match fails
-                await locator.select_option(value=fill_value, timeout=self._LOCATE_TIMEOUT)
-        else:
-            await locator.fill(fill_value, timeout=self._LOCATE_TIMEOUT)
+            # ── Native <select> ───────────────────────────────────────────────
+            for kwargs in ({"label": value}, {"value": value}):
+                try:
+                    await locator.select_option(**kwargs, timeout=self._LOCATE_TIMEOUT)
+                    logger.debug("Selected '%s' for '%s' (exact)", value, field_label)
+                    return
+                except Exception:
+                    pass
 
-        logger.debug("Filled '%s' → '%s'", mapping.form_label, fill_value[:40])
+            raw: list[dict] = await locator.evaluate(
+                "el => Array.from(el.options).map(o => ({text: o.text.trim(), value: o.value}))",
+                timeout=self._LOCATE_TIMEOUT,
+            )
+            option_texts = [o["text"] for o in raw if o["text"]]
+
+        else:
+            # ── Custom dropdown — click to open, collect options in one pass ──
+            await locator.click(timeout=self._LOCATE_TIMEOUT)
+            await self._page.wait_for_timeout(400)
+
+            opt_loc = self._page.locator(_CUSTOM_OPT)
+            count = await opt_loc.count()
+            # option_map: text → DOM index (preserves first occurrence)
+            option_map: dict[str, int] = {}
+            for i in range(count):
+                try:
+                    t = (await opt_loc.nth(i).inner_text()).strip()
+                    if t and t not in option_map:
+                        option_map[t] = i
+                except Exception:
+                    pass
+
+            if not option_map:
+                logger.warning("No dropdown options found after clicking '%s'", field_label)
+                await self._page.keyboard.press("Escape")
+                return
+
+            option_texts = list(option_map.keys())
+
+        if not option_texts:
+            logger.warning("No options found for '%s'", field_label)
+            return
+
+        # ── LLM picks best option ─────────────────────────────────────────────
+        result = await self._llm.generate_structured(
+            system_prompt=(
+                "You are selecting the best matching option from a dropdown. "
+                "Return ONLY the exact option text that best matches the intended answer. "
+                'Respond with valid JSON: {"selected": "<exact option text>"}'
+            ),
+            user_prompt=(
+                f'Field: "{field_label}"\n'
+                f'Intended answer: "{value}"\n'
+                "Available options:\n"
+                + "\n".join(f"  - {t}" for t in option_texts)
+            ),
+            response_model=_SelectPick,
+        )
+
+        if result.selected not in option_texts:
+            logger.warning(
+                "LLM picked '%s' which is not in options for '%s' — skipping",
+                result.selected, field_label,
+            )
+            if tag != "select":
+                await self._page.keyboard.press("Escape")
+            return
+
+        if tag == "select":
+            await locator.select_option(label=result.selected, timeout=self._LOCATE_TIMEOUT)
+        else:
+            await opt_loc.nth(option_map[result.selected]).click(timeout=self._LOCATE_TIMEOUT)
+
+        logger.debug("Selected '%s' for '%s'", result.selected, field_label)
+
+    async def _upload_file(self, locator, file_path: str) -> None:
+        """
+        Uploads a file via the OS file-chooser interception pattern.
+
+        Custom upload components (e.g. Greenhouse's React uploader) crash when
+        set_input_files() is called directly because they expect their own click
+        handler to run first. expect_file_chooser() lets us click-trigger the
+        component normally, intercept the dialog the browser would show, and
+        inject the file — all without the OS dialog appearing.
+
+        Falls back to set_input_files() for plain <input type="file"> elements
+        that don't trigger a chooser event.
+        """
+        await locator.wait_for(state="attached", timeout=self._LOCATE_TIMEOUT)
+        try:
+            async with self._page.expect_file_chooser(
+                timeout=self._LOCATE_TIMEOUT
+            ) as fc_info:
+                await locator.evaluate("node => node.click()")
+            chooser = await fc_info.value
+            await chooser.set_files(file_path)
+        except Exception:
+            # Plain input — no chooser event fired; fall back to direct inject.
+            await locator.set_input_files(file_path, timeout=self._LOCATE_TIMEOUT)
 
     async def _resolve_locator(self, label: str, form_field: FormField | None):
         """
