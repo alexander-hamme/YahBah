@@ -164,7 +164,11 @@ async def browser_fill_and_submit_activity(input: BrowserFillInput) -> BrowserFi
     # Screenshot before fill
     await registry.screenshot(input.run_id, "before_fill")
 
-    await filler.fill(field_mappings, input.cover_letter_path)
+    await filler.fill(
+        field_mappings,
+        cover_letter_path=input.cover_letter_path,
+        cover_letter_text=input.cover_letter_text,
+    )
 
     # Screenshot after fill, before submit
     await registry.screenshot(input.run_id, "before_submit")

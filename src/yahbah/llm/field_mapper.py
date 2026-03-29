@@ -69,7 +69,9 @@ class _FallbackAnswer(BaseModel):
 KNOWN_ANSWERS: dict[str, str] = {
     # Compensation
     "salary_expectation": (
-        "Open to negotiation- for this location and role level, between 140K - 250K total compensation."
+        # “Based on market rates for senior ML roles, I’d expect total compensation in the $180K–$240K range, but I’m flexible depending on the role, team, and overall package.”
+        # “I’m targeting total compensation roughly in the $170K–$250K range, depending on scope and overall package.”
+        "Targeting $175K–$240K total compensation (flexible)"
     ),
     # Work authorization
     "country": "United States",
@@ -77,12 +79,14 @@ KNOWN_ANSWERS: dict[str, str] = {
     "sponsorship_required": "No",
     "work_status": "US Citizen",
     # Voluntary self-identification (EEO) — decline all by default
-    "gender_identity": "Decline to self-identify",
+    "gender_identity":  "Male",
+    "sexual_orientation": "Decline to self-identify",
     "transgender_identity": "Decline to self-identify",
     "preferred_pronouns": "He/Him",
     "disability_status": "No",
     "veteran_status": "I am not a protected veteran",
     "race_ethnicity": "Decline to self-identify",
+    "hispanic_or_latino": "No"
 }
 
 
@@ -108,7 +112,9 @@ Rules:
   `mapped_to` to the key and value to "".
 - For all other fields, use the matching profile key and fill value from the profile.
 - Set confidence = 1.0 when the mapping is obvious, < 0.7 when unsure.
-- For file uploads (resume, cover letter) set `mapped_to` to "resume" or "cover_letter".
+- For file upload fields (type=file): use the label, element id, and name together
+  to determine intent. Set `mapped_to` to "resume" if it is for a CV/resume,
+  "cover_letter" if it is for a cover letter, or null if uncertain.
 - If a field truly cannot be mapped, set `mapped_to` to null.
 - Name fields: use first_name / last_name when the form has separate fields.
 - Respond ONLY with valid JSON:
@@ -142,11 +148,20 @@ class FieldMapper:
         profile: ApplicantProfile,
         job_description: str = "",
     ) -> FieldMappingResult:
+        def _field_line(f: "FormField", idx: int) -> str:
+            parts = [f"[{idx}] label={f.label!r} type={f.field_type}"]
+            if f.element_id:
+                parts.append(f"id={f.element_id!r}")
+            if f.name:
+                parts.append(f"name={f.name!r}")
+            if f.options:
+                parts.append(f"options={f.options}")
+            if f.required:
+                parts.append("[REQUIRED]")
+            return " ".join(parts)
+
         fields_text = "\n".join(
-            f"- label={f.label!r} type={f.field_type}"
-            + (f" options={f.options}" if f.options else "")
-            + (" [REQUIRED]" if f.required else "")
-            for f in form_schema.fields
+            _field_line(f, i) for i, f in enumerate(form_schema.fields)
         )
 
         edu_lines = "\n".join(
@@ -214,8 +229,12 @@ education:
             if item.mapped_to is None:
                 continue
 
-            # Substitute known-answer value; LLM sends value="" for these
-            value = KNOWN_ANSWERS.get(item.mapped_to, item.value)
+            # Resolve value: resume path comes from profile, known answers from
+            # the dict, everything else from the LLM's own value string.
+            if item.mapped_to == "resume":
+                value = profile.resume_path
+            else:
+                value = KNOWN_ANSWERS.get(item.mapped_to, item.value)
 
             # Confidence gate for required fields (known-answers always pass)
             if (

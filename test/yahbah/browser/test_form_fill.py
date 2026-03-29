@@ -28,7 +28,9 @@ from yahbah.browser.greenhouse import GreenhouseExtractor, GreenhouseFiller
 from yahbah.browser.manager import BrowserRegistry
 from yahbah.db.models import ApplicantProfile
 from yahbah.db.session import AsyncSessionLocal
+from yahbah.llm.cover_letter import CoverLetterGenerator
 from yahbah.llm.field_mapper import FieldMapper
+from yahbah.workflows.activities.llm import _text_to_pdf
 from yahbah.schemas import FieldMapping, FormField, FormSchema
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -37,7 +39,7 @@ TEST_URL = "https://job-boards.greenhouse.io/paradigminccareersopenpositions/job
 TEST_RUN_ID = "test-fill-run"
 
 RESUME_PATH = str(REPO_ROOT / "files/Alexander-Hamme-Resume.pdf")
-COVER_LETTER_PATH = str(REPO_ROOT / "artifacts/test-fill-run/cover_letter.txt")
+COVER_LETTER_PATH = str(REPO_ROOT / "artifacts/test-fill-run/cover_letter.pdf")
 
 # Hardcoded mappings — mirrors what the LLM would produce for a typical
 # Greenhouse form. Edit values here to test specific fields.
@@ -58,17 +60,20 @@ async def _load_profile() -> ApplicantProfile:
         return (await session.execute(select(ApplicantProfile).limit(1))).scalar_one()
 
 
-def _make_cover_letter() -> str:
-    """Write a stub cover letter file so upload tests have something to upload."""
+async def _generate_cover_letter(job_description: str = "") -> tuple[str, str]:
+    """
+    Generates a cover letter via the LLM, saves it as a PDF, and returns
+    (cover_letter_path, cover_letter_text).
+    """
     path = Path(COVER_LETTER_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists():
-        path.write_text(
-            "Dear Hiring Manager,\n\n"
-            "This is a test cover letter.\n\n"
-            "Best regards,\nAlexander Hamme\n"
-        )
-    return str(path)
+
+    profile = await _load_profile()
+    generator = CoverLetterGenerator()
+    text = await generator.generate(job_description, profile)
+    _text_to_pdf(text, str(path))
+    print(f"Cover letter generated and saved: {path}")
+    return str(path), text
 
 
 # ── Test 1: fill with hardcoded mappings (no LLM) ────────────────────────────
@@ -81,10 +86,10 @@ async def test_fill_hardcoded() -> None:
     print("\n=== test_fill_hardcoded ===")
     reg = BrowserRegistry.instance()
     page = await reg.open_page(TEST_RUN_ID, TEST_URL)
-    cover_letter_path = _make_cover_letter()
+    cover_letter_path, cover_letter_text = await _generate_cover_letter()
 
     filler = GreenhouseFiller(page)
-    await filler.fill(HARDCODED_MAPPINGS, cover_letter_path)
+    await filler.fill(HARDCODED_MAPPINGS, cover_letter_path, cover_letter_text)
 
     screenshot = await reg.screenshot(TEST_RUN_ID, "hardcoded_fill")
     print(f"Screenshot saved: {screenshot}")
@@ -121,9 +126,9 @@ async def test_fill_from_extract() -> None:
     for m in result.field_mappings:
         print(f"  {m.form_label!r:40s} → {m.mapped_to} = {m.value[:60]!r}  (conf={m.confidence})")
 
-    cover_letter_path = _make_cover_letter()
+    cover_letter_path, cover_letter_text = await _generate_cover_letter(job_description)
     filler = GreenhouseFiller(page, form_schema=schema)
-    await filler.fill(result.field_mappings, cover_letter_path)
+    await filler.fill(result.field_mappings, cover_letter_path, cover_letter_text)
 
     screenshot = await reg.screenshot(TEST_RUN_ID, "llm_fill")
     print(f"\nScreenshot saved: {screenshot}")

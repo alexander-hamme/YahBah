@@ -3,6 +3,8 @@ LLM activities — stateless, retryable.
 """
 import json
 from dataclasses import asdict
+from pathlib import Path
+from fpdf import FPDF
 
 from temporalio import activity
 
@@ -22,6 +24,15 @@ from yahbah.db.session import AsyncSessionLocal
 from yahbah.db.models import ApplicantProfile
 from sqlalchemy import select
 
+
+# _FONT_PATH = Path(__file__).resolve().parents[4] / "files" / "SNPro-VariableFont_wght.ttf"
+# _FONT_NAME = "SNPro"
+# _FONT_PATH = Path(__file__).resolve().parents[4] / "files" / "NunitoSans-VariableFont_YTLC,opsz,wdth,wght.ttf"
+# _FONT_NAME = "NunitoSans"
+# _FONT_PATH = None
+# _FONT_NAME = "Helvetica"
+_FONT_PATH = Path(__file__).resolve().parents[4] / "files" / "CrimsonText-Regular.ttf"
+_FONT_NAME = "CrimsonText"
 
 async def _load_profile() -> ApplicantProfile:
     async with AsyncSessionLocal() as session:
@@ -61,6 +72,19 @@ async def map_fields_activity(input: MapFieldsInput) -> MapFieldsOutput:
     )
 
 
+def _text_to_pdf(text: str, path: str) -> None:
+    """Renders plain text as a letter-size PDF with 1-inch margins in Nunito Sans."""
+    pdf = FPDF(format="Letter")
+    if _FONT_PATH is not None:
+        pdf.add_font(_FONT_NAME, fname=str(_FONT_PATH))
+    pdf.set_margins(25.4, 25.4, 25.4)
+    pdf.set_auto_page_break(auto=True, margin=25.4)
+    pdf.add_page()
+    pdf.set_font(_FONT_NAME, size=12)
+    pdf.multi_cell(0, 6, text)
+    pdf.output(path)
+
+
 @activity.defn
 async def generate_cover_letter_activity(input: CoverLetterInput) -> CoverLetterOutput:
     profile = await _load_profile()
@@ -68,9 +92,8 @@ async def generate_cover_letter_activity(input: CoverLetterInput) -> CoverLetter
     cover_letter_text = await generator.generate(input.job_description, profile)
 
     registry = BrowserRegistry.instance()
-    cover_letter_path = registry.artifact_path(input.run_id, "cover_letter.txt")
-    with open(cover_letter_path, "w") as f:
-        f.write(cover_letter_text)
+    cover_letter_path = registry.artifact_path(input.run_id, "cover_letter.pdf")
+    _text_to_pdf(cover_letter_text, cover_letter_path)
 
     await persist_artifact_activity(
         input.run_id,
@@ -82,3 +105,14 @@ async def generate_cover_letter_activity(input: CoverLetterInput) -> CoverLetter
         cover_letter_path=cover_letter_path,
         cover_letter_text=cover_letter_text,
     )
+
+
+# if __name__ == "__main__":
+#
+#     _text_to_pdf("""Dear Paradigm Recruiting Team,
+# I am a senior machinelearning engineer with seven years of experience turning
+# cuttingedge research into production grade AI systems for highstakes government
+# R&D programs. My track record of delivering performancecritical, scalable
+# solutions—most recently a LLMdriven archival intelligence platform that transformed
+# decades of unstructured code into a searchable knowledge graph—directly aligns with
+# Paradigm’s mission to """, "test.pdf")

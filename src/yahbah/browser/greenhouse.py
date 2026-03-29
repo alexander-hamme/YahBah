@@ -75,7 +75,7 @@ class GreenhouseAuthHandler:
             if link:
                 await link.click()
                 await self._page.wait_for_load_state("networkidle", timeout=10_000)
-                logger.debug("Navigated to sign-up form via '%s'", selector)
+                logger.debug(f"Navigated to sign-up form via '{selector}'")
                 break
 
         # Locate email input
@@ -109,7 +109,7 @@ class GreenhouseAuthHandler:
         ):
             await submit.click()
 
-        logger.info("Account created for %s", email)
+        logger.info(f"Account created for {email}")
 
 
 class GreenhouseExtractor:
@@ -156,7 +156,7 @@ class GreenhouseExtractor:
             if field:
                 fields.append(field)
 
-        logger.info("Extracted %d form fields", len(fields))
+        logger.info(f"Extracted {len(fields)} form fields")
 
         page_url = self._page.url
         page_title = await self._page.title()
@@ -200,6 +200,16 @@ class GreenhouseExtractor:
             if field_type != "file":
                 return None
 
+        # Skip invisible non-file inputs — they are hidden shadow/duplicate
+        # elements (e.g. the second hidden copy of custom React dropdown fields).
+        if field_type != "file" and not await handle.is_visible():
+            return None
+
+        # Skip the intl-tel-input country-code search widget — it shares the
+        # "Phone" label but is not a fillable field.
+        if await handle.evaluate("el => !!el.closest('.iti')"):
+            return None
+
         label = await self._label_for(handle)
         if not label:
             label = await handle.get_attribute("placeholder") or ""
@@ -239,6 +249,14 @@ class GreenhouseExtractor:
         )
 
     async def _extract_textarea(self, handle) -> FormField | None:
+        # Skip reCAPTCHA hidden textarea
+        name = await handle.get_attribute("name") or ""
+        if "g-recaptcha" in name:
+            return None
+        # Skip invisible textareas
+        if not await handle.is_visible():
+            return None
+
         label = await self._label_for(handle)
         if not label:
             label = await handle.get_attribute("placeholder") or ""
@@ -289,7 +307,7 @@ class GreenhouseFiller:
     """
 
     _LOCATE_TIMEOUT = 5_000   # ms per locator attempt
-    _UPLOAD_TIMEOUT = 15_000  # ms — file inputs may be lazily rendered
+    _UPLOAD_TIMEOUT = 30_000  # ms — file inputs may be lazily rendered
 
     def __init__(
         self,
@@ -308,28 +326,33 @@ class GreenhouseFiller:
         self,
         field_mappings: list[FieldMapping],
         cover_letter_path: str | None,
+        cover_letter_text: str | None = None,
     ) -> None:
+        # Ensure React/JS has fully hydrated before touching any field.
+        # Without this, the first field(s) may be filled before event listeners
+        # are attached, causing silent no-ops (especially on a fresh page load).
+        await self._page.wait_for_load_state("networkidle", timeout=15_000)
+
         for mapping in field_mappings:
             if mapping.confidence < MIN_CONFIDENCE:
                 if mapping.mapped_to not in ("cover_letter", "resume"):
                     logger.warning(
-                        "Skipping '%s' — confidence %.2f below threshold",
-                        mapping.form_label, mapping.confidence,
+                        f"Skipping '{mapping.form_label}' — confidence {mapping.confidence:.2f} below threshold"
                     )
                     continue
 
             form_field = self._field_by_label.get(mapping.form_label)
             try:
-                await self._fill_field(mapping, form_field, cover_letter_path)
+                await self._fill_field(mapping, form_field, cover_letter_path, cover_letter_text)
             except _FieldNotFoundError:
                 if form_field and form_field.required:
                     raise RuntimeError(
                         f"Could not locate required field '{mapping.form_label}'"
                     )
-                logger.warning("Could not locate optional field '%s' — skipping", mapping.form_label)
+                logger.warning(f"Could not locate optional field '{mapping.form_label}' — skipping")
                 continue
             except Exception as exc:
-                logger.error("Failed to fill '%s': %s", mapping.form_label, exc)
+                logger.error(f"Failed to fill '{mapping.form_label}': {exc}")
                 raise
 
             # Best-effort settle wait — lets React/Vue controlled inputs re-render.
@@ -348,6 +371,7 @@ class GreenhouseFiller:
         mapping: FieldMapping,
         form_field: FormField | None,
         cover_letter_path: str | None,
+        cover_letter_text: str | None = None,
     ) -> None:
         value = mapping.value
         mapped_to = mapping.mapped_to
@@ -366,43 +390,73 @@ class GreenhouseFiller:
             logger.debug(f"Uploaded resume: {value}", )
             return
 
-        if mapped_to == "cover_letter" and cover_letter_path:
-            # File inputs are hidden — _resolve_locator requires visible, so
-            # we target the cover letter input directly using form_field metadata,
-            # then fall back to the second generic file input (first = resume).
-            candidates = []
-            if form_field:
-                if form_field.element_id:
-                    candidates.append(self._page.locator(f"#{form_field.element_id}"))
-                if form_field.name:
-                    candidates.append(self._page.locator(f"[name='{form_field.name}']"))
-            candidates.append(self._page.locator("input[type='file']").nth(1))
+        if mapped_to == "cover_letter":
+            # If the field is a file upload, upload the PDF.
+            # If it's a text/textarea field, fill with the cover letter text directly.
+            is_file_field = form_field is None or form_field.field_type == "file"
 
-            for loc in candidates:
-                try:
-                    await loc.wait_for(state="attached", timeout=self._LOCATE_TIMEOUT)
-                    await self._upload_file(loc, cover_letter_path)
-                    logger.debug("Uploaded cover letter: %s", cover_letter_path)
+            if is_file_field:
+                if not cover_letter_path:
+                    logger.warning("Cover letter field is a file upload but no PDF available — skipping")
                     return
-                except Exception:
-                    continue
+                # File inputs are hidden — _resolve_locator requires visible, so
+                # target by form_field metadata with fallback to second file input.
+                candidates = []
+                if form_field:
+                    if form_field.element_id:
+                        candidates.append(self._page.locator(f"#{form_field.element_id}"))
+                    if form_field.name:
+                        candidates.append(self._page.locator(f"[name='{form_field.name}']"))
+                candidates.append(self._page.locator("input[type='file']").nth(1))
 
-            raise _FieldNotFoundError(mapping.form_label)
+                for loc in candidates:
+                    try:
+                        await loc.wait_for(state="attached", timeout=self._LOCATE_TIMEOUT)
+                        await self._upload_file(loc, cover_letter_path)
+                        logger.debug(f"Uploaded cover letter PDF: {cover_letter_path}")
+                        return
+                    except Exception:
+                        continue
+
+                raise _FieldNotFoundError(mapping.form_label)
+
+            else:
+                # Text/textarea field — paste the cover letter body directly
+                if not cover_letter_text:
+                    logger.warning("Cover letter field is text entry but no text available — skipping")
+                    return
+                locator = await self._resolve_locator(mapping.form_label, form_field)
+                await locator.fill(cover_letter_text, timeout=self._LOCATE_TIMEOUT)
+                logger.debug(f"Filled cover letter text into '{mapping.form_label}'")
+                return
 
         # ── Build locator chain ───────────────────────────────────────────────
         locator = await self._resolve_locator(mapping.form_label, form_field)
 
-        # form_field.field_type is the authoritative signal: custom React dropdowns
-        # expose a visible <input type="text"> trigger whose live tag comes back as
-        # "input", causing fill() to silently type into the search box.  Fall back
-        # to a live tag check only when no form_field metadata is available.
+        # Determine whether this field needs dropdown-selection logic.
+        # Priority order:
+        #   1. form_field.field_type == "select" — native <select> from extractor
+        #   2. Live DOM check: tag is "select", or element/ancestor has
+        #      role="combobox" (custom React Select / Greenhouse EEO dropdowns)
         if form_field and form_field.field_type == "select":
             is_select = True
         else:
             try:
-                is_select = await locator.evaluate(
-                    "el => el.tagName.toLowerCase()", timeout=self._LOCATE_TIMEOUT
-                ) == "select"
+                dom_kind = await locator.evaluate(
+                    """el => {
+                        if (el.tagName.toLowerCase() === 'select') return 'select';
+                        if (el.getAttribute('role') === 'combobox'
+                            || el.getAttribute('aria-haspopup')) return 'combobox';
+                        let node = el.parentElement;
+                        while (node) {
+                            if (node.getAttribute('role') === 'combobox') return 'combobox';
+                            node = node.parentElement;
+                        }
+                        return 'input';
+                    }""",
+                    timeout=self._LOCATE_TIMEOUT,
+                )
+                is_select = dom_kind in ("select", "combobox")
             except Exception:
                 is_select = False
 
@@ -410,9 +464,8 @@ class GreenhouseFiller:
             await self._select_best_option(locator, mapping.form_label, value)
         else:
             await locator.fill(value, timeout=self._LOCATE_TIMEOUT)
-
-        printable = value if len(value) <= 40 else f"{value[:40]}–"
-        logger.debug(f"Filled '{mapping.form_label}' → '{printable}'")
+            printable = value if len(value) <= 40 else f"{value[:40]}–"
+            logger.debug(f"Filled '{mapping.form_label}' → '{printable}'")
 
     async def _select_best_option(self, locator, field_label: str, value: str) -> None:
         """
@@ -444,7 +497,7 @@ class GreenhouseFiller:
             for kwargs in ({"label": value}, {"value": value}):
                 try:
                     await locator.select_option(**kwargs, timeout=self._LOCATE_TIMEOUT)
-                    logger.debug("Selected '%s' for '%s' (exact)", value, field_label)
+                    logger.debug(f"Selected '{value}' for '{field_label}' (exact)")
                     return
                 except Exception:
                     pass
@@ -473,14 +526,14 @@ class GreenhouseFiller:
                     pass
 
             if not option_map:
-                logger.warning("No dropdown options found after clicking '%s'", field_label)
+                logger.warning(f"No dropdown options found after clicking '{field_label}'")
                 await self._page.keyboard.press("Escape")
                 return
 
             option_texts = list(option_map.keys())
 
         if not option_texts:
-            logger.warning("No options found for '%s'", field_label)
+            logger.warning(f"No options found for '{field_label}'")
             return
 
         # ── LLM picks best option ─────────────────────────────────────────────
@@ -501,8 +554,7 @@ class GreenhouseFiller:
 
         if result.selected not in option_texts:
             logger.warning(
-                "LLM picked '%s' which is not in options for '%s' — skipping",
-                result.selected, field_label,
+                f"LLM picked '{result.selected}' which is not in options for '{field_label}' — skipping"
             )
             if tag != "select":
                 await self._page.keyboard.press("Escape")
@@ -513,7 +565,7 @@ class GreenhouseFiller:
         else:
             await opt_loc.nth(option_map[result.selected]).click(timeout=self._LOCATE_TIMEOUT)
 
-        logger.debug("Selected '%s' for '%s'", result.selected, field_label)
+        logger.debug(f"Selected '{result.selected}' for '{field_label}'")
 
     async def _upload_file(self, locator, file_path: str) -> None:
         """

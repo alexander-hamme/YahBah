@@ -71,7 +71,7 @@ async def main() -> None:
             ],
         )
 
-        logger.info("Worker starting — polling task queue '%s'", settings.temporal_task_queue)
+        logger.info(f"Worker starting — polling task queue '{settings.temporal_task_queue}'")
         await worker.run()
 
     finally:

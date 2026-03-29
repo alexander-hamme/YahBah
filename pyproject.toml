@@ -17,6 +17,7 @@ dependencies = [
     "python-multipart>=0.0.20",
     "sqlalchemy>=2.0.36",
     "temporalio>=1.8.0",
+    "fpdf2>=2.7.9",
     "uvicorn[standard]>=0.34.0",
 ]
 

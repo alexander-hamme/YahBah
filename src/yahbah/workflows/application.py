@@ -123,6 +123,7 @@ class ApplicationWorkflow:
                     field_mappings=map_output.field_mappings,
                     form_schema_dict=extract_output.form_schema_dict,
                     cover_letter_path=cover_output.cover_letter_path,
+                    cover_letter_text=cover_output.cover_letter_text,
                 ),
                 start_to_close_timeout=long,
             )

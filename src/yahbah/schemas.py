@@ -90,7 +90,8 @@ class BrowserFillInput:
     job_url: str
     field_mappings: list[dict]
     form_schema_dict: dict        # passed so the filler can use element_id/name/placeholder
-    cover_letter_path: str | None
+    cover_letter_path: str | None  # path to generated PDF
+    cover_letter_text: str | None = None  # raw text for textarea cover letter fields
 
 
 @dataclass
