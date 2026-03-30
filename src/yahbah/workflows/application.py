@@ -5,6 +5,7 @@ State machine:
   AUTH_CHECK → EXTRACT_FORM → MAP_FIELDS → GENERATE_COVER_LETTER
   → FILL_AND_SUBMIT → DONE
 """
+import asyncio
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -56,7 +57,7 @@ class ApplicationWorkflow:
         short = timedelta(minutes=2)
         medium = timedelta(minutes=5)
         long = timedelta(minutes=10)
-        retry = RetryPolicy(maximum_attempts=3)
+        retry = RetryPolicy(maximum_attempts=2)
 
         # TODO more retries for initial stage, less for final stage?
 
@@ -115,7 +116,7 @@ class ApplicationWorkflow:
                     start_to_close_timeout=short,
                     retry_policy=retry,
                 )
-                return
+                raise asyncio.CancelledError(dup_result.reason or "Duplicate job posting")
 
             # ── MAP_FIELDS (LLM) ─────────────────────────────────────────────
             await workflow.execute_activity(

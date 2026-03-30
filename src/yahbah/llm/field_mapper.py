@@ -11,7 +11,7 @@ from sqlalchemy import inspect as sa_inspect
 from yahbah.config import settings
 from yahbah.db.models import ApplicantProfile
 from yahbah.llm.client import LLMError, OllamaClient
-from yahbah.schemas import FieldMapping, FieldMappingResult, FormSchema
+from yahbah.schemas import FieldMapping, FieldMappingResult, FormSchema, FormField
 
 # ── Profile key derivation ────────────────────────────────────────────────────
 # Infrastructure columns on ApplicantProfile that are never form-fill targets.
@@ -75,6 +75,7 @@ KNOWN_ANSWERS: dict[str, str] = {
     ),
     # Work authorization
     "country": "United States",
+    "phone": "+1-646-820-5134",
     "work_authorization": "Yes",
     "sponsorship_required": "No",
     "work_status": "US Citizen",
@@ -85,9 +86,12 @@ KNOWN_ANSWERS: dict[str, str] = {
     "transgender_identity": "Decline to self-identify",
     "preferred_pronouns": "He/Him",
     "disability_status": "No",
-    "veteran_status": "I am not a protected veteran",
+    "veteran_status": "Not a veteran / no military service",
     "race_ethnicity": "Decline to self-identify",
-    "hispanic_or_latino": "No"
+    "hispanic_or_latino": "No",
+    "agree_to_allow_info_use": "I agree",
+    # Consent / terms checkboxes — always agree
+    "consent_checkbox": "true",
 }
 
 
@@ -111,7 +115,13 @@ Rules:
 - Prefer known-answer keys when the field matches semantically (e.g. a salary
   question → "salary_expectation"). Do NOT invent values for these — just set
   `mapped_to` to the key and value to "".
-- For all other fields, use the matching profile key and fill value from the profile.
+- For open-ended experience/qualification questions — e.g. "describe your experience
+  with X", "explain your background in Y", "briefly explain your interaction with Z"
+  — set `mapped_to` to "custom_question" and value to "". A dedicated step will
+  generate a tailored answer using the full profile and job description. Use this
+  whenever the question asks the applicant to explain, describe, or elaborate on
+  something specific to the role or their background. Do NOT map these to "bio".
+- For all other standard fields, use the matching profile key and fill value from the profile.
 - Set confidence = 1.0 when the mapping is obvious, < 0.7 when unsure.
 - For file upload fields (type=file): use the label, element id, and name together
   to determine intent. Set `mapped_to` to "resume" if it is for a CV/resume,
@@ -134,8 +144,16 @@ Rules:
 
 _FALLBACK_SYSTEM_PROMPT = """\
 You are filling out a job application on behalf of the applicant below.
-Answer the following required form question as the applicant would.
-Be concise and professional. Reply ONLY with valid JSON: {"answer": "<your answer>"}
+Answer the following form question as the applicant would, in first person.
+
+Guidelines:
+- Be concise and professional (1-3 sentences unless the question asks for more).
+- For experience or skill questions: draw directly from the work experience bullets
+  and skills list. Give concrete, specific examples (purpose of product, technologies used,
+  (outcome if helpful/relevant), rather than generic statements. Convey strong familiarity in an industry/production-level setting.
+- Do NOT mention applying for a job or reference the company by name unless asked.
+
+Reply ONLY with valid JSON: {"answer": "<your answer>"}
 """
 
 
@@ -230,10 +248,15 @@ education:
             if item.mapped_to is None:
                 continue
 
-            # Resolve value: resume path comes from profile, known answers from
-            # the dict, everything else from the LLM's own value string.
+            # Resolve value:
+            #   resume         → path from profile
+            #   known answers  → hardcoded value from KNOWN_ANSWERS
+            #   custom_question → generate a tailored answer using full profile
+            #   everything else → LLM's own value string
             if item.mapped_to == "resume":
                 value = profile.resume_path
+            elif item.mapped_to == "custom_question":
+                value = await self._fallback_answer(item.form_label, profile_text, job_description)
             else:
                 value = KNOWN_ANSWERS.get(item.mapped_to, item.value)
 
@@ -242,7 +265,7 @@ education:
                 item.form_label in required_labels
                 and item.confidence < settings.min_field_confidence
                 and item.mapped_to not in KNOWN_ANSWERS
-                and item.mapped_to not in ("resume", "cover_letter")
+                and item.mapped_to not in ("resume", "cover_letter", "custom_question")
             ):
                 raise LLMError(
                     f"Required field '{item.form_label}' has confidence "

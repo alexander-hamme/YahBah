@@ -94,6 +94,6 @@ class OllamaClient:
             body = resp.json()
 
         try:
-            return body["message"]["content"]
+            return body["message"]["content"] #  TODO .replace('*', '')
         except KeyError as exc:
             raise LLMError(f"Unexpected Ollama response shape: {body}") from exc

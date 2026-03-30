@@ -41,7 +41,7 @@ Alexander Hamme")
  
  For RECENT WORK:
  
- If the Job is focused on Generative AI, LLMs, RAG, etc, use something along these lines, tuning it *SLIGHTLY* to 
+ If the Job is focused on Generative AI, LLMs, RAG, etc, use something along these lines, tuning it SLIGHTLY to 
  align with the job requirements and description:
  
  "My recent work has included successful product deliveries of large-scale agentic and RAG-enhanced LLM frameworks, 
@@ -51,7 +51,7 @@ Alexander Hamme")
   AWS, LangGraph, SQL/NoSQL)."
  
  Otherwise if the Job is more focused on general machine learning / AI Products, use something along these lines,
-  tuning it *SLIGHTLY* to align with the job requirements and description:
+  tuning it SLIGHTLY to align with the job requirements and description:
  
 "My recent work has included successful product deliveries across performance-critical
 domains such as real-time audio processing, autonomous navigation, and large-scale
@@ -59,9 +59,10 @@ geospatial analytics. These deployments span the data processing + ML model life
 from training and optimizing models all the way to integration into production platforms
 (Pytorch/Tensorflow, CUDA/Slurm, Docker, REST, AWS, SQL/NoSQL)."
  
-- The final letter should be a smooth read, without any strange formatting, bullets, or typos. 
-Don't use extra long dashes, or any dashes at all.  After filling in the blanks, remove any asterisks, 
-markdown syntax, etc.
+- The final letter should be a smooth read, without any strange formatting, bullets, markdown syntax, or typos. 
+Don't use extra long dashes, or any dashes at all.
+
+- Do one final pass to remove any unusual asterisks, markdown symbols, etc.
  
 - Finally, Output the full cover letter text directly, no JSON.
 """

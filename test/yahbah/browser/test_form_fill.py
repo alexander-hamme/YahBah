@@ -35,22 +35,13 @@ from yahbah.schemas import FieldMapping, FormField, FormSchema
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-TEST_URL = "https://job-boards.greenhouse.io/paradigminccareersopenpositions/jobs/4647304005"
+# Reddit job — has EEO dropdowns, GDPR demographic consent checkbox, location
+# autocomplete, and privacy consent dropdown.
+TEST_URL = "https://boards.greenhouse.io/reddit/jobs/7074776"
 TEST_RUN_ID = "test-fill-run"
 
 RESUME_PATH = str(REPO_ROOT / "files/Alexander-Hamme-Resume.pdf")
 COVER_LETTER_PATH = str(REPO_ROOT / "artifacts/test-fill-run/cover_letter.pdf")
-
-# Hardcoded mappings — mirrors what the LLM would produce for a typical
-# Greenhouse form. Edit values here to test specific fields.
-HARDCODED_MAPPINGS = [
-    FieldMapping(form_label="First Name",       mapped_to="first_name",  value="Alexander",                                confidence=1.0),
-    FieldMapping(form_label="Last Name",        mapped_to="last_name",   value="Hamme",                                    confidence=1.0),
-    FieldMapping(form_label="Email",            mapped_to="email",       value="alexhamme96@gmail.com",                    confidence=1.0),
-    FieldMapping(form_label="Phone",            mapped_to="phone",       value="+1-857-264-7620",                          confidence=1.0),
-    FieldMapping(form_label="LinkedIn Profile", mapped_to="linkedin_url",value="https://linkedin.com/in/alexander-hamme",  confidence=1.0),
-    FieldMapping(form_label="Resume",           mapped_to="resume",      value=RESUME_PATH,                                confidence=1.0),
-]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -76,47 +67,30 @@ async def _generate_cover_letter(job_description: str = "") -> tuple[str, str]:
     return str(path), text
 
 
-# ── Test 1: fill with hardcoded mappings (no LLM) ────────────────────────────
-
-async def test_fill_hardcoded() -> None:
-    """
-    Opens the page, fills fields using HARDCODED_MAPPINGS.
-    Does NOT submit. Takes a screenshot after filling.
-    """
-    print("\n=== test_fill_hardcoded ===")
-    reg = BrowserRegistry.instance()
-    page = await reg.open_page(TEST_RUN_ID, TEST_URL)
-    cover_letter_path, cover_letter_text = await _generate_cover_letter()
-
-    filler = GreenhouseFiller(page)
-    await filler.fill(HARDCODED_MAPPINGS, cover_letter_path, cover_letter_text)
-
-    screenshot = await reg.screenshot(TEST_RUN_ID, "hardcoded_fill")
-    print(f"Screenshot saved: {screenshot}")
-    print("test_fill_hardcoded PASSED — check screenshot to verify fields")
-
-
-# ── Test 2: extract → LLM map → fill (full pipeline, no submission) ──────────
+# ── Test: extract → LLM map → fill (full pipeline, no submission) ─────────────
 
 async def test_fill_from_extract() -> None:
     """
     Extracts the live form schema, runs the LLM field mapper, fills the form.
-    Does NOT submit. Prints each mapping before filling.
+    Does NOT submit. Takes screenshots at key stages.
     """
     print("\n=== test_fill_from_extract ===")
     reg = BrowserRegistry.instance()
 
-    # Reuse existing page if open, otherwise open fresh
     page = reg.get_page(TEST_RUN_ID)
     if page is None:
         page = await reg.open_page(TEST_RUN_ID, TEST_URL)
 
+    await reg.screenshot(TEST_RUN_ID, "01_page_loaded")
+
     extractor = GreenhouseExtractor(page)
     schema, job_description = await extractor.extract()
 
-    print(f"Extracted {len(schema.fields)} fields:")
+    print(f"\nExtracted {len(schema.fields)} fields:")
     for f in schema.fields:
-        print(f"  {f.label!r:40s} type={f.field_type} required={f.required}")
+        print(f"  {f.label!r:50s} type={f.field_type:10s} required={f.required}")
+
+    await reg.screenshot(TEST_RUN_ID, "02_after_extract")
 
     profile = await _load_profile()
     mapper = FieldMapper()
@@ -124,15 +98,21 @@ async def test_fill_from_extract() -> None:
 
     print(f"\nField mappings ({len(result.field_mappings)}):")
     for m in result.field_mappings:
-        print(f"  {m.form_label!r:40s} → {m.mapped_to} = {m.value[:60]!r}  (conf={m.confidence})")
+        print(f"  {m.form_label!r:50s} → {m.mapped_to!r:25s} = {m.value[:50]!r}  (conf={m.confidence:.2f})")
 
     cover_letter_path, cover_letter_text = await _generate_cover_letter(job_description)
+
     filler = GreenhouseFiller(page, form_schema=schema)
     await filler.fill(result.field_mappings, cover_letter_path, cover_letter_text)
 
-    screenshot = await reg.screenshot(TEST_RUN_ID, "llm_fill")
-    print(f"\nScreenshot saved: {screenshot}")
-    print("test_fill_from_extract PASSED — check screenshot to verify fields")
+    await reg.screenshot(TEST_RUN_ID, "03_after_fill")
+
+    # Scroll to bottom to capture checkbox and EEO section
+    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    await reg.screenshot(TEST_RUN_ID, "04_bottom_of_form")
+
+    print(f"\nScreenshots saved to: {REPO_ROOT / 'artifacts' / TEST_RUN_ID}")
+    print("test_fill_from_extract PASSED — check screenshots to verify fields")
 
 
 # ── Runner ────────────────────────────────────────────────────────────────────
@@ -142,7 +122,6 @@ async def main() -> None:
     await reg.start()
 
     try:
-        await test_fill_hardcoded()
         await test_fill_from_extract()
     finally:
         await reg.close_page(TEST_RUN_ID)
