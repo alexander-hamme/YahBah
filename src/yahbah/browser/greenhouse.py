@@ -238,9 +238,11 @@ class GreenhouseExtractor:
         if field_type == "checkbox" and not await handle.is_visible():
             return None
 
-        # Skip the intl-tel-input country-code search widget — it shares the
-        # "Phone" label but is not a fillable field.
-        if await handle.evaluate("el => !!el.closest('.iti')"):
+        # Skip the intl-tel-input country-code *search* widget inside the
+        # dropdown — but keep the actual phone number input (type="tel").
+        if await handle.evaluate(
+            "el => !!el.closest('.iti') && el.type !== 'tel'"
+        ):
             return None
 
         label = await self._label_for(handle)
@@ -508,35 +510,48 @@ class GreenhouseFiller:
         # intercept that dialog and inject the file — satisfying the component's
         # expected flow. set_input_files() is kept as a fallback for plain inputs.
         if mapped_to == "resume":
-            # Prefer form_field metadata for precise targeting; the generic
-            # first-file-input fallback is fragile when multiple inputs exist.
-            if form_field and form_field.element_id:
-                file_loc = self._page.locator(f"#{form_field.element_id}")
-            elif form_field and form_field.name:
-                file_loc = self._page.locator(f"[name='{form_field.name}']")
-            else:
-                file_loc = self._page.locator("input[type='file']").first
-            await self._upload_file(file_loc, value)
-            logger.debug(f"Uploaded resume: {value}")
-            return
+            # Target by well-known Greenhouse ID first — the label "Attach" is
+            # shared across resume and cover-letter inputs so form_field lookup
+            # is unreliable.  Fall back to form_field metadata, then first file input.
+            candidates = [
+                self._page.locator("#resume"),
+                self._page.locator("input[type='file'][id*='resume' i]"),
+            ]
+            if form_field and form_field.element_id and form_field.element_id != "resume":
+                candidates.append(self._page.locator(f"#{form_field.element_id}"))
+            if form_field and form_field.name:
+                candidates.append(self._page.locator(f"[name='{form_field.name}']"))
+            candidates.append(self._page.locator("input[type='file']").first)
+
+            for loc in candidates:
+                try:
+                    await loc.wait_for(state="attached", timeout=self._LOCATE_TIMEOUT)
+                    await self._upload_file(loc, value)
+                    logger.debug(f"Uploaded resume: {value}")
+                    return
+                except Exception:
+                    continue
+            raise _FieldNotFoundError("resume file input")
 
         if mapped_to == "cover_letter":
-            # If the field is a file upload, upload the PDF.
-            # If it's a text/textarea field, fill with the cover letter text directly.
+            # Determine whether the cover letter field is a file upload or text entry.
+            # Greenhouse pages may have either (or both — "Attach" + "Enter manually").
             is_file_field = form_field is None or form_field.field_type == "file"
 
             if is_file_field:
                 if not cover_letter_path:
                     logger.warning("Cover letter field is a file upload but no PDF available — skipping")
                     return
-                # File inputs are hidden — _resolve_locator requires visible, so
-                # target by form_field metadata with fallback to second file input.
-                candidates = []
-                if form_field:
-                    if form_field.element_id:
-                        candidates.append(self._page.locator(f"#{form_field.element_id}"))
-                    if form_field.name:
-                        candidates.append(self._page.locator(f"[name='{form_field.name}']"))
+                # Target by well-known ID first, then form_field metadata, then
+                # positional fallback (second file input).
+                candidates = [
+                    self._page.locator("#cover_letter"),
+                    self._page.locator("input[type='file'][id*='cover' i]"),
+                ]
+                if form_field and form_field.element_id and form_field.element_id != "cover_letter":
+                    candidates.append(self._page.locator(f"#{form_field.element_id}"))
+                if form_field and form_field.name:
+                    candidates.append(self._page.locator(f"[name='{form_field.name}']"))
                 candidates.append(self._page.locator("input[type='file']").nth(1))
 
                 for loc in candidates:
@@ -548,7 +563,7 @@ class GreenhouseFiller:
                     except Exception:
                         continue
 
-                raise _FieldNotFoundError(mapping.form_label)
+                raise _FieldNotFoundError("cover letter file input")
 
             else:
                 # Text/textarea field — paste the cover letter body directly
@@ -612,6 +627,13 @@ class GreenhouseFiller:
             required = bool(form_field and form_field.required)
             await self._select_best_option(locator, mapping.form_label, value, required=required)
         else:
+
+            # TODO FIX- this assumes country phone codes always start with +
+            # For phone inputs inside intl-tel-input, strip the country code
+            # prefix — the widget manages the country code via its own dropdown.
+            if form_field and form_field.field_type == "tel":
+                import re
+                value = re.sub(r"^\+\d{1,3}[-.\s]?", "", value)
             await locator.fill(value, timeout=self._LOCATE_TIMEOUT)
             printable = value if len(value) <= 40 else f"{value[:40]}–"
             logger.debug(f"Filled '{mapping.form_label}' → '{printable}'")
@@ -659,70 +681,101 @@ class GreenhouseFiller:
 
         else:
             # ── Custom dropdown / autocomplete ────────────────────────────────
-            # 1. Click to open/focus the field.
-            await locator.click(timeout=self._LOCATE_TIMEOUT)
-
             opt_loc = self._page.locator(_CUSTOM_OPT)
 
-            # 2. Poll for visible options to appear (up to 2 s).
-            #    A fixed wait is unreliable — React Select may take varying time
-            #    to render options depending on page load and scroll position.
-            visible_count = 0
-            for _ in range(8):  # 8 × 250 ms = 2 s max
-                await self._page.wait_for_timeout(250)
-                visible_count = 0
-                for i in range(min(await opt_loc.count(), 50)):
-                    try:
-                        if await opt_loc.nth(i).is_visible():
-                            visible_count += 1
-                    except Exception:
-                        pass
-                if visible_count > 0:
-                    break
+            # Resolve the clickable/typeable element: React Select wraps the
+            # real <input> inside a container div.  Clicking/typing on the
+            # wrapper often does nothing — we need the inner <input>.
+            inner_input = locator.locator("input").first
+            try:
+                await inner_input.wait_for(state="attached", timeout=1000)
+                click_target = inner_input
+            except Exception:
+                click_target = locator
 
-            # 3. Type a search term if:
-            #   a) no options appeared at all (pure autocomplete), OR
-            #   b) too many options visible (>15) — unfiltered list needs narrowing.
+            # Single JS call to count visible options — much faster than
+            # per-element is_visible() roundtrips, especially when hidden
+            # option lists (e.g. phone country picker) inflate the DOM.
+            _VIS_COUNT_JS = """() => {
+                const sel = "[role='option'], [role='listbox'] li, " +
+                            "[role='menu'] [role='menuitem'], " +
+                            ".select__option, .dropdown-item";
+                let vis = 0;
+                for (const el of document.querySelectorAll(sel)) {
+                    if (el.offsetParent !== null && el.offsetWidth > 0) vis++;
+                    if (vis > 0) return vis;  // early-exit: we just need > 0
+                }
+                return 0;
+            }"""
+
+            async def _poll_options(seconds: float = 3.0) -> int:
+                """Poll for visible dropdown options. Returns count when > 0."""
+                iterations = int(seconds / 0.2)
+                for _ in range(iterations):
+                    await self._page.wait_for_timeout(200)
+                    vis = await self._page.evaluate(_VIS_COUNT_JS)
+                    if vis > 0:
+                        return vis
+                return 0
+
+            # 1. Click to open/focus — wait up to 3 s for options to render.
+            await click_target.click(timeout=self._LOCATE_TIMEOUT)
+            visible_count = await _poll_options(3.0)
+
+            # 2. Retry click ONLY if no options appeared.  Check once more
+            #    before clicking — the first poll may have ended right before
+            #    options rendered, and a second click would CLOSE the dropdown.
+            if visible_count == 0:
+                # One more instant check to avoid toggling an open dropdown
+                visible_count = await self._page.evaluate(_VIS_COUNT_JS)
+            if visible_count == 0:
+                logger.debug(f"No options after first click for '{field_label}' — retrying click")
+                await click_target.click(timeout=self._LOCATE_TIMEOUT)
+                visible_count = await _poll_options(3.0)
+
+            # 3. Last resort for true autocomplete fields (e.g. Location) where
+            #    options only appear after typing.  Only reached when both clicks
+            #    failed to reveal any options.
+            #    Use press_sequentially() (real keystrokes) instead of fill()
+            #    because React Select listens for native input events, not
+            #    programmatic value changes.
             if visible_count == 0:
                 search_term = value.split(",")[0].strip()
-                await locator.fill(search_term, timeout=self._LOCATE_TIMEOUT)
-                # Poll again after typing
-                for _ in range(8):
-                    await self._page.wait_for_timeout(250)
-                    visible_count = 0
-                    for i in range(min(await opt_loc.count(), 50)):
-                        try:
-                            if await opt_loc.nth(i).is_visible():
-                                visible_count += 1
-                        except Exception:
-                            pass
-                    if visible_count > 0:
-                        break
+                logger.debug(f"No options after clicks — typing '{search_term}' for autocomplete")
+                await click_target.click(timeout=self._LOCATE_TIMEOUT)
+                await click_target.press_sequentially(search_term, delay=50)
+                visible_count = await _poll_options(5.0)
 
-            # 3. Collect VISIBLE options only.
-            #    Visibility filtering is critical: many pages keep large hidden
-            #    option lists in the DOM (e.g. the iti phone-country picker with
-            #    200+ entries) that would otherwise pollute the results and cause
-            #    clicks on invisible elements.
+            # Collect VISIBLE options in one JS call — avoids hundreds of
+            # async roundtrips when hidden option lists inflate the DOM.
+            _COLLECT_JS = """() => {
+                const sel = "[role='option'], [role='listbox'] li, " +
+                            "[role='menu'] [role='menuitem'], " +
+                            ".select__option, .dropdown-item";
+                const all = document.querySelectorAll(sel);
+                const results = [];
+                for (let i = 0; i < all.length; i++) {
+                    const el = all[i];
+                    if (el.offsetParent !== null && el.offsetWidth > 0) {
+                        results.push({text: el.innerText.trim(), index: i});
+                    }
+                }
+                return results;
+            }"""
+            raw_options = await self._page.evaluate(_COLLECT_JS)
             option_map: dict[str, int] = {}
-            count = await opt_loc.count()
-            for i in range(count):
-                try:
-                    if not await opt_loc.nth(i).is_visible():
-                        continue
-                    t = (await opt_loc.nth(i).inner_text()).strip()
-                    if t and t not in option_map:
-                        option_map[t] = i
-                except Exception:
-                    pass
+            for entry in raw_options:
+                t = entry["text"]
+                if t and t not in option_map:
+                    option_map[t] = entry["index"]
 
             if not option_map:
                 await self._page.keyboard.press("Escape")
                 if required:
                     raise RuntimeError(
-                        f"No dropdown options found for required field '{field_label}'"
+                        f"No dropdown options found for required field:\n\t'{field_label}'"
                     )
-                logger.warning(f"No dropdown options found after clicking '{field_label}'")
+                logger.warning(f"No dropdown options found after clicking:\n\t'{field_label}'")
                 return
 
             option_texts = list(option_map.keys())

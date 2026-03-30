@@ -74,8 +74,9 @@ KNOWN_ANSWERS: dict[str, str] = {
         "Targeting $175K–$240K total compensation (flexible)"
     ),
     # Work authorization
-    "country": "United States",
-    "phone": "+1-646-820-5134",
+    "country_phone_code": "+1",
+    "country_of_residence": "United States",
+    "phone_number": "646-820-5134",
     "work_authorization": "Yes",
     "sponsorship_required": "No",
     "work_status": "US Citizen",
@@ -83,7 +84,7 @@ KNOWN_ANSWERS: dict[str, str] = {
     # Voluntary self-identification (EEO) — decline all by default
     "gender_identity":  "Male",
     "sexual_orientation": "Decline to self-identify",
-    "transgender_identity": "Decline to self-identify",
+    "transgender_identity": "No",
     "preferred_pronouns": "He/Him",
     "disability_status": "No",
     "veteran_status": "Not a veteran / no military service",
