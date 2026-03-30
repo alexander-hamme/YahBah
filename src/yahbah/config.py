@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # Safety
     min_field_confidence: float = 0.7
 
+    # Idempotency — block re-application to the same job within this window
+    duplicate_window_days: int = 31
+
     # Artifacts (local filesystem)
     artifacts_dir: str = "./artifacts"
 

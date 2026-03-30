@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from temporalio import workflow
+from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError
 
 with workflow.unsafe.imports_passed_through():
@@ -17,6 +18,7 @@ with workflow.unsafe.imports_passed_through():
         BrowserExtractInput,
         BrowserFillInput,
         CoverLetterInput,
+        DuplicateCheckInput,
         MapFieldsInput,
     )
     from yahbah.workflows.activities.browser import (
@@ -29,8 +31,10 @@ with workflow.unsafe.imports_passed_through():
         map_fields_activity,
     )
     from yahbah.workflows.activities.db_ops import (
-        mark_run_failed_activity,
+        check_duplicate_activity,
         mark_run_completed_activity,
+        mark_run_duplicate_activity,
+        mark_run_failed_activity,
         update_run_state_activity,
     )
 
@@ -48,10 +52,13 @@ class ApplicationWorkflow:
         run_id = input.run_id
         job_url = input.job_url
 
-        # Shared timeout config
+        # Shared timeout and retry config
         short = timedelta(minutes=2)
         medium = timedelta(minutes=5)
         long = timedelta(minutes=10)
+        retry = RetryPolicy(maximum_attempts=3)
+
+        # TODO more retries for initial stage, less for final stage?
 
         try:
             # ── AUTH_CHECK (open page + handle auth wall if present) ──────────
@@ -59,11 +66,13 @@ class ApplicationWorkflow:
                 update_run_state_activity,
                 args=[run_id, "AUTH_CHECK"],
                 start_to_close_timeout=short,
+                retry_policy=retry,
             )
             await workflow.execute_activity(
                 browser_open_and_auth_activity,
                 AuthInput(run_id=run_id, job_url=job_url),
                 start_to_close_timeout=long,
+                retry_policy=retry,
             )
 
             # ── EXTRACT_FORM ─────────────────────────────────────────────────
@@ -71,18 +80,49 @@ class ApplicationWorkflow:
                 update_run_state_activity,
                 args=[run_id, "EXTRACT_FORM"],
                 start_to_close_timeout=short,
+                retry_policy=retry,
             )
             extract_output = await workflow.execute_activity(
                 browser_extract_activity,
                 BrowserExtractInput(run_id=run_id, job_url=job_url),
                 start_to_close_timeout=long,
+                retry_policy=retry,
             )
+
+            # ── CHECK_DUPLICATE ──────────────────────────────────────────────
+            await workflow.execute_activity(
+                update_run_state_activity,
+                args=[run_id, "CHECK_DUPLICATE"],
+                start_to_close_timeout=short,
+                retry_policy=retry,
+            )
+            dup_result = await workflow.execute_activity(
+                check_duplicate_activity,
+                DuplicateCheckInput(
+                    run_id=run_id,
+                    canonical_url=extract_output.canonical_url,
+                    job_title=extract_output.job_title,
+                    job_company=extract_output.job_company,
+                    job_location=extract_output.job_location,
+                ),
+                start_to_close_timeout=short,
+                retry_policy=retry,
+            )
+            if dup_result.is_duplicate:
+                await workflow.execute_activity(
+                    mark_run_duplicate_activity,
+                    args=[run_id, dup_result.reason or "Duplicate job posting"],
+                    start_to_close_timeout=short,
+                    retry_policy=retry,
+                )
+                return
 
             # ── MAP_FIELDS (LLM) ─────────────────────────────────────────────
             await workflow.execute_activity(
                 update_run_state_activity,
                 args=[run_id, "MAP_FIELDS"],
                 start_to_close_timeout=short,
+                retry_policy=retry,
             )
             map_output = await workflow.execute_activity(
                 map_fields_activity,
@@ -92,6 +132,7 @@ class ApplicationWorkflow:
                     job_description=extract_output.job_description,
                 ),
                 start_to_close_timeout=medium,
+                retry_policy=retry,
             )
 
             # ── GENERATE_COVER_LETTER (LLM) ──────────────────────────────────
@@ -99,6 +140,7 @@ class ApplicationWorkflow:
                 update_run_state_activity,
                 args=[run_id, "GENERATE_COVER_LETTER"],
                 start_to_close_timeout=short,
+                retry_policy=retry,
             )
             cover_output = await workflow.execute_activity(
                 generate_cover_letter_activity,
@@ -107,6 +149,7 @@ class ApplicationWorkflow:
                     job_description=extract_output.job_description,
                 ),
                 start_to_close_timeout=medium,
+                retry_policy=retry,
             )
 
             # ── FILL_FIELDS + UPLOAD + SUBMIT + CONFIRM ───────────────────────
@@ -114,6 +157,7 @@ class ApplicationWorkflow:
                 update_run_state_activity,
                 args=[run_id, "FILL_AND_SUBMIT"],
                 start_to_close_timeout=short,
+                retry_policy=retry,
             )
             await workflow.execute_activity(
                 browser_fill_and_submit_activity,
@@ -126,6 +170,7 @@ class ApplicationWorkflow:
                     cover_letter_text=cover_output.cover_letter_text,
                 ),
                 start_to_close_timeout=long,
+                retry_policy=retry,
             )
 
             # ── DONE ─────────────────────────────────────────────────────────
@@ -133,6 +178,7 @@ class ApplicationWorkflow:
                 mark_run_completed_activity,
                 args=[run_id],
                 start_to_close_timeout=short,
+                retry_policy=retry,
             )
 
         except ActivityError as exc:
@@ -140,5 +186,6 @@ class ApplicationWorkflow:
                 mark_run_failed_activity,
                 args=[run_id, str(exc.cause or exc)],
                 start_to_close_timeout=short,
+                retry_policy=retry,
             )
             raise

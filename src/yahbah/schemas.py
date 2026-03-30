@@ -58,6 +58,26 @@ class BrowserExtractInput:
 class BrowserExtractOutput:
     form_schema_dict: dict   # FormSchema serialized to dict
     job_description: str
+    canonical_url: str = ""
+    job_title: str | None = None
+    job_company: str | None = None
+    job_location: str | None = None
+
+
+@dataclass
+class DuplicateCheckInput:
+    run_id: str
+    canonical_url: str
+    job_title: str | None
+    job_company: str | None
+    job_location: str | None
+
+
+@dataclass
+class DuplicateCheckOutput:
+    is_duplicate: bool
+    reason: str | None = None
+    existing_run_id: str | None = None
 
 
 @dataclass

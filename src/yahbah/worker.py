@@ -28,7 +28,9 @@ from yahbah.workflows.activities.llm import (
 from yahbah.workflows.activities.db_ops import (
     update_run_state_activity,
     mark_run_completed_activity,
+    mark_run_duplicate_activity,
     mark_run_failed_activity,
+    check_duplicate_activity,
     persist_artifact_activity,
     store_credentials_activity,
 )
@@ -58,7 +60,9 @@ async def main() -> None:
                 # DB ops
                 update_run_state_activity,
                 mark_run_completed_activity,
+                mark_run_duplicate_activity,
                 mark_run_failed_activity,
+                check_duplicate_activity,
                 persist_artifact_activity,
                 store_credentials_activity,
                 # Browser

@@ -12,6 +12,7 @@ import json
 from dataclasses import asdict
 
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from yahbah.browser.manager import BrowserRegistry
 from yahbah.browser.greenhouse import (
@@ -41,6 +42,7 @@ from yahbah.workflows.activities.db_ops import (
     persist_artifact_activity,
     store_credentials_activity,
 )
+from yahbah.url_utils import ats_normalize, strip_tracking
 from sqlalchemy import select
 
 
@@ -106,7 +108,14 @@ async def browser_extract_activity(input: BrowserExtractInput) -> BrowserExtract
         page = await registry.open_page(input.run_id, input.job_url)
 
     extractor = GreenhouseExtractor(page)
-    form_schema, job_description = await extractor.extract()
+    try:
+        form_schema, job_description = await extractor.extract()
+    except ValueError as exc:
+        # Job no longer available or page is not an application form —
+        # no point retrying, fail immediately.
+        raise ApplicationError(str(exc), non_retryable=True) from exc
+    job_title, job_company, job_location, raw_canonical = await extractor.extract_job_metadata()
+    canonical_url = ats_normalize(strip_tracking(raw_canonical))
 
     # Screenshot after extraction
     screenshot_path = await registry.screenshot(input.run_id, "after_extract")
@@ -130,6 +139,10 @@ async def browser_extract_activity(input: BrowserExtractInput) -> BrowserExtract
     return BrowserExtractOutput(
         form_schema_dict=asdict(form_schema),
         job_description=job_description,
+        canonical_url=canonical_url,
+        job_title=job_title,
+        job_company=job_company,
+        job_location=job_location,
     )
 
 

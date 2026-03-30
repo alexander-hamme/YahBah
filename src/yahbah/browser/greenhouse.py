@@ -124,12 +124,33 @@ class GreenhouseExtractor:
     def __init__(self, page: Page) -> None:
         self._page = page
 
+    async def validate_application_page(self) -> None:
+        """
+        Raises ValueError if the current page is not a job application form.
+        Catches the common case of a taken-down Greenhouse job that redirects
+        to the company's job board (URL contains ?error=true, or the path no
+        longer has a numeric job ID).
+        """
+        import re
+        url = self._page.url
+        if "error=true" in url:
+            raise ValueError(f"Job posting no longer available (redirected to: {url})")
+
+        # Greenhouse application URLs always end in /jobs/<numeric-id>
+        if not re.search(r"/jobs/\d+", url):
+            title = await self._page.title()
+            raise ValueError(
+                f"Page does not appear to be a job application form "
+                f"(url={url!r}, title={title!r})"
+            )
+
     async def extract(self) -> tuple[FormSchema, str]:
         """
         Returns (FormSchema, job_description_text).
         job_description is scraped from the page for the cover letter prompt.
         """
         await self._page.wait_for_load_state("networkidle", timeout=15_000)
+        await self.validate_application_page()
 
         fields: list[FormField] = []
 
@@ -291,6 +312,55 @@ class GreenhouseExtractor:
                     return text[:4000]  # cap for LLM prompt
         return await self._page.evaluate("document.body.innerText") or ""
 
+    async def extract_job_metadata(self) -> tuple[str | None, str | None, str | None, str]:
+        """
+        Scrapes structured job metadata from the page.
+        Returns (title, company, location, canonical_url).
+        canonical_url is page.url after all redirects.
+        """
+        import re
+
+        canonical_url = self._page.url
+
+        async def _first_text(*selectors: str) -> str | None:
+            for sel in selectors:
+                try:
+                    el = self._page.locator(sel).first
+                    await el.wait_for(state="attached", timeout=1_000)
+                    text = (await el.text_content() or "").strip()
+                    if text:
+                        return text
+                except Exception:
+                    continue
+            return None
+
+        title = await _first_text(
+            "h1.app-title", ".app-body h1", "h1",
+            ".posting-headline h2", "[data-qa='posting-name']",
+        )
+        company = await _first_text(
+            ".company-name", "[data-qa='company-name']",
+            ".company", "[data-company]",
+        )
+        location = await _first_text(
+            ".location", ".app-body .location", ".posting-categories .location",
+            "[data-qa='job-location']", ".job-location",
+        )
+
+        # Fall back to parsing the <title> tag
+        if not title or not company:
+            page_title = await self._page.title()
+            m = re.search(
+                r"Apply(?:\s+for)?\s+(.+?)\s+at\s+(.+?)(?:\s*[|–—\-]|$)",
+                page_title,
+                re.IGNORECASE,
+            )
+            if m:
+                title = title or m.group(1).strip()
+                company = company or m.group(2).strip()
+
+        return title, company, location, canonical_url
+
 
 class GreenhouseFiller:
     """
@@ -306,8 +376,8 @@ class GreenhouseFiller:
     Required fields that can't be located raise immediately.
     """
 
-    _LOCATE_TIMEOUT = 5_000   # ms per locator attempt
-    _UPLOAD_TIMEOUT = 30_000  # ms — file inputs may be lazily rendered
+    _LOCATE_TIMEOUT = 7_000   # ms per locator attempt
+    _UPLOAD_TIMEOUT = 60_000  # ms — file inputs may be lazily rendered
 
     def __init__(
         self,
@@ -509,16 +579,44 @@ class GreenhouseFiller:
             option_texts = [o["text"] for o in raw if o["text"]]
 
         else:
-            # ── Custom dropdown — click to open, collect options in one pass ──
+            # ── Custom dropdown / autocomplete ────────────────────────────────
+            # 1. Click to open/focus the field.
             await locator.click(timeout=self._LOCATE_TIMEOUT)
             await self._page.wait_for_timeout(400)
 
             opt_loc = self._page.locator(_CUSTOM_OPT)
-            count = await opt_loc.count()
-            # option_map: text → DOM index (preserves first occurrence)
+
+            # 2. Detect whether visible options appeared immediately (regular
+            #    dropdown) or whether typing is required first (autocomplete).
+            #    Only scan the first 30 candidates to keep this fast.
+            has_visible = False
+            for i in range(min(await opt_loc.count(), 30)):
+                try:
+                    if await opt_loc.nth(i).is_visible():
+                        has_visible = True
+                        break
+                except Exception:
+                    pass
+
+            if not has_visible:
+                # Autocomplete — type the primary search term.
+                # Use only the part before the first comma so that "Boston, MA"
+                # becomes "Boston" and triggers city-name matches.
+                search_term = value.split(",")[0].strip()
+                await locator.fill(search_term, timeout=self._LOCATE_TIMEOUT)
+                await self._page.wait_for_timeout(600)
+
+            # 3. Collect VISIBLE options only.
+            #    Visibility filtering is critical: many pages keep large hidden
+            #    option lists in the DOM (e.g. the iti phone-country picker with
+            #    200+ entries) that would otherwise pollute the results and cause
+            #    clicks on invisible elements.
             option_map: dict[str, int] = {}
+            count = await opt_loc.count()
             for i in range(count):
                 try:
+                    if not await opt_loc.nth(i).is_visible():
+                        continue
                     t = (await opt_loc.nth(i).inner_text()).strip()
                     if t and t not in option_map:
                         option_map[t] = i
@@ -580,7 +678,7 @@ class GreenhouseFiller:
         Falls back to set_input_files() for plain <input type="file"> elements
         that don't trigger a chooser event.
         """
-        await locator.wait_for(state="attached", timeout=self._LOCATE_TIMEOUT)
+        await locator.wait_for(state="attached", timeout=self._UPLOAD_TIMEOUT)
         try:
             async with self._page.expect_file_chooser(
                 timeout=self._LOCATE_TIMEOUT
@@ -625,20 +723,35 @@ class GreenhouseFiller:
 
     async def submit(self) -> tuple[str | None, str | None]:
         """
-        Clicks the primary submit button and waits for navigation.
+        Clicks the primary submit button and waits for a confirmation signal.
         Returns (confirmation_url, confirmation_text).
+
+        Greenhouse may respond in two ways:
+          - Full navigation (classic flow): a new page loads after submit.
+          - In-place confirmation (React SPA): the form is replaced by a success
+            message without any navigation event.
+        We try navigation first; if none occurs within the timeout we fall back
+        to waiting for networkidle, which covers the SPA case.
         """
-        submit_locator = (
-            self._page.get_by_role("button", name="Submit Application")
-        )
+        submit_locator = self._page.get_by_role("button", name="Submit Application")
         fallback_locator = self._page.locator(
             "input[type='submit'], button[type='submit']"
         ).first
 
         btn = submit_locator if await submit_locator.count() > 0 else fallback_locator
 
-        async with self._page.expect_navigation(timeout=15_000, wait_until="domcontentloaded"):
-            await btn.click()
+        try:
+            async with self._page.expect_navigation(
+                timeout=15_000, wait_until="domcontentloaded"
+            ):
+                await btn.click()
+        except Exception:
+            # No navigation occurred — SPA in-place confirmation.
+            # Wait for any pending network activity to settle.
+            try:
+                await self._page.wait_for_load_state("networkidle", timeout=10_000)
+            except Exception:
+                pass
 
         confirmation_url = self._page.url
         confirmation_text = await self._page.inner_text("body")

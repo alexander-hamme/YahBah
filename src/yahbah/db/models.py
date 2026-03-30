@@ -28,8 +28,11 @@ class JobPosting(Base):
         PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     url: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    # Resolved URL after all redirects (may differ from url if submitted via LinkedIn etc.)
+    canonical_url: Mapped[str | None] = mapped_column(String, index=True)
     title: Mapped[str | None] = mapped_column(String)
     company: Mapped[str | None] = mapped_column(String)
+    location: Mapped[str | None] = mapped_column(String)
     description: Mapped[str | None] = mapped_column(Text)
     ats_type: Mapped[str] = mapped_column(String, default="greenhouse")
     created_at: Mapped[datetime] = mapped_column(

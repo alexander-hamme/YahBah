@@ -6,7 +6,7 @@ from yahbah.db.models import ApplicantProfile
 from yahbah.llm.client import OllamaClient
 
 _SYSTEM_PROMPT = \
-"You are a professional cover letter writer. Use the following template EXACTLY:\
+("You are a professional cover letter writer. Use the following template EXACTLY:\
 \
 Dear <COMPANY> Hiring Team,\
 \
@@ -14,7 +14,8 @@ I am a Senior Machine Learning Engineer at Draper Laboratory, with 7 years of ex
 At Draper, I specialize in bringing promising research models all the way forward to highly-scalable, \
 performance-optimized deployment.\
 \
-My recent work <RECENT WORK OPTIONS, SEE BELOW>. <CONCISE LAST LINE THAT SUBTLY TIES MY BACKGROUND/EXPERIENCE TO THE JOB DESCRIPTION>.\
+My recent work <RECENT WORK OPTIONS, SEE BELOW>. <CONCISE LAST LINE ABOUT MY BACKGROUND & EXPERIENCE, TYING SUBTLY TO \
+THE JOB DESCRIPTION>.\
 \
 As a senior engineer, I’m also frequently responsible for working across multi-discipline teams to translate ambiguous \
 customer goals into effective end-to-end products, which must operate reliably and accurately under real-world constraints. \
@@ -30,7 +31,7 @@ BUSINESS OUTCOMES>.\
 Thank you for your time, and I look forward to connecting.\
 \
 Sincerely, \
-Alexander Hamme"
+Alexander Hamme")
 
 """
 
@@ -59,7 +60,8 @@ from training and optimizing models all the way to integration into production p
 (Pytorch/Tensorflow, CUDA/Slurm, Docker, REST, AWS, SQL/NoSQL)."
  
 - The final letter should be a smooth read, without any strange formatting, bullets, or typos. 
-Don't use extra long dashes, or any dashes at all.
+Don't use extra long dashes, or any dashes at all.  After filling in the blanks, remove any asterisks, 
+markdown syntax, etc.
  
 - Finally, Output the full cover letter text directly, no JSON.
 """

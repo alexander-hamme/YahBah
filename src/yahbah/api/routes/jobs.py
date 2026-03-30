@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from yahbah.config import settings
 from yahbah.db.models import ApplicationRun, JobPosting
 from yahbah.db.session import get_session
+from yahbah.url_utils import normalize_job_url
 from yahbah.workflows.application import ApplicationWorkflow, ApplicationWorkflowInput
 
 router = APIRouter()
@@ -34,16 +35,17 @@ async def enqueue_job(
     session: AsyncSession = Depends(get_session),
 ) -> EnqueueJobResponse:
     now = datetime.now(timezone.utc)
+    job_url = await normalize_job_url(body.job_url)
 
-    # Upsert JobPosting (idempotent by URL)
+    # Upsert JobPosting (idempotent by normalized URL)
     result = await session.execute(
-        select(JobPosting).where(JobPosting.url == body.job_url)
+        select(JobPosting).where(JobPosting.url == job_url)
     )
     job_posting = result.scalar_one_or_none()
     if job_posting is None:
         job_posting = JobPosting(
             id=uuid.uuid4(),
-            url=body.job_url,
+            url=job_url,
             ats_type="greenhouse",
             created_at=now,
         )
@@ -57,7 +59,7 @@ async def enqueue_job(
     run = ApplicationRun(
         id=run_id,
         job_posting_id=job_posting.id,
-        job_url=body.job_url,
+        job_url=job_url,
         status="PENDING",
         temporal_workflow_id=workflow_id,
         created_at=now,
@@ -71,7 +73,7 @@ async def enqueue_job(
         temporal = request.app.state.temporal
         await temporal.start_workflow(
             ApplicationWorkflow.run,
-            ApplicationWorkflowInput(run_id=str(run_id), job_url=body.job_url),
+            ApplicationWorkflowInput(run_id=str(run_id), job_url=job_url),
             id=workflow_id,
             task_queue=settings.temporal_task_queue,
         )
@@ -85,5 +87,5 @@ async def enqueue_job(
     return EnqueueJobResponse(
         run_id=str(run_id),
         status="PENDING",
-        job_url=body.job_url,
+        job_url=job_url,
     )

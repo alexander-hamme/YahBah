@@ -78,6 +78,7 @@ KNOWN_ANSWERS: dict[str, str] = {
     "work_authorization": "Yes",
     "sponsorship_required": "No",
     "work_status": "US Citizen",
+    "how_i_found_this_job": "Company Job Board",
     # Voluntary self-identification (EEO) — decline all by default
     "gender_identity":  "Male",
     "sexual_orientation": "Decline to self-identify",
