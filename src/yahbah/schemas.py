@@ -112,6 +112,7 @@ class BrowserFillInput:
     form_schema_dict: dict        # passed so the filler can use element_id/name/placeholder
     cover_letter_path: str | None  # path to generated PDF
     cover_letter_text: str | None = None  # raw text for textarea cover letter fields
+    account_email: str | None = None      # email used for Greenhouse account (needed for verification)
 
 
 @dataclass

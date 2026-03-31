@@ -923,7 +923,7 @@ class GreenhouseFiller:
 
         raise _FieldNotFoundError(label)
 
-    async def submit(self) -> tuple[str | None, str | None]:
+    async def submit(self, email: str | None = None) -> tuple[str | None, str | None]:
         """
         Clicks the primary submit button and waits for a confirmation signal.
         Returns (confirmation_url, confirmation_text).
@@ -934,6 +934,11 @@ class GreenhouseFiller:
             message without any navigation event.
         We try navigation first; if none occurs within the timeout we fall back
         to waiting for networkidle, which covers the SPA case.
+
+        Some Greenhouse forms require an email verification code after clicking
+        submit.  If an ``#email-verification`` fieldset appears, the code is
+        fetched from Gmail using *email* (the address the code was sent to)
+        and entered into the individual character inputs.
 
         Raises RuntimeError if the form is still present after clicking submit,
         which indicates validation errors (Greenhouse scrolled to the first
@@ -948,12 +953,12 @@ class GreenhouseFiller:
         await btn.click()
 
         # Wait for the page to signal completion: either the URL changes (full
-        # navigation) or the submit button disappears (SPA in-place swap).
-        # This also enforces a minimum wait so slow Greenhouse backends have time
-        # to process the submission before we inspect the result.
+        # navigation), the submit button disappears (SPA in-place swap), or
+        # an email verification challenge appears.
         try:
             await self._page.wait_for_function(
                 """([url]) => document.location.href !== url
+                    || document.querySelector('#email-verification') !== null
                     || document.querySelector(
                         'button[aria-label="Submit Application"], '
                         + 'input[type="submit"], button[type="submit"]'
@@ -970,6 +975,43 @@ class GreenhouseFiller:
             await self._page.wait_for_load_state("networkidle", timeout=7_000)
         except Exception:
             pass
+
+        # ── Email verification challenge ─────────────────────────────────────
+        verification_fieldset = self._page.locator("#email-verification")
+        if await verification_fieldset.count() > 0 and await verification_fieldset.is_visible():
+            await self._handle_email_verification(email)
+            # After entering the code Greenhouse may auto-submit or we need
+            # to click submit again.
+            try:
+                await self._page.wait_for_function(
+                    """([url]) => document.location.href !== url
+                        || document.querySelector(
+                            'button[aria-label="Submit Application"], '
+                            + 'input[type="submit"], button[type="submit"]'
+                        ) === null""",
+                    arg=[pre_submit_url],
+                    timeout=10_000,
+                )
+            except Exception:
+                # Didn't auto-submit — click submit again.
+                btn = submit_btn if await submit_btn.count() > 0 else fallback_btn
+                await btn.click()
+                try:
+                    await self._page.wait_for_function(
+                        """([url]) => document.location.href !== url
+                            || document.querySelector(
+                                'input[type="submit"], button[type="submit"]'
+                            ) === null""",
+                        arg=[pre_submit_url],
+                        timeout=25_000,
+                    )
+                except Exception:
+                    pass
+
+            try:
+                await self._page.wait_for_load_state("networkidle", timeout=7_000)
+            except Exception:
+                pass
 
         # --- Verify the submission actually succeeded ---
         # If the submit button is still visible the form bounced us back (Greenhouse
@@ -1005,6 +1047,54 @@ class GreenhouseFiller:
         confirmation_url = self._page.url
         confirmation_text = await self._page.inner_text("body")
         return confirmation_url, confirmation_text[:2000]
+
+    async def _handle_email_verification(self, email: str | None = None) -> None:
+        """
+        Fills the 8-character email verification code into the individual
+        ``security-input-N`` fields.
+
+        Greenhouse renders 8 single-character ``<input maxlength="1">`` elements
+        inside ``#email-verification``.  Typing into the first one auto-advances
+        focus to the next, so we use ``press_sequentially`` on the first input
+        and let the page handle the rest.
+        """
+        if email is None:
+            raise RuntimeError(
+                "Greenhouse requires email verification but no email was provided"
+            )
+
+        # TODO clean up this code once we have a real implementation
+        #  move this import up out of this function
+        from yahbah.gmail.client import GmailClient
+
+        logger.info(f"Email verification challenge detected — polling Gmail for code sent to {email}")
+        gmail = GmailClient()
+        code = await gmail.fetch_verification_code(email)
+        code = code.strip()
+        if len(code) != 8:  # todo don't hardcode this to be 8, it could be more or less
+            raise RuntimeError(
+                f"Expected 8-character verification code, got {len(code)}: {code!r}"
+            )
+
+        # Focus the first input and type the full code — each character
+        # auto-advances to the next input via Greenhouse's JS handler.
+        first_input = self._page.locator("#security-input-0")
+        await first_input.wait_for(state="visible", timeout=5_000)
+        await first_input.click()
+        await first_input.press_sequentially(code, delay=80)
+
+        # Verify all 8 inputs were filled
+        for i in range(8):
+            val = await self._page.locator(f"#security-input-{i}").input_value()
+            if not val:
+                # Auto-advance didn't work — fill each input individually
+                logger.warning("Auto-advance failed — filling inputs individually")
+                for j in range(8):
+                    inp = self._page.locator(f"#security-input-{j}")
+                    await inp.fill(code[j])
+                break
+
+        logger.info("Verification code entered")
 
     async def _remediate_and_retry(self, submit_btn, fallback_btn, pre_submit_url: str) -> bool:
         """

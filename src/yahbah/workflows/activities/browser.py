@@ -217,7 +217,7 @@ async def browser_fill_and_submit_activity(input: BrowserFillInput) -> BrowserFi
     await registry.screenshot(input.run_id, "before_submit")
 
     activity.logger.info(f"[fill] Submitting form")
-    confirmation_url, confirmation_text = await filler.submit()
+    confirmation_url, confirmation_text = await filler.submit(email=input.account_email)
     activity.logger.info(f"[fill] Submission result — URL: {confirmation_url}")
 
     # Screenshot of confirmation

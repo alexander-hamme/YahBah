@@ -137,6 +137,27 @@ class ApplicationArtifact(Base):
 # applicant_profile
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# gmail_checkpoint — stores incremental sync state for Gmail ingestion
+# ---------------------------------------------------------------------------
+
+class GmailCheckpoint(Base):
+    __tablename__ = "gmail_checkpoint"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    email: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    history_id: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+# ---------------------------------------------------------------------------
+# applicant_profile
+# ---------------------------------------------------------------------------
+
 class ApplicantProfile(Base):
     __tablename__ = "applicant_profile"
 

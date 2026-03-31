@@ -69,7 +69,7 @@ class ApplicationWorkflow:
                 start_to_close_timeout=short,
                 retry_policy=retry,
             )
-            await workflow.execute_activity(
+            auth_output = await workflow.execute_activity(
                 browser_open_and_auth_activity,
                 AuthInput(run_id=run_id, job_url=job_url),
                 start_to_close_timeout=long,
@@ -169,6 +169,7 @@ class ApplicationWorkflow:
                     form_schema_dict=extract_output.form_schema_dict,
                     cover_letter_path=cover_output.cover_letter_path,
                     cover_letter_text=cover_output.cover_letter_text,
+                    account_email=auth_output.account_email,
                 ),
                 start_to_close_timeout=long,
                 retry_policy=retry,

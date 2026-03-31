@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     # Idempotency — block re-application to the same job within this window
     duplicate_window_days: int = 31
 
+    # Gmail ingestion
+    gmail_credentials_dir: str = "~/.config/yahbah/gmail"
+    gmail_poll_interval_seconds: int = 7
+    gmail_poll_timeout_seconds: int = 300  # 5 minutes
+    gmail_label_parsed: str = "YahBah/Parsed"
+
     # Artifacts (local filesystem)
     artifacts_dir: str = "./artifacts"
 
