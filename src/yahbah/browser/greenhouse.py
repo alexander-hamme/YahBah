@@ -431,11 +431,18 @@ class GreenhouseFiller:
             seen_labels.add(mapping.form_label)
 
             if mapping.confidence < MIN_CONFIDENCE:
-                if mapping.mapped_to not in ("cover_letter", "resume"):
+                form_field_check = self._field_by_label.get(mapping.form_label)
+                is_required = form_field_check and form_field_check.required
+                if mapping.mapped_to not in ("cover_letter", "resume") and not is_required:
                     logger.warning(
-                        f"Skipping '{mapping.form_label}' — confidence {mapping.confidence:.2f} below threshold"
+                        f"Skipping optional '{mapping.form_label}' — confidence {mapping.confidence:.2f} below threshold"
                     )
                     continue
+                if is_required:
+                    logger.warning(
+                        f"Low confidence ({mapping.confidence:.2f}) for required field "
+                        f"'{mapping.form_label}' — attempting fill anyway"
+                    )
 
             form_field = self._field_by_label.get(mapping.form_label)
             logger.debug(
@@ -1092,6 +1099,9 @@ class GreenhouseFiller:
                 if error_hint:
                     msg += f" (first error: {error_hint!r})"
                 raise RuntimeError(msg)
+
+        self._page.remove_listener("request", _on_request)
+        self._page.remove_listener("response", _on_response)
 
         confirmation_url = self._page.url
         confirmation_text = await self._page.inner_text("body")

@@ -20,7 +20,7 @@ PROFILE = {
     "full_name": "Alexander Hamme",
     "email": "alexhamme96@gmail.com",
     "phone": "646-820-5134",
-    "location": "Boston, MA",
+    "location": "Cambridge, MA",
     "linkedin_url": "https://linkedin.com/in/alexander-hamme",
     "github_url": "https://github.com/alexander-hamme",
     "portfolio_url": None,

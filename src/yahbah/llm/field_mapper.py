@@ -73,17 +73,25 @@ KNOWN_ANSWERS: dict[str, str] = {
         # “I’m targeting total compensation roughly in the $170K–$250K range, depending on scope and overall package.”
         "Targeting $175K–$240K total compensation (flexible)"
     ),
-    "currently_in_location": "(IF LOCATION IS CLOSE TO NYC, Boston, or Philly: "
+    "currently_located_near_job": "(IF JOB OFFERS LOCATION NEAR NYC, Boston, or Philly: "
                              "say 'Yes, willing to relocate'. OTHERWISE, SAY 'Not currently'))",
     "willing_to_relocate": "Yes, willing to relocate",
     # Work authorization
     "country_phone_code": "+1",
+    "which_location_are_you_interested_in": "<IF POSSIBLE, Cross Check the LISTED AVAILABLE JOB LOCATIONS and "
+                                            "PICK 1-3 FROM THIS LIST In ORDER OF PRIORITY: Boston, New York City, "
+                                            "Washington D.C., Philadelphia, San Francisco, Los Angeles, Portland "
+                                            "Oregon;J none of these are listed options for the job, either put Remote or "
+                                            "put the default location listed for the job>",
     "country_of_residence": "United States",
+    "state_of_residence": "Massachusetts",
+    "city_of_residence": "Cambridge",
+    "zip_code_of_residence": "02139",
+    "work_status": "US Citizen",
     "phone_number": "646-820-5134",
     "work_authorization": "Yes",
     "sponsorship_required": "No",
-    "work_status": "US Citizen",
-    "how_i_found_this_job": "Company Job Board",
+    "how_i_found_this_job": "<COMPANY (replace with company name)>'s Job Board",
     # Voluntary self-identification (EEO) — decline all by default
     "gender_identity":  "Male",
     "sexual_orientation": "Decline to self-identify",
