@@ -102,6 +102,8 @@ KNOWN_ANSWERS: dict[str, str] = {
     "race_ethnicity": "Decline to self-identify",
     "hispanic_or_latino": "No",
     "agree_to_allow_info_use": "I agree",
+    "subject_to_non_compete_or_non_solicitation": "No",
+    "have_you_worked_for_company_before": "No",
     # Consent / terms checkboxes — always agree
     "consent_checkbox": "true",
 }

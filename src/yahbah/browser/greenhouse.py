@@ -7,11 +7,43 @@ Filling: takes FieldMappings and applies them via Playwright locators.
 Select fields use an LLM fallback to pick the closest option when exact match fails.
 """
 from loguru import logger
-from playwright.async_api import Page
+from playwright.async_api import Frame, Page
 from pydantic import BaseModel
 
 from yahbah.llm.client import OllamaClient
 from yahbah.schemas import FieldMapping, FormField, FormSchema
+
+
+async def resolve_greenhouse_frame(page: Page) -> Page | Frame:
+    """
+    If the page contains an embedded Greenhouse iframe (#grnhse_app),
+    returns the iframe's Frame.  Otherwise returns the original Page.
+
+    Both Page and Frame share the same API for locators, query_selector,
+    evaluate, etc., so callers can use the result transparently.
+    """
+    app_div = await page.query_selector("#grnhse_app")
+    if not app_div:
+        return page
+
+    # Check for iframe inside the embed container
+    iframe_el = await page.query_selector("#grnhse_app iframe, #grnhse_iframe")
+    if not iframe_el:
+        return page
+
+    # Try content_frame first (most reliable)
+    frame = await iframe_el.content_frame()
+    if frame:
+        logger.debug(f"[resolve_frame] Greenhouse iframe found: {frame.url}")
+        return frame
+
+    # Fallback: search page.frames by URL
+    for f in page.frames:
+        if "greenhouse" in (f.url or ""):
+            logger.debug(f"[resolve_frame] Greenhouse frame found via URL: {f.url}")
+            return f
+
+    return page
 
 
 # Confidence threshold below which we refuse to fill a required field
@@ -130,19 +162,123 @@ class GreenhouseExtractor:
         Catches the common case of a taken-down Greenhouse job that redirects
         to the company's job board (URL contains ?error=true, or the path no
         longer has a numeric job ID).
+
+        Accepts:
+          - Direct Greenhouse URLs: /jobs/<numeric-id>
+          - Embedded Greenhouse forms: pages with #grnhse_app or a Greenhouse
+            embed script (e.g. Airbnb's /positions/<id> tab UI)
         """
         import re
         url = self._page.url
         if "error=true" in url:
             raise ValueError(f"Job posting no longer available (redirected to: {url})")
 
-        # Greenhouse application URLs always end in /jobs/<numeric-id>
-        if not re.search(r"/jobs/\d+", url):
-            title = await self._page.title()
-            raise ValueError(
-                f"Page does not appear to be a job application form "
-                f"(url={url!r}, title={title!r})"
+        # Direct Greenhouse URL
+        if re.search(r"/jobs/\d+", url):
+            return
+
+        # Embedded Greenhouse form (e.g. company career sites with tab UI)
+        has_embed = await self._page.evaluate("""() => {
+            if (document.querySelector('#grnhse_app')) return true;
+            if (document.querySelector('script[src*="boards.greenhouse.io"]')) return true;
+            if (document.querySelector('iframe[src*="greenhouse"]')) return true;
+            return false;
+        }""")
+        if has_embed:
+            logger.info(f"[validate] Embedded Greenhouse form detected on {url}")
+            return
+
+        title = await self._page.title()
+        raise ValueError(
+            f"Page does not appear to be a job application form "
+            f"(url={url!r}, title={title!r})"
+        )
+
+    async def _activate_embedded_form(self) -> None:
+        """
+        For company career pages that embed Greenhouse via a tab UI (e.g. Airbnb),
+        clicks the Application tab to trigger the embed script, waits for the
+        Greenhouse iframe to load, and switches self._page to the iframe's frame
+        so all subsequent operations (extract, fill, submit) work transparently.
+
+        No-op on direct Greenhouse pages (no #grnhse_app).
+        """
+        app_div = await self._page.query_selector("#grnhse_app")
+        if not app_div:
+            return
+
+        logger.info("[embed] #grnhse_app detected — activating embedded form")
+
+        # Click the Application tab to trigger the embed script.
+        # Some sites lazy-load the iframe only when the tab is shown.
+        tab_selectors = [
+            "#tab-application",
+            ".js-job-app",
+            "button[aria-controls*='application']",
+            "button:has-text('Application')",
+            ".apply-btn",
+        ]
+
+        for selector in tab_selectors:
+            try:
+                el = self._page.locator(selector).first
+                if await el.count() > 0 and await el.is_visible():
+                    await el.click()
+                    logger.debug(f"[embed] Clicked tab: {selector}")
+                    break
+            except Exception:
+                continue
+
+        # Wait for the Greenhouse iframe to appear inside #grnhse_app
+        try:
+            await self._page.wait_for_selector(
+                "#grnhse_app iframe, #grnhse_iframe",
+                state="attached",
+                timeout=10_000,
             )
+        except Exception:
+            logger.warning("[embed] No iframe appeared in #grnhse_app — checking for direct DOM injection")
+            # Some embeds inject directly (no iframe) — check for form fields
+            has_fields = await self._page.query_selector(
+                "#grnhse_app input:not([type='hidden']), "
+                "#grnhse_app select, #grnhse_app textarea"
+            )
+            if has_fields:
+                logger.info("[embed] Form fields found directly in DOM (no iframe)")
+            return
+
+        # Switch self._page to the iframe's frame so all extraction/fill/submit
+        # operations work transparently. Frame has the same API as Page for
+        # locators, query_selector, evaluate, etc.
+        iframe_frame = None
+        for frame in self._page.frames:
+            if "greenhouse" in (frame.url or ""):
+                iframe_frame = frame
+                break
+
+        if not iframe_frame:
+            # Fallback: get frame from the iframe element directly
+            iframe_el = await self._page.query_selector("#grnhse_app iframe, #grnhse_iframe")
+            if iframe_el:
+                iframe_frame = await iframe_el.content_frame()
+
+        if not iframe_frame:
+            logger.warning("[embed] Could not get iframe frame — extraction may fail")
+            return
+
+        logger.info(f"[embed] Switching to Greenhouse iframe: {iframe_frame.url}")
+        self._page = iframe_frame  # type: ignore[assignment]
+
+        # Wait for the form inside the iframe to be ready
+        try:
+            await iframe_frame.wait_for_selector(
+                "input:not([type='hidden']), select, textarea",
+                state="visible",
+                timeout=10_000,
+            )
+            logger.info("[embed] Iframe form fields are visible")
+        except Exception:
+            logger.warning("[embed] Timeout waiting for form fields inside iframe")
 
     async def extract(self) -> tuple[FormSchema, str]:
         """
@@ -161,6 +297,8 @@ class GreenhouseExtractor:
             logger.debug("[extract] 'networkidle' timed out — proceeding anyway")
         await self.validate_application_page()
         logger.debug(f"[extract] Page validated — title: {await self._page.title()!r}")
+
+        await self._activate_embedded_form()
 
         fields: list[FormField] = []
 
@@ -951,10 +1089,24 @@ class GreenhouseFiller:
         which indicates validation errors (Greenhouse scrolled to the first
         unfilled required field without actually submitting).
         """
-        submit_btn = self._page.get_by_role("button", name="Submit Application")
-        fallback_btn = self._page.locator("input[type='submit'], button[type='submit']").first
+        # Scope submit button search to the Greenhouse form container when
+        # on an embedded page — avoids matching the host site's own submit
+        # buttons (e.g. a header search icon).
+        form_scope = self._page.locator("#grnhse_app")
+        if await form_scope.count() == 0:
+            form_scope = self._page
+
+        submit_btn = form_scope.get_by_role("button", name="Submit Application", exact=False)
+        fallback_btn = form_scope.locator("input[type='submit'], button[type='submit']").first
 
         btn = submit_btn if await submit_btn.count() > 0 else fallback_btn
+        # Guard: make sure we didn't grab a non-submit button (e.g. "Apply Now")
+        btn_text = (await btn.text_content() or "").strip().lower()
+        if btn_text and "submit" not in btn_text:
+            logger.warning(f"[submit] Matched button has text {btn_text!r} — falling back to stricter search")
+            stricter = form_scope.locator("button:has-text('submit'), input[value*='submit' i]").first
+            if await stricter.count() > 0:
+                btn = stricter
 
         # ── Diagnostic: capture submit request/response ──────────────────────
         captured_requests: list[dict] = []

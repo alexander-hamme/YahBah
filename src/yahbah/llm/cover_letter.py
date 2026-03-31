@@ -17,27 +17,26 @@ performance-optimized deployment.\
 My recent work <FILL IN RECENT WORK OPTIONS, AS FOLLOWS (THINK CAREFULLY):"
 +
 """
-IFF the Job is focused on Generative AI, LLMs, RAG, etc, use this text EXACTLY:
+IFF the Job is focused on Generative AI, LLMs, RAG, etc, use this paragraph EXACTLY, only replacing the last line:
  
     My recent work centers on building and deploying agentic and RAG-based LLM systems, including a large-scale 
     enterprise data-risk platform now deployed to thousands, and a proprietary source-code intelligence pipeline 
     with a live assistant editor. I’ve implemented agentic hallucination-reduction workflows, fully traceable GraphRAG 
-    pipelines, and continuously-running agentic systems to monitor sensitive company data. For all stages I am closely 
+    pipelines, and continuously running agentic systems to monitor sensitive company data. For all stages I am closely 
     involved from data discovery and optimized inference all the way to production deployment (with tools such as Docker, Temporal, 
-    Posgresql, AWS, etc). 
+    Postgresql, AWS, etc). <FINISH WITH CONCISE LAST LINE ABOUT MY BACKGROUND & EXPERIENCE, ALIGNING SUBTLY TO THE JOB DESCRIPTION>.
  
 OTHERWISE if the Job is more focused on general machine learning / AI Products, use something along these lines,
   tuning it SLIGHTLY to align with the job requirements and description:
  
-"My recent work has included successful product deliveries across performance-critical domains such as real-time audio 
-processing, autonomous navigation, and large-scale geospatial analytics. These deployments span the full data 
-processing + ML model lifecycle, from training and optimizing models all the way to integration into production 
-platforms (Pytorch/Tensorflow, CUDA/Slurm, Docker, REST, AWS, SQL/NoSQL, etc)."""
+    "My recent work has included successful product deliveries across performance-critical domains such as real-time audio 
+    processing, autonomous navigation, and large-scale geospatial analytics. These deployments span the full data 
+    processing + ML model lifecycle, from training and optimizing models all the way to integration into production 
+    platforms (Pytorch/Tensorflow, CUDA/Slurm, Docker, REST, AWS, SQL/NoSQL, etc). <FINISH WITH CONCISE LAST LINE 
+    ABOUT MY BACKGROUND & EXPERIENCE, ALIGNING SUBTLY TO THE JOB DESCRIPTION>.
+"""
 +
-">. Finally, FINISH THIS PARAGRAPH WITH: <CONCISE LAST LINE ABOUT MY BACKGROUND & EXPERIENCE, ALIGNING SUBTLY TO "
-"THE JOB DESCRIPTION>.\
-\
-As a senior engineer, I’m also frequently responsible for working across multi-discipline teams to translate ambiguous \
+"As a senior engineer, I’m also frequently responsible for working across multi-discipline teams to translate ambiguous \
 stakeholder requirements into effective end-to-end products, which must operate reliably and accurately under real-world\
  constraints. \
 \
