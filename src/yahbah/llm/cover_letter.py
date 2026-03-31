@@ -6,52 +6,46 @@ from yahbah.db.models import ApplicantProfile
 from yahbah.llm.client import OllamaClient
 
 _SYSTEM_PROMPT = \
-("You are a professional cover letter writer. Use the following template EXACTLY:\
-\
-Dear <COMPANY> Hiring Team,\
-\
-I am a Senior Machine Learning Engineer at Draper Laboratory, with 7 years of experience in complex real-world domains. \
-At Draper, I specialize in bringing promising research models all the way forward to highly-scalable, \
-performance-optimized deployment.\
-\
-My recent work <FILL IN RECENT WORK OPTIONS, AS FOLLOWS (THINK CAREFULLY):"
-+
-"""
-IFF the Job is focused on Generative AI, LLMs, RAG, etc, use this paragraph EXACTLY, only replacing the last line:
+("""You are a professional cover letter writer. Use the following template EXACTLY:
+
+```
+Dear <COMPANY> Hiring Team,
+
+I am a Senior Machine Learning Engineer at Draper Laboratory, with 7 years of experience in complex real-world domains.
+At Draper, I specialize in bringing promising research models all the way forward to highly-scalable,
+performance-optimized deployment.
+
+My recent work <FILL IN RECENT WORK OPTIONS, AS FOLLOWS (THINK CAREFULLY):
+
+>IFF the Job discusses Generative AI, LLMs, RAG, etc, use this paragraph EXACTLY, only replacing the last line:
  
-    My recent work centers on building and deploying agentic and RAG-based LLM systems, including a large-scale 
-    enterprise data-risk platform now deployed to thousands, and a proprietary source-code intelligence pipeline 
+    "My recent work centers on building and deploying agentic and RAG-based LLM systems, including a large-scale 
+    enterprise data-risk platform currently deployed company-wide, and a proprietary source-code intelligence pipeline 
     with a live assistant editor. I’ve implemented agentic hallucination-reduction workflows, fully traceable GraphRAG 
     pipelines, and continuously running agentic systems to monitor sensitive company data. For all stages I am closely 
     involved from data discovery and optimized inference all the way to production deployment (with tools such as Docker, Temporal, 
-    Postgresql, AWS, etc). <FINISH WITH CONCISE LAST LINE ABOUT MY BACKGROUND & EXPERIENCE, ALIGNING SUBTLY TO THE JOB DESCRIPTION>.
+    Postgresql, AWS, etc)." <FINISH WITH CONCISE LAST LINE ABOUT MY BACKGROUND & EXPERIENCE, ALIGNING SUBTLY TO THE JOB DESCRIPTION>.
  
-OTHERWISE if the Job is more focused on general machine learning / AI Products, use something along these lines,
+> OTHERWISE if the Job is more focused on general machine learning / AI Products, use something along these lines,
   tuning it SLIGHTLY to align with the job requirements and description:
  
-    "My recent work has included successful product deliveries across performance-critical domains such as real-time audio 
+    "My recent work includes successful AI product deliveries across performance-critical domains such as real-time audio 
     processing, autonomous navigation, and large-scale geospatial analytics. These deployments span the full data 
-    processing + ML model lifecycle, from training and optimizing models all the way to integration into production 
-    platforms (Pytorch/Tensorflow, CUDA/Slurm, Docker, REST, AWS, SQL/NoSQL, etc). <FINISH WITH CONCISE LAST LINE 
+    processing + ML model lifecycle, from training and optimizing models all the way to integration into large-scale production 
+    platforms (Pytorch/Tensorflow, CUDA/Slurm, Docker, REST, AWS, SQL/NoSQL, etc)." <FINISH WITH CONCISE LAST LINE 
     ABOUT MY BACKGROUND & EXPERIENCE, ALIGNING SUBTLY TO THE JOB DESCRIPTION>.
-"""
-+
-"As a senior engineer, I’m also frequently responsible for working across multi-discipline teams to translate ambiguous \
-stakeholder requirements into effective end-to-end products, which must operate reliably and accurately under real-world\
- constraints. \
-\
-I believe my experience <10 words or less: PHRASE ABOUT BUILDING technologies/products/ML solutions IN A PHRASING RELEVANT \
-TO JOB POST> aligns strongly with <COMPANY SPECIFIC GOAL  PRODUCT INITIATIVE OR AI STRATEGY RELEVANT TO THIS ROLE>, and \
-<SOMETHING LIKE: positions me to be a valuable addition to your team>.\
-\
-I would be thrilled to <10 words or less: Description of the impact you want to contribute to in this role, aligned \
-with the goal/mission/initiative outlined in the job description>. Thank you for your time, and I look forward to \
-discussing further.\
-\
-Sincerely, \
-Alexander Hamme")
 
-"""
+As a senior engineer, I’m also frequently responsible for working across multi-discipline teams to translate ambiguous 
+stakeholder requirements into effective end-to-end products, which must operate reliably and accurately under real-world 
+constraints. I believe my experience <10 words or less: PHRASE ABOUT BUILDING technologies/products/ML solutions IN A PHRASING RELEVANT 
+TO JOB POST> aligns strongly with <COMPANY SPECIFIC GOAL  PRODUCT INITIATIVE OR AI STRATEGY RELEVANT TO THIS ROLE>, 
+and <SOMETHING LIKE: positions me to be a valuable addition to your team>. "
+
+Thank you for your time, and I look forward to discussing further.
+
+Sincerely,
+Alexander Hamme
+```
 
 - Replace ONLY the parts within angle < > brackets.  Try to match the tone of the rest of the letter, keeping it
  short and sweet, with a hint of technical but Very concise, and without being redundant or rambling.
@@ -62,8 +56,11 @@ Don't use extra long dashes, or any dashes at all.
 - Do one final pass to remove any unusual asterisks, markdown symbols, etc.
  
 - Finally, Output the full cover letter text directly, no JSON.
-"""
+""")
 
+
+# I would be thrilled to <10 words or less: Description of the impact you want to contribute to in this role, aligned \
+# with the goal/mission/initiative outlined in the job description>.
 
 
 # """\

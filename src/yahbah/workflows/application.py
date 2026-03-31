@@ -20,6 +20,7 @@ with workflow.unsafe.imports_passed_through():
         BrowserFillInput,
         CoverLetterInput,
         DuplicateCheckInput,
+        JobMetadataInput,
         MapFieldsInput,
     )
     from yahbah.workflows.activities.browser import (
@@ -28,6 +29,7 @@ with workflow.unsafe.imports_passed_through():
         browser_fill_and_submit_activity,
     )
     from yahbah.workflows.activities.llm import (
+        extract_job_metadata_activity,
         generate_cover_letter_activity,
         map_fields_activity,
     )
@@ -90,6 +92,23 @@ class ApplicationWorkflow:
                 retry_policy=retry,
             )
 
+            # ── EXTRACT_METADATA (LLM) ───────────────────────────────────────
+            await workflow.execute_activity(
+                update_run_state_activity,
+                args=[run_id, "EXTRACT_METADATA"],
+                start_to_close_timeout=short,
+                retry_policy=retry,
+            )
+            metadata_output = await workflow.execute_activity(
+                extract_job_metadata_activity,
+                JobMetadataInput(
+                    run_id=run_id,
+                    job_description=extract_output.job_description,
+                ),
+                start_to_close_timeout=medium,
+                retry_policy=retry,
+            )
+
             # ── CHECK_DUPLICATE ──────────────────────────────────────────────
             await workflow.execute_activity(
                 update_run_state_activity,
@@ -97,14 +116,19 @@ class ApplicationWorkflow:
                 start_to_close_timeout=short,
                 retry_policy=retry,
             )
+            # DOM-scraped values take priority; LLM fills in blanks
             dup_result = await workflow.execute_activity(
                 check_duplicate_activity,
                 DuplicateCheckInput(
                     run_id=run_id,
                     canonical_url=extract_output.canonical_url,
-                    job_title=extract_output.job_title,
-                    job_company=extract_output.job_company,
-                    job_location=extract_output.job_location,
+                    job_title=extract_output.job_title or metadata_output.title,
+                    job_company=extract_output.job_company or metadata_output.company,
+                    job_location=extract_output.job_location or metadata_output.location,
+                    job_description=metadata_output.description_summary,
+                    salary_min=metadata_output.salary_min,
+                    salary_max=metadata_output.salary_max,
+                    technologies=metadata_output.technologies,
                 ),
                 start_to_close_timeout=short,
                 retry_policy=retry,

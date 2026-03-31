@@ -114,6 +114,14 @@ async def check_duplicate_activity(input: DuplicateCheckInput) -> DuplicateCheck
             posting.company = input.job_company
         if input.job_location and not posting.location:
             posting.location = input.job_location
+        if input.job_description and not posting.description:
+            posting.description = input.job_description
+        if input.salary_min and not posting.salary_min:
+            posting.salary_min = input.salary_min
+        if input.salary_max and not posting.salary_max:
+            posting.salary_max = input.salary_max
+        if input.technologies and not posting.technologies:
+            posting.technologies = input.technologies
         await session.commit()
 
         window_start = datetime.now(timezone.utc) - timedelta(days=settings.duplicate_window_days)

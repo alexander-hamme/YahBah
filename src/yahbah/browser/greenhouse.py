@@ -14,36 +14,90 @@ from yahbah.llm.client import OllamaClient
 from yahbah.schemas import FieldMapping, FormField, FormSchema
 
 
-async def resolve_greenhouse_frame(page: Page) -> Page | Frame:
+async def activate_and_resolve_embed(page: Page) -> Page | Frame:
     """
-    If the page contains an embedded Greenhouse iframe (#grnhse_app),
-    returns the iframe's Frame.  Otherwise returns the original Page.
+    For company career pages with embedded Greenhouse forms:
+      1. Clicks the Application tab to trigger the embed script
+      2. Waits for the Greenhouse iframe to appear
+      3. Returns the iframe's Frame
 
-    Both Page and Frame share the same API for locators, query_selector,
-    evaluate, etc., so callers can use the result transparently.
+    For direct Greenhouse pages (no #grnhse_app), returns the original Page.
+    Both Page and Frame share the locator/query_selector API.
     """
     app_div = await page.query_selector("#grnhse_app")
     if not app_div:
         return page
 
-    # Check for iframe inside the embed container
+    # Always click the Application tab to make the panel visible.
+    # The Greenhouse embed script may create the iframe on page load,
+    # but the tab panel has a `hidden` attribute that must be removed
+    # by clicking the tab before the iframe content is interactable.
+    logger.info("[embed] #grnhse_app detected — clicking Application tab")
+    tab_selectors = [
+        "#tab-application",
+        ".js-job-app",
+        "button[aria-controls*='application']",
+        "button:has-text('Application')",
+        ".apply-btn",
+    ]
+    for selector in tab_selectors:
+        try:
+            el = page.locator(selector).first
+            if await el.count() > 0 and await el.is_visible():
+                await el.click()
+                logger.debug(f"[embed] Clicked tab: {selector}")
+                break
+        except Exception:
+            continue
+
+    # Wait for the iframe to appear (or be ready if it was pre-created)
+    try:
+        await page.wait_for_selector(
+            "#grnhse_app iframe, #grnhse_iframe",
+            state="attached",
+            timeout=10_000,
+        )
+    except Exception:
+        logger.warning("[embed] No iframe appeared — checking for direct DOM injection")
+        has_fields = await page.query_selector(
+            "#grnhse_app input:not([type='hidden']), "
+            "#grnhse_app select, #grnhse_app textarea"
+        )
+        if has_fields:
+            logger.info("[embed] Form fields found directly in DOM (no iframe)")
+        return page
+
     iframe_el = await page.query_selector("#grnhse_app iframe, #grnhse_iframe")
+
     if not iframe_el:
         return page
 
-    # Try content_frame first (most reliable)
+    # Get the iframe's frame
     frame = await iframe_el.content_frame()
-    if frame:
-        logger.debug(f"[resolve_frame] Greenhouse iframe found: {frame.url}")
-        return frame
+    if not frame:
+        for f in page.frames:
+            if "greenhouse" in (f.url or ""):
+                frame = f
+                break
 
-    # Fallback: search page.frames by URL
-    for f in page.frames:
-        if "greenhouse" in (f.url or ""):
-            logger.debug(f"[resolve_frame] Greenhouse frame found via URL: {f.url}")
-            return f
+    if not frame:
+        logger.warning("[embed] Could not get iframe frame")
+        return page
 
-    return page
+    logger.info(f"[embed] Resolved Greenhouse iframe: {frame.url}")
+
+    # Wait for form fields inside the iframe
+    try:
+        await frame.wait_for_selector(
+            "input:not([type='hidden']), select, textarea",
+            state="visible",
+            timeout=10_000,
+        )
+        logger.info("[embed] Iframe form fields are visible")
+    except Exception:
+        logger.warning("[embed] Timeout waiting for form fields inside iframe")
+
+    return frame
 
 
 # Confidence threshold below which we refuse to fill a required field
@@ -155,6 +209,7 @@ class GreenhouseExtractor:
 
     def __init__(self, page: Page) -> None:
         self._page = page
+        self._root_page = page  # kept for job description / metadata on embedded pages
 
     async def validate_application_page(self) -> None:
         """
@@ -196,89 +251,12 @@ class GreenhouseExtractor:
 
     async def _activate_embedded_form(self) -> None:
         """
-        For company career pages that embed Greenhouse via a tab UI (e.g. Airbnb),
-        clicks the Application tab to trigger the embed script, waits for the
-        Greenhouse iframe to load, and switches self._page to the iframe's frame
-        so all subsequent operations (extract, fill, submit) work transparently.
-
-        No-op on direct Greenhouse pages (no #grnhse_app).
+        Delegates to the standalone activate_and_resolve_embed() and switches
+        self._page to the iframe frame if applicable.
         """
-        app_div = await self._page.query_selector("#grnhse_app")
-        if not app_div:
-            return
-
-        logger.info("[embed] #grnhse_app detected — activating embedded form")
-
-        # Click the Application tab to trigger the embed script.
-        # Some sites lazy-load the iframe only when the tab is shown.
-        tab_selectors = [
-            "#tab-application",
-            ".js-job-app",
-            "button[aria-controls*='application']",
-            "button:has-text('Application')",
-            ".apply-btn",
-        ]
-
-        for selector in tab_selectors:
-            try:
-                el = self._page.locator(selector).first
-                if await el.count() > 0 and await el.is_visible():
-                    await el.click()
-                    logger.debug(f"[embed] Clicked tab: {selector}")
-                    break
-            except Exception:
-                continue
-
-        # Wait for the Greenhouse iframe to appear inside #grnhse_app
-        try:
-            await self._page.wait_for_selector(
-                "#grnhse_app iframe, #grnhse_iframe",
-                state="attached",
-                timeout=10_000,
-            )
-        except Exception:
-            logger.warning("[embed] No iframe appeared in #grnhse_app — checking for direct DOM injection")
-            # Some embeds inject directly (no iframe) — check for form fields
-            has_fields = await self._page.query_selector(
-                "#grnhse_app input:not([type='hidden']), "
-                "#grnhse_app select, #grnhse_app textarea"
-            )
-            if has_fields:
-                logger.info("[embed] Form fields found directly in DOM (no iframe)")
-            return
-
-        # Switch self._page to the iframe's frame so all extraction/fill/submit
-        # operations work transparently. Frame has the same API as Page for
-        # locators, query_selector, evaluate, etc.
-        iframe_frame = None
-        for frame in self._page.frames:
-            if "greenhouse" in (frame.url or ""):
-                iframe_frame = frame
-                break
-
-        if not iframe_frame:
-            # Fallback: get frame from the iframe element directly
-            iframe_el = await self._page.query_selector("#grnhse_app iframe, #grnhse_iframe")
-            if iframe_el:
-                iframe_frame = await iframe_el.content_frame()
-
-        if not iframe_frame:
-            logger.warning("[embed] Could not get iframe frame — extraction may fail")
-            return
-
-        logger.info(f"[embed] Switching to Greenhouse iframe: {iframe_frame.url}")
-        self._page = iframe_frame  # type: ignore[assignment]
-
-        # Wait for the form inside the iframe to be ready
-        try:
-            await iframe_frame.wait_for_selector(
-                "input:not([type='hidden']), select, textarea",
-                state="visible",
-                timeout=10_000,
-            )
-            logger.info("[embed] Iframe form fields are visible")
-        except Exception:
-            logger.warning("[embed] Timeout waiting for form fields inside iframe")
+        resolved = await activate_and_resolve_embed(self._page)
+        if resolved is not self._page:
+            self._page = resolved  # type: ignore[assignment]
 
     async def extract(self) -> tuple[FormSchema, str]:
         """
@@ -297,6 +275,11 @@ class GreenhouseExtractor:
             logger.debug("[extract] 'networkidle' timed out — proceeding anyway")
         await self.validate_application_page()
         logger.debug(f"[extract] Page validated — title: {await self._page.title()!r}")
+
+        # Extract job description from the main page BEFORE switching to the
+        # iframe — on embedded pages the description is on the Role Overview
+        # tab, not inside the Greenhouse iframe.
+        job_description = await self._extract_job_description()
 
         await self._activate_embedded_form()
 
@@ -329,7 +312,6 @@ class GreenhouseExtractor:
 
         page_url = self._page.url
         page_title = await self._page.title()
-        job_description = await self._extract_job_description()
 
         return FormSchema(fields=fields, page_url=page_url, page_title=page_title), job_description
 
@@ -469,15 +451,20 @@ class GreenhouseExtractor:
         Scrapes structured job metadata from the page.
         Returns (title, company, location, canonical_url).
         canonical_url is page.url after all redirects.
+
+        Uses _root_page (the main page, not an iframe) so metadata is found
+        on embedded career pages where title/company/location live outside
+        the Greenhouse iframe.
         """
         import re
 
-        canonical_url = self._page.url
+        page = self._root_page
+        canonical_url = page.url
 
         async def _first_text(*selectors: str) -> str | None:
             for sel in selectors:
                 try:
-                    el = self._page.locator(sel).first
+                    el = page.locator(sel).first
                     await el.wait_for(state="attached", timeout=1_000)
                     text = (await el.text_content() or "").strip()
                     if text:
@@ -501,7 +488,7 @@ class GreenhouseExtractor:
 
         # Fall back to parsing the <title> tag
         if not title or not company:
-            page_title = await self._page.title()
+            page_title = await page.title()
             m = re.search(
                 r"Apply(?:\s+for)?\s+(.+?)\s+at\s+(.+?)(?:\s*[|–—\-]|$)",
                 page_title,
@@ -533,7 +520,7 @@ class GreenhouseFiller:
 
     def __init__(
         self,
-        page: Page,
+        page: Page | Frame,
         form_schema: FormSchema | None = None,
         llm_client: OllamaClient | None = None,
     ) -> None:
@@ -543,6 +530,13 @@ class GreenhouseFiller:
         self._field_by_label: dict[str, FormField] = (
             {f.label: f for f in form_schema.fields} if form_schema else {}
         )
+
+    @property
+    def _keyboard(self):
+        """Keyboard access that works for both Page and Frame (iframe)."""
+        if hasattr(self._page, "keyboard"):
+            return self._page.keyboard
+        return self._page.page.keyboard
 
     async def fill(
         self,
@@ -915,7 +909,7 @@ class GreenhouseFiller:
                     option_map[t] = entry["index"]
 
             if not option_map:
-                await self._page.keyboard.press("Escape")
+                await self._keyboard.press("Escape")
                 if required:
                     raise RuntimeError(
                         f"No dropdown options found for required field:\n\t'{field_label}'"
@@ -957,11 +951,11 @@ class GreenhouseFiller:
             msg = f"LLM returned invalid index {idx!r} for '{field_label}'"
             if required:
                 if tag != "select":
-                    await self._page.keyboard.press("Escape")
+                    await self._keyboard.press("Escape")
                 raise RuntimeError(f"{msg} (field is required)")
             logger.warning(f"{msg} — skipping")
             if tag != "select":
-                await self._page.keyboard.press("Escape")
+                await self._keyboard.press("Escape")
             return
 
         selected = option_texts[idx - 1]  # convert 1-based → 0-based
@@ -972,7 +966,7 @@ class GreenhouseFiller:
             await opt_loc.nth(option_map[selected]).click(timeout=self._LOCATE_TIMEOUT)
             # Close the dropdown — React Select multi-selects stay open after a
             # click, causing the next field to inherit leftover visible options.
-            await self._page.keyboard.press("Escape")
+            await self._keyboard.press("Escape")
             await self._page.wait_for_timeout(150)
 
         logger.debug(f"Selected '{selected}' for '{field_label}'")
@@ -1098,15 +1092,27 @@ class GreenhouseFiller:
 
         submit_btn = form_scope.get_by_role("button", name="Submit Application", exact=False)
         fallback_btn = form_scope.locator("input[type='submit'], button[type='submit']").first
+        # Broader fallback: any button containing "submit" in its text
+        text_btn = form_scope.locator("button:has-text('submit'), input[value*='submit' i]").first
 
-        btn = submit_btn if await submit_btn.count() > 0 else fallback_btn
+        if await submit_btn.count() > 0:
+            btn = submit_btn
+        elif await fallback_btn.count() > 0:
+            btn = fallback_btn
+        elif await text_btn.count() > 0:
+            btn = text_btn
+        else:
+            raise RuntimeError("Could not find submit button on page")
+
         # Guard: make sure we didn't grab a non-submit button (e.g. "Apply Now")
-        btn_text = (await btn.text_content() or "").strip().lower()
+        try:
+            btn_text = (await btn.text_content(timeout=5_000) or "").strip().lower()
+        except Exception:
+            btn_text = ""
         if btn_text and "submit" not in btn_text:
             logger.warning(f"[submit] Matched button has text {btn_text!r} — falling back to stricter search")
-            stricter = form_scope.locator("button:has-text('submit'), input[value*='submit' i]").first
-            if await stricter.count() > 0:
-                btn = stricter
+            if await text_btn.count() > 0:
+                btn = text_btn
 
         # ── Diagnostic: capture submit request/response ──────────────────────
         captured_requests: list[dict] = []

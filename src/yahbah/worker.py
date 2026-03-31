@@ -22,6 +22,7 @@ from yahbah.workflows.activities.browser import (
     browser_fill_and_submit_activity,
 )
 from yahbah.workflows.activities.llm import (
+    extract_job_metadata_activity,
     map_fields_activity,
     generate_cover_letter_activity,
 )
@@ -70,6 +71,7 @@ async def main() -> None:
                 browser_extract_activity,
                 browser_fill_and_submit_activity,
                 # LLM
+                extract_job_metadata_activity,
                 map_fields_activity,
                 generate_cover_letter_activity,
             ],

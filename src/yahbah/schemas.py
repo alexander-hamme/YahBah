@@ -65,12 +65,33 @@ class BrowserExtractOutput:
 
 
 @dataclass
+class JobMetadataInput:
+    run_id: str
+    job_description: str
+
+
+@dataclass
+class JobMetadataOutput:
+    title: str | None = None
+    company: str | None = None
+    location: str | None = None
+    description_summary: str | None = None  # ≤40 word LLM summary
+    salary_min: int | None = None
+    salary_max: int | None = None
+    technologies: list[str] | None = None
+
+
+@dataclass
 class DuplicateCheckInput:
     run_id: str
     canonical_url: str
     job_title: str | None
     job_company: str | None
     job_location: str | None
+    job_description: str | None = None
+    salary_min: int | None = None
+    salary_max: int | None = None
+    technologies: list[str] | None = None
 
 
 @dataclass

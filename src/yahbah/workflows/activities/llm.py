@@ -15,6 +15,8 @@ from yahbah.schemas import (
     CoverLetterOutput,
     FormField,
     FormSchema,
+    JobMetadataInput,
+    JobMetadataOutput,
     MapFieldsInput,
     MapFieldsOutput,
 )
@@ -104,6 +106,73 @@ async def generate_cover_letter_activity(input: CoverLetterInput) -> CoverLetter
     return CoverLetterOutput(
         cover_letter_path=cover_letter_path,
         cover_letter_text=cover_letter_text,
+    )
+
+
+from pydantic import BaseModel
+
+from yahbah.llm.client import OllamaClient
+
+
+class _JobMetadata(BaseModel):
+    title: str | None = None
+    company: str | None = None
+    location: str | None = None
+    description_summary: str | None = None
+    salary_min: int | None = None
+    salary_max: int | None = None
+    technologies: list[str] | None = None
+
+
+@activity.defn
+async def extract_job_metadata_activity(input: JobMetadataInput) -> JobMetadataOutput:
+    """
+    Uses the LLM to extract structured metadata from the raw job description:
+      - title, company, location (fallbacks — DOM scraping is preferred)
+      - description_summary: ≤40 word summary of the role
+      - salary_min / salary_max: annual salary bounds in USD (integers), or null
+    """
+    if not input.job_description or len(input.job_description.strip()) < 50:
+        activity.logger.warning("[metadata] Job description too short — skipping LLM extraction")
+        return JobMetadataOutput()
+
+    llm = OllamaClient()
+    result = await llm.generate_structured(
+        system_prompt=(
+            "You are extracting structured metadata from a job posting. "
+            "Return valid JSON with these fields:\n"
+            '- "title": the job title (e.g. "Senior Software Engineer"). Use null if unclear.\n'
+            '- "company": the company name. Use null if unclear.\n'
+            '- "location": the job location (e.g. "San Francisco, CA" or "Remote"). Use null if unclear.\n'
+            '- "description_summary": a concise summary of the role in at most 40 words. '
+            "Focus on what the role does, not the company.\n"
+            '- "salary_min": the minimum annual salary in USD as an integer (no decimals, '
+            "no currency symbols). Use null if not stated.\n"
+            '- "salary_max": the maximum annual salary in USD as an integer. Use null if not stated.\n'
+            '- "technologies": a JSON array of specific technologies, tools, frameworks, '
+            "and platforms mentioned (e.g. [\"Spark\", \"PyTorch\", \"AWS\"]). Normalize names "
+            "(e.g. \"k8s\" → \"Kubernetes\", \"GCP\" → \"Google Cloud\"). Return empty array if none found.\n"
+            "If salary is given as hourly, multiply by 2080 to annualize. "
+            "If a single number is given, use it for both min and max."
+        ),
+        user_prompt=f"Job posting text:\n\n{input.job_description[:3000]}",
+        response_model=_JobMetadata,
+    )
+
+    activity.logger.info(
+        f"[metadata] Extracted: title={result.title!r}, company={result.company!r}, "
+        f"location={result.location!r}, summary={result.description_summary!r}, "
+        f"salary={result.salary_min}–{result.salary_max}, "
+        f"technologies={result.technologies}"
+    )
+    return JobMetadataOutput(
+        title=result.title,
+        company=result.company,
+        location=result.location,
+        description_summary=result.description_summary,
+        salary_min=result.salary_min,
+        salary_max=result.salary_max,
+        technologies=result.technologies,
     )
 
 

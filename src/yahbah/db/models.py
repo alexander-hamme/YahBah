@@ -5,6 +5,7 @@ from typing import Any
 from sqlalchemy import (
     DateTime, ForeignKey, JSON, String, Text, Boolean, Float,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -34,6 +35,9 @@ class JobPosting(Base):
     company: Mapped[str | None] = mapped_column(String)
     location: Mapped[str | None] = mapped_column(String)
     description: Mapped[str | None] = mapped_column(Text)
+    salary_min: Mapped[int | None] = mapped_column()
+    salary_max: Mapped[int | None] = mapped_column()
+    technologies: Mapped[list[str] | None] = mapped_column(JSONB)
     ats_type: Mapped[str] = mapped_column(String, default="greenhouse")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow

@@ -19,6 +19,7 @@ from yahbah.browser.greenhouse import (
     GreenhouseAuthHandler,
     GreenhouseExtractor,
     GreenhouseFiller,
+    activate_and_resolve_embed,
 )
 from yahbah.credentials import (
     company_slug_from_url,
@@ -201,7 +202,12 @@ async def browser_fill_and_submit_activity(input: BrowserFillInput) -> BrowserFi
             f"value={m.value[:60]!r} confidence={m.confidence:.2f}"
         )
 
-    filler = GreenhouseFiller(page, form_schema=form_schema)
+    # For embedded Greenhouse forms (e.g. Airbnb), the form lives inside an
+    # iframe.  Activate the embed (click tab if needed) and resolve to the
+    # iframe frame so the filler operates on the right DOM.
+    fill_page = await activate_and_resolve_embed(page)
+
+    filler = GreenhouseFiller(fill_page, form_schema=form_schema)
 
     # Screenshot before fill
     await registry.screenshot(input.run_id, "before_fill")

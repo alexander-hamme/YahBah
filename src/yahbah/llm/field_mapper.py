@@ -85,7 +85,7 @@ KNOWN_ANSWERS: dict[str, str] = {
                                             "put the default location listed for the job>",
     "country_of_residence": "United States",
     "state_of_residence": "Massachusetts",
-    "city_of_residence": "Cambridge",
+    "city_of_residence": "Cambridge <PICK MASSACHUSETTS USA, NOT U.K.>",
     "zip_code_of_residence": "02139",
     "work_status": "US Citizen",
     "phone_number": "646-820-5134",
