@@ -73,6 +73,9 @@ KNOWN_ANSWERS: dict[str, str] = {
         # “I’m targeting total compensation roughly in the $170K–$250K range, depending on scope and overall package.”
         "Targeting $175K–$240K total compensation (flexible)"
     ),
+    "currently_in_location": "(IF LOCATION IS CLOSE TO NYC, Boston, or Philly: "
+                             "say 'Yes, willing to relocate'. OTHERWISE, SAY 'Not currently'))",
+    "willing_to_relocate": "Yes, willing to relocate",
     # Work authorization
     "country_phone_code": "+1",
     "country_of_residence": "United States",

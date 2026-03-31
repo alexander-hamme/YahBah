@@ -44,7 +44,7 @@ def sort_by_timestamp(files: List[Path], use: str = "mtime") -> List[Path]:
     return sorted(files, key=key)
 
 
-def build_filter(fps: float, width: int | None, height: int | None, colors: int, dither: str) -> str:
+def build_filter(width: int | None, height: int | None, colors: int, dither: str) -> str:
     if width is None and height is None:
         scale_expr = "scale=iw:ih:flags=lanczos"
     else:
@@ -53,18 +53,23 @@ def build_filter(fps: float, width: int | None, height: int | None, colors: int,
         scale_expr = f"scale={w}:{h}:flags=lanczos"
 
     return (
-        f"fps={fps},"
         f"{scale_expr},split[a][b];"
         f"[a]palettegen=max_colors={colors}[p];"
         f"[b][p]paletteuse=dither={dither}"
     )
 
 
-def write_concat_file(files: List[Path], tmp_path: Path) -> None:
+def write_concat_file(files: List[Path], tmp_path: Path, fps: float) -> None:
+    frame_duration = 1.0 / fps
+
     with open(tmp_path, "w", encoding="utf-8") as f:
         for p in files:
-            # ffmpeg concat format: one file per line
             f.write(f"file {shlex.quote(str(p.resolve()))}\n")
+            f.write(f"duration {frame_duration:.9f}\n")
+
+        # ffmpeg concat demuxer ignores the duration of the final file
+        # unless that file is repeated once more at the end.
+        f.write(f"file {shlex.quote(str(files[-1].resolve()))}\n")
 
 
 def main() -> int:
@@ -76,13 +81,24 @@ def main() -> int:
     parser.add_argument("--width", type=int, default=None)
     parser.add_argument("--height", type=int, default=None)
     parser.add_argument("--colors", type=int, default=256)
-    parser.add_argument("--dither", default="sierra2_4a",
-                        choices=["none", "bayer", "heckbert", "floyd_steinberg", "sierra2", "sierra2_4a"])
+    parser.add_argument(
+        "--dither",
+        default="sierra2_4a",
+        choices=["none", "bayer", "heckbert", "floyd_steinberg", "sierra2", "sierra2_4a"],
+    )
     parser.add_argument("--loop", type=int, default=0)
     parser.add_argument("--recursive", action="store_true")
-    parser.add_argument("--match_patt", type=str, default=None,
-                        help='Glob-style pattern, e.g. "page*.jpeg"')
+    parser.add_argument(
+        "--match_patt",
+        type=str,
+        default=None,
+        help='Glob-style pattern, e.g. "page*.jpeg"',
+    )
     args = parser.parse_args()
+
+    if args.fps <= 0:
+        print("Error: --fps must be > 0", file=sys.stderr)
+        return 1
 
     try:
         files = get_image_files(args.input_folder, recursive=args.recursive, match_patt=args.match_patt)
@@ -90,28 +106,29 @@ def main() -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    # sort
     if args.sort == "name":
         files = sort_by_name(files)
     else:
         files = sort_by_timestamp(files, use=args.sort)
 
-    # clamp colors
     colors = max(2, min(args.colors, 256))
+    vf = build_filter(args.width, args.height, colors, args.dither)
 
-    # build filter
-    vf = build_filter(args.fps, args.width, args.height, colors, args.dither)
+    print(f"Matched {len(files)} files")
+    if files:
+        print("First 5:", [p.name for p in files[:5]])
+        print("Last 5: ", [p.name for p in files[-5:]])
 
-    # create temp concat file
+    concat_path = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tmp:
             concat_path = Path(tmp.name)
-        write_concat_file(files, concat_path)
+
+        write_concat_file(files, concat_path, args.fps)
     except Exception as e:
         print(f"Failed to create concat file: {e}", file=sys.stderr)
         return 1
 
-    # build ffmpeg command
     cmd = [
         "ffmpeg",
         "-y",
@@ -123,7 +140,6 @@ def main() -> int:
         str(args.output_gif),
     ]
 
-    # run ffmpeg
     try:
         print("Running:", " ".join(shlex.quote(c) for c in cmd))
         result = subprocess.run(cmd)
@@ -132,10 +148,11 @@ def main() -> int:
         print(f"Failed to run ffmpeg: {e}", file=sys.stderr)
         return 1
     finally:
-        try:
-            concat_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+        if concat_path is not None:
+            try:
+                concat_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

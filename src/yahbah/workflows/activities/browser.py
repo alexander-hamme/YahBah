@@ -216,8 +216,17 @@ async def browser_fill_and_submit_activity(input: BrowserFillInput) -> BrowserFi
     # Screenshot after fill, before submit
     await registry.screenshot(input.run_id, "before_submit")
 
-    activity.logger.info(f"[fill] Submitting form")
-    confirmation_url, confirmation_text = await filler.submit(email=input.account_email)
+    # Resolve the email used for this application — needed if Greenhouse
+    # triggers an email verification challenge.  Prefer the account alias
+    # created during auth; fall back to the applicant's base profile email.
+    submit_email = input.account_email or await _base_email()
+
+    activity.logger.info(f"[fill] Submitting form (verification email: {submit_email})")
+    try:
+        confirmation_url, confirmation_text = await filler.submit(email=submit_email, run_id=input.run_id)
+    except Exception:
+        await registry.screenshot(input.run_id, "submit_failed")
+        raise
     activity.logger.info(f"[fill] Submission result — URL: {confirmation_url}")
 
     # Screenshot of confirmation

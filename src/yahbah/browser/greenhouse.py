@@ -923,7 +923,7 @@ class GreenhouseFiller:
 
         raise _FieldNotFoundError(label)
 
-    async def submit(self, email: str | None = None) -> tuple[str | None, str | None]:
+    async def submit(self, email: str | None = None, run_id: str | None = None) -> tuple[str | None, str | None]:
         """
         Clicks the primary submit button and waits for a confirmation signal.
         Returns (confirmation_url, confirmation_text).
@@ -948,6 +948,48 @@ class GreenhouseFiller:
         fallback_btn = self._page.locator("input[type='submit'], button[type='submit']").first
 
         btn = submit_btn if await submit_btn.count() > 0 else fallback_btn
+
+        # ── Diagnostic: capture submit request/response ──────────────────────
+        captured_requests: list[dict] = []
+
+        async def _on_request(request):
+            if request.method == "POST" and request.url:
+                entry = {
+                    "url": request.url,
+                    "method": request.method,
+                    "post_data": request.post_data[:2000] if request.post_data else None,
+                }
+                captured_requests.append(entry)
+                logger.debug(f"[submit] Captured POST → {request.url}")
+                if request.post_data:
+                    has_recaptcha = "recaptcha" in request.post_data.lower() or "g-recaptcha" in request.post_data.lower()
+                    logger.debug(f"[submit]   reCAPTCHA token present: {has_recaptcha}")
+                    logger.debug(f"[submit]   payload preview: {request.post_data[:500]}")
+
+        async def _on_response(response):
+            if response.request.method == "POST" and response.status >= 400:
+                try:
+                    body = await response.text()
+                except Exception:
+                    body = "(could not read body)"
+                logger.warning(
+                    f"[submit] POST {response.url} → {response.status}\n"
+                    f"[submit]   response: {body[:500]}"
+                )
+
+        self._page.on("request", _on_request)
+        self._page.on("response", _on_response)
+
+        # Also check reCAPTCHA state before clicking
+        recaptcha_info = await self._page.evaluate("""() => {
+            const info = {};
+            info.grecaptchaExists = typeof grecaptcha !== 'undefined';
+            try { info.sitekey = document.querySelector('.g-recaptcha, [data-sitekey]')?.getAttribute('data-sitekey') || null; } catch(e) {}
+            try { info.tokenField = document.querySelector('[name="g-recaptcha-response"]')?.value?.slice(0, 40) || null; } catch(e) {}
+            try { info.tokenFieldLength = document.querySelector('[name="g-recaptcha-response"]')?.value?.length || 0; } catch(e) {}
+            return info;
+        }""")
+        logger.info(f"[submit] reCAPTCHA state before click: {recaptcha_info}")
 
         pre_submit_url = self._page.url
         await btn.click()
@@ -976,10 +1018,17 @@ class GreenhouseFiller:
         except Exception:
             pass
 
+        logger.info(f"[submit] Captured {len(captured_requests)} POST request(s) after first submit click")
+        for i, req in enumerate(captured_requests):
+            logger.info(f"[submit]   [{i}] {req['url']}")
+
         # ── Email verification challenge ─────────────────────────────────────
         verification_fieldset = self._page.locator("#email-verification")
         if await verification_fieldset.count() > 0 and await verification_fieldset.is_visible():
             await self._handle_email_verification(email)
+            if run_id:
+                from yahbah.browser.manager import BrowserRegistry
+                await BrowserRegistry.instance().screenshot(run_id, "after_verification")
             # After entering the code Greenhouse may auto-submit or we need
             # to click submit again.
             try:
@@ -1009,7 +1058,7 @@ class GreenhouseFiller:
                     pass
 
             try:
-                await self._page.wait_for_load_state("networkidle", timeout=7_000)
+                await self._page.wait_for_load_state("networkidle", timeout=10_000)
             except Exception:
                 pass
 
