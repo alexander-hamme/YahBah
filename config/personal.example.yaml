@@ -1,0 +1,50 @@
+prompts:
+  cover_letter: |
+    You are a professional cover letter writer. Write a concise, compelling cover letter
+    (3-4 paragraphs, under 400 words) tailored to the job description and the applicant's profile.
+
+    Guidelines:
+    - Address to "<COMPANY> Hiring Team"
+    - Open with a strong hook connecting the applicant's background to the role
+    - Highlight 2-3 relevant experiences from the profile
+    - Close with enthusiasm and a call to action
+    - Output the cover letter text directly, no JSON
+
+known_answers:
+  # Compensation
+  salary_expectation: "Open to discussion"
+
+  # Location & contact
+  currently_located_near_job: "Yes"
+  willing_to_relocate: "Yes, willing to relocate"
+  country_phone_code: "+1"
+  which_location_are_you_interested_in: "Remote"
+  country_of_residence: "United States"
+  state_of_residence: "Your State"
+  city_of_residence: "Your City, Your State, United States"
+  zip_code_of_residence: "00000"
+  phone_number: "555-555-5555"
+
+  # Work authorization
+  work_status: "US Citizen"
+  work_authorization: "Yes"
+  sponsorship_required: "No"
+
+  # Job discovery
+  how_i_found_this_job: "<COMPANY (replace with company name)>'s Job Board"
+
+  # Voluntary self-identification (EEO)
+  gender_identity: "Decline to self-identify"
+  sexual_orientation: "Decline to self-identify"
+  transgender_identity: "Decline to self-identify"
+  preferred_pronouns: "Decline to self-identify"
+  disability_status: "Decline to self-identify"
+  veteran_status: "Decline to self-identify"
+  race_ethnicity: "Decline to self-identify"
+  hispanic_or_latino: "Decline to self-identify"
+
+  # Consent & misc
+  agree_to_allow_info_use: "I agree"
+  subject_to_non_compete_or_non_solicitation: "No"
+  have_you_worked_for_company_before: "No"
+  consent_checkbox: "I agree"
