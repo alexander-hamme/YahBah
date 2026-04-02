@@ -8,7 +8,7 @@ We resolve values at the end — one lookup, no substring matching.
 from pydantic import BaseModel, Field
 from sqlalchemy import inspect as sa_inspect
 
-from yahbah.config import settings
+from yahbah.config import settings, load_prompts_config
 from yahbah.db.models import ApplicantProfile
 from yahbah.llm.client import LLMError, OllamaClient
 from yahbah.schemas import FieldMapping, FieldMappingResult, FormSchema, FormField
@@ -55,120 +55,25 @@ class _FallbackAnswer(BaseModel):
     answer: str
 
 
-# ---------------------------------------------------------------------------
-# Known answers for policy-driven or sensitive questions.
-#
-# HOW TO ADD A NEW ONE:
-#   1. Pick a short snake_case key, e.g. "work_authorization"
-#   2. Add it here with its answer value
-#   3. That's it — the LLM is automatically told about the key and will use it
-#
-# The LLM decides whether a field maps to one of these keys based on semantics.
-# We never do substring matching on field labels.
-# ---------------------------------------------------------------------------
-KNOWN_ANSWERS: dict[str, str] = {
-    # Compensation
-    "salary_expectation": (
-        # “Based on market rates for senior ML roles, I’d expect total compensation in the $180K–$240K range, but I’m flexible depending on the role, team, and overall package.”
-        # “I’m targeting total compensation roughly in the $170K–$250K range, depending on scope and overall package.”
-        "Targeting $175K–$240K total compensation (flexible)"
-    ),
-    "currently_located_near_job": "(IF JOB OFFERS LOCATION NEAR NYC, Boston, or Philly: "
-                             "say 'Yes, willing to relocate'. OTHERWISE, SAY 'Not currently'))",
-    "willing_to_relocate": "Yes, willing to relocate",
-    # Work authorization
-    "country_phone_code": "+1",
-    "which_location_are_you_interested_in": "<IF POSSIBLE, Cross Check the LISTED AVAILABLE JOB LOCATIONS and "
-                                            "PICK 1-3 FROM THIS LIST In ORDER OF PRIORITY: Boston, New York City, "
-                                            "Washington D.C., Philadelphia, San Francisco, Los Angeles, Portland "
-                                            "Oregon;J none of these are listed options for the job, either put Remote or "
-                                            "put the default location listed for the job>",
-    "country_of_residence": "United States",
-    "state_of_residence": "Massachusetts",
-    "city_of_residence": "Cambridge <PICK MASSACHUSETTS USA, NOT U.K.>",
-    "zip_code_of_residence": "02139",
-    "work_status": "US Citizen",
-    "phone_number": "646-820-5134",
-    "work_authorization": "Yes",
-    "sponsorship_required": "No",
-    "how_i_found_this_job": "<COMPANY (replace with company name)>'s Job Board",
-    # Voluntary self-identification (EEO) — decline all by default
-    "gender_identity":  "Male",
-    "sexual_orientation": "Decline to self-identify",
-    "transgender_identity": "No",
-    "preferred_pronouns": "He/Him",
-    "disability_status": "No",
-    "veteran_status": "Not a veteran / no military service",
-    "race_ethnicity": "Decline to self-identify",
-    "hispanic_or_latino": "No",
-    "agree_to_allow_info_use": "I agree",
-    "subject_to_non_compete_or_non_solicitation": "No",
-    "have_you_worked_for_company_before": "No",
-    # Consent / terms checkboxes — always agree
-    "consent_checkbox": "true",
-}
+def _known_answers() -> dict[str, str]:
+    """Load known answers from config/prompts.yaml."""
+    return load_prompts_config()["known_answers"]
 
 
 def _build_system_prompt() -> str:
+    known = _known_answers()
     known_keys_block = "\n".join(
         f'  - "{key}": use this for questions about {key.replace("_", " ")}'
-        for key in KNOWN_ANSWERS
+        for key in known
     )
     profile_keys_block = ", ".join(_profile_keys())
-    return f"""\
-You are a form-filling assistant. Given a list of form fields and an applicant profile,
-map each field to the correct profile key or known-answer key.
-
-Available known-answer keys (use these when the field matches semantically):
-{known_keys_block}
-
-Available profile keys:
-  {profile_keys_block}
-
-Rules:
-- Prefer known-answer keys when the field matches semantically (e.g. a salary
-  question → "salary_expectation"). Do NOT invent values for these — just set
-  `mapped_to` to the key and value to "".
-- For open-ended experience/qualification questions — e.g. "describe your experience
-  with X", "explain your background in Y", "briefly explain your interaction with Z"
-  — set `mapped_to` to "custom_question" and value to "". A dedicated step will
-  generate a tailored answer using the full profile and job description. Use this
-  whenever the question asks the applicant to explain, describe, or elaborate on
-  something specific to the role or their background. Do NOT map these to "bio".
-- For all other standard fields, use the matching profile key and fill value from the profile.
-- Set confidence = 1.0 when the mapping is obvious, < 0.7 when unsure.
-- For file upload fields (type=file): use the label, element id, and name together
-  to determine intent. Set `mapped_to` to "resume" if it is for a CV/resume,
-  "cover_letter" if it is for a cover letter, or null if uncertain.
-- If a field truly cannot be mapped, set `mapped_to` to null.
-- Name fields: use first_name / last_name when the form has separate fields.
-- Respond ONLY with valid JSON:
-  {{
-    "field_mappings": [
-      {{
-        "form_label": "<label>",
-        "mapped_to": "<key or null>",
-        "value": "<value or empty string>",
-        "confidence": <0.0–1.0>
-      }}
-    ]
-  }}
-"""
+    template = load_prompts_config()["prompts"]["field_mapper"]
+    return template.format(
+        known_keys_block=known_keys_block,
+        profile_keys_block=profile_keys_block,
+    )
 
 
-_FALLBACK_SYSTEM_PROMPT = """\
-You are filling out a job application on behalf of the applicant below.
-Answer the following form question as the applicant would, in first person.
-
-Guidelines:
-- Be concise and professional (1-3 sentences unless the question asks for more).
-- For experience or skill questions: draw directly from the work experience bullets
-  and skills list. Give concrete, specific examples (purpose of product, technologies used,
-  (outcome if helpful/relevant), rather than generic statements. Convey strong familiarity in an industry/production-level setting.
-- Do NOT mention applying for a job or reference the company by name unless asked.
-
-Reply ONLY with valid JSON: {"answer": "<your answer>"}
-"""
 
 
 class FieldMapper:
@@ -272,13 +177,13 @@ education:
             elif item.mapped_to == "custom_question":
                 value = await self._fallback_answer(item.form_label, profile_text, job_description)
             else:
-                value = KNOWN_ANSWERS.get(item.mapped_to, item.value)
+                value = _known_answers().get(item.mapped_to, item.value)
 
             # Confidence gate for required fields (known-answers always pass)
             if (
                 item.form_label in required_labels
                 and item.confidence < settings.min_field_confidence
-                and item.mapped_to not in KNOWN_ANSWERS
+                and item.mapped_to not in _known_answers()
                 and item.mapped_to not in ("resume", "cover_letter", "custom_question")
             ):
                 raise LLMError(
@@ -303,7 +208,16 @@ education:
                 confidence=0.75,
             ))
 
-        return FieldMappingResult(field_mappings=mappings)
+        # Deduplicate by form_label — keep the first (highest-intent) mapping
+        seen: set[str] = set()
+        deduped: list[FieldMapping] = []
+        for m in mappings:
+            key = m.form_label.strip().lower()
+            if key not in seen:
+                seen.add(key)
+                deduped.append(m)
+
+        return FieldMappingResult(field_mappings=deduped)
 
     async def _fallback_answer(
         self, field_label: str, profile_text: str, job_description: str
@@ -313,8 +227,9 @@ education:
             f"APPLICANT PROFILE:\n{profile_text}\n\n"
             f"JOB DESCRIPTION (excerpt):\n{job_description[:1500]}"
         )
+        fallback_prompt = load_prompts_config()["prompts"]["fallback_answer"]
         result = await self._client.generate_structured(
-            system_prompt=_FALLBACK_SYSTEM_PROMPT,
+            system_prompt=fallback_prompt,
             user_prompt=user_prompt,
             response_model=_FallbackAnswer,
         )

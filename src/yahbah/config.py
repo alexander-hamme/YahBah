@@ -1,3 +1,7 @@
+from functools import lru_cache
+from pathlib import Path
+
+import yaml
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,9 +36,19 @@ class Settings(BaseSettings):
     # Artifacts (local filesystem)
     artifacts_dir: str = "./artifacts"
 
+    # Prompts / known answers config
+    prompts_path: str = "config/prompts.yaml"
+
     # App
     app_env: str = "dev"
     log_level: str = "INFO"
 
 
 settings = Settings()
+
+
+@lru_cache
+def load_prompts_config() -> dict:
+    """Load prompts and known answers from YAML. Cached per process."""
+    with open(Path(settings.prompts_path)) as f:
+        return yaml.safe_load(f)

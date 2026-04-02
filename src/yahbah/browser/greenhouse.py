@@ -308,6 +308,19 @@ class GreenhouseExtractor:
             if field:
                 fields.append(field)
 
+        # Deduplicate fields with identical labels — Greenhouse sometimes
+        # renders accessibility/shadow duplicates that are both visible.
+        seen_labels: set[str] = set()
+        unique_fields: list[FormField] = []
+        for field in fields:
+            key = field.label.strip().lower()
+            if key not in seen_labels:
+                seen_labels.add(key)
+                unique_fields.append(field)
+            else:
+                logger.debug(f"[extract] Skipping duplicate field: {field.label!r}")
+        fields = unique_fields
+
         logger.info(f"Extracted {len(fields)} form fields")
 
         page_url = self._page.url

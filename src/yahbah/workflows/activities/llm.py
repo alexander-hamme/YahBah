@@ -111,6 +111,7 @@ async def generate_cover_letter_activity(input: CoverLetterInput) -> CoverLetter
 
 from pydantic import BaseModel
 
+from yahbah.config import load_prompts_config
 from yahbah.llm.client import OllamaClient
 
 
@@ -121,58 +122,72 @@ class _JobMetadata(BaseModel):
     description_summary: str | None = None
     salary_min: int | None = None
     salary_max: int | None = None
+
+
+class _JobTechExtraction(BaseModel):
     technologies: list[str] | None = None
+    specialties: list[str] | None = None
+
+
+async def _extract_metadata(llm: OllamaClient, job_description: str) -> _JobMetadata:
+    """Extract title, company, location, salary, summary from the full posting."""
+    prompts = load_prompts_config()["prompts"]
+    return await llm.generate_structured(
+        system_prompt=prompts["job_metadata"],
+        user_prompt=f"Job posting text:\n\n{job_description[:3000]}",
+        response_model=_JobMetadata,
+    )
+
+
+async def _extract_tech(llm: OllamaClient, job_description: str) -> _JobTechExtraction:
+    """Extract technologies and specialties from Requirements/Bonus sections."""
+    prompts = load_prompts_config()["prompts"]
+    return await llm.generate_structured(
+        system_prompt=prompts["job_tech_extraction"],
+        user_prompt=f"Job posting text:\n\n{job_description[:3000]}",
+        response_model=_JobTechExtraction,
+    )
 
 
 @activity.defn
 async def extract_job_metadata_activity(input: JobMetadataInput) -> JobMetadataOutput:
     """
-    Uses the LLM to extract structured metadata from the raw job description:
-      - title, company, location (fallbacks — DOM scraping is preferred)
-      - description_summary: ≤40 word summary of the role
-      - salary_min / salary_max: annual salary bounds in USD (integers), or null
+    Two sequential LLM calls:
+      1. Metadata: title, company, location, salary, summary (scans full posting)
+      2. Tech extraction: technologies + specialties (focuses on Requirements/Bonus)
+
+    To run in parallel later, convert to asyncio.gather() or split into
+    separate Temporal activities.
     """
     if not input.job_description or len(input.job_description.strip()) < 50:
         activity.logger.warning("[metadata] Job description too short — skipping LLM extraction")
         return JobMetadataOutput()
 
     llm = OllamaClient()
-    result = await llm.generate_structured(
-        system_prompt=(
-            "You are extracting structured metadata from a job posting. "
-            "Return valid JSON with these fields:\n"
-            '- "title": the job title (e.g. "Senior Software Engineer"). Use null if unclear.\n'
-            '- "company": the company name. Use null if unclear.\n'
-            '- "location": the job location (e.g. "San Francisco, CA" or "Remote"). Use null if unclear.\n'
-            '- "description_summary": a concise summary of the role in at most 40 words. '
-            "Focus on what the role does, not the company.\n"
-            '- "salary_min": the minimum annual salary in USD as an integer (no decimals, '
-            "no currency symbols). Use null if not stated.\n"
-            '- "salary_max": the maximum annual salary in USD as an integer. Use null if not stated.\n'
-            '- "technologies": a JSON array of specific technologies, tools, frameworks, '
-            "and platforms mentioned (e.g. [\"Spark\", \"PyTorch\", \"AWS\"]). Normalize names "
-            "(e.g. \"k8s\" → \"Kubernetes\", \"GCP\" → \"Google Cloud\"). Return empty array if none found.\n"
-            "If salary is given as hourly, multiply by 2080 to annualize. "
-            "If a single number is given, use it for both min and max."
-        ),
-        user_prompt=f"Job posting text:\n\n{input.job_description[:3000]}",
-        response_model=_JobMetadata,
+
+    # Call 1: metadata
+    metadata = await _extract_metadata(llm, input.job_description)
+    activity.logger.info(
+        f"[metadata] Extracted: title={metadata.title!r}, company={metadata.company!r}, "
+        f"location={metadata.location!r}, summary={metadata.description_summary!r}, "
+        f"salary={metadata.salary_min}–{metadata.salary_max}"
     )
 
+    # Call 2: tech extraction
+    tech = await _extract_tech(llm, input.job_description)
     activity.logger.info(
-        f"[metadata] Extracted: title={result.title!r}, company={result.company!r}, "
-        f"location={result.location!r}, summary={result.description_summary!r}, "
-        f"salary={result.salary_min}–{result.salary_max}, "
-        f"technologies={result.technologies}"
+        f"[metadata] Technologies: {tech.technologies}, Specialties: {tech.specialties}"
     )
+
     return JobMetadataOutput(
-        title=result.title,
-        company=result.company,
-        location=result.location,
-        description_summary=result.description_summary,
-        salary_min=result.salary_min,
-        salary_max=result.salary_max,
-        technologies=result.technologies,
+        title=metadata.title,
+        company=metadata.company,
+        location=metadata.location,
+        description_summary=metadata.description_summary,
+        salary_min=metadata.salary_min,
+        salary_max=metadata.salary_max,
+        technologies=tech.technologies,
+        specialties=tech.specialties,
     )
 
 

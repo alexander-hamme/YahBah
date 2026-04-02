@@ -8,13 +8,17 @@ Run with:
     uv run python -m yahbah.worker
 """
 import asyncio
+from datetime import datetime, timezone
 
 from loguru import logger
+from sqlalchemy import select, or_
 from temporalio.client import Client as TemporalClient
 from temporalio.worker import Worker
 
 from yahbah.config import settings
 from yahbah.browser.manager import BrowserRegistry
+from yahbah.db.models import ApplicationRun
+from yahbah.db.session import AsyncSessionLocal
 from yahbah.workflows.application import ApplicationWorkflow
 from yahbah.workflows.activities.browser import (
     browser_open_and_auth_activity,
@@ -37,7 +41,41 @@ from yahbah.workflows.activities.db_ops import (
 )
 
 
+async def fail_incomplete_runs(reason: str) -> None:
+    """Mark any PENDING/RUNNING runs as FAILED."""
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(ApplicationRun).where(
+                or_(
+                    ApplicationRun.status == "PENDING",
+                    ApplicationRun.status == "RUNNING",
+                )
+            )
+        )
+        stale = result.scalars().all()
+        if not stale:
+            return
+
+        now = datetime.now(timezone.utc)
+        for run in stale:
+            logger.warning(
+                f"Marking run {run.id} as FAILED "
+                f"(was {run.status}/{run.current_state})"
+            )
+            run.status = "FAILED"
+            run.error_message = (
+                f"{reason} (was {run.current_state or run.status})"
+            )
+            run.updated_at = now
+            run.completed_at = now
+        await session.commit()
+        logger.info(f"Marked {len(stale)} incomplete run(s) as FAILED")
+
+
 async def main() -> None:
+    # Safety net: clean up runs orphaned by a previous hard kill
+    await fail_incomplete_runs("Worker restarted")
+
     # Start Playwright browser (shared across activities in this worker)
     registry = BrowserRegistry.instance()
     await registry.start()
@@ -81,6 +119,8 @@ async def main() -> None:
         await worker.run()
 
     finally:
+        # Graceful shutdown: mark in-flight runs before exiting
+        await fail_incomplete_runs("Worker shutting down")
         await registry.stop()
 
 if __name__ == "__main__":

@@ -79,6 +79,7 @@ class JobMetadataOutput:
     salary_min: int | None = None
     salary_max: int | None = None
     technologies: list[str] | None = None
+    specialties: list[str] | None = None
 
 
 @dataclass
@@ -92,6 +93,7 @@ class DuplicateCheckInput:
     salary_min: int | None = None
     salary_max: int | None = None
     technologies: list[str] | None = None
+    specialties: list[str] | None = None
 
 
 @dataclass

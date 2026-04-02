@@ -38,6 +38,7 @@ class JobPosting(Base):
     salary_min: Mapped[int | None] = mapped_column()
     salary_max: Mapped[int | None] = mapped_column()
     technologies: Mapped[list[str] | None] = mapped_column(JSONB)
+    specialties: Mapped[list[str] | None] = mapped_column(JSONB)
     ats_type: Mapped[str] = mapped_column(String, default="greenhouse")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
