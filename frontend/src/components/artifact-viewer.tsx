@@ -1,16 +1,237 @@
 "use client";
 
+import { useState, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
+import Lightbox from "yet-another-react-lightbox";
+import Zoom from "yet-another-react-lightbox/plugins/zoom";
+import "yet-another-react-lightbox/styles.css";
+import { Document, Page, pdfjs } from "react-pdf";
+import "react-pdf/dist/Page/AnnotationLayer.css";
+import "react-pdf/dist/Page/TextLayer.css";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { artifactDownloadUrl } from "@/lib/api";
+import { useDevMode } from "@/components/dev-mode-context";
 import type { Artifact } from "@/lib/types";
 
-function artifactLabel(type: string): string {
-  return type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+
+function screenshotLabel(step: string): string {
+  switch (step) {
+    case "before_submit":
+      return "Before Submit";
+    case "before_fill":
+      return "Before Fill";
+    case "submit_failed":
+      return "Submit Failed";
+    case "confirmation":
+      return "After Submit";
+    case "extract_form":
+      return "After Extract";
+    default:
+      return step.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  }
 }
 
-function isImage(type: string): boolean {
-  return type === "screenshot" || type === "confirmation";
+function screenshotByStep(screenshots: Artifact[]): Map<string, Artifact> {
+  const byStep = new Map<string, Artifact>();
+  for (const a of screenshots) {
+    const step = (a.metadata as Record<string, string>)?.step;
+    if (step) byStep.set(step, a);
+  }
+  return byStep;
+}
+
+// Left slot: latest progress screenshot (upgrades as workflow progresses)
+const LEFT_PRIORITY = ["before_submit", "before_fill", "extract_form", "after_auth"];
+
+function pickLeftScreenshot(byStep: Map<string, Artifact>): Artifact | null {
+  for (const step of LEFT_PRIORITY) {
+    const a = byStep.get(step);
+    if (a) return a;
+  }
+  return null;
+}
+
+// Right slot: outcome screenshot (appears when workflow completes or fails)
+function pickRightScreenshot(byStep: Map<string, Artifact>): Artifact | null {
+  return byStep.get("confirmation") ?? byStep.get("submit_failed") ?? null;
+}
+
+function ScreenshotThumbnail({
+  url,
+  label,
+  onExpand,
+}: {
+  url: string;
+  label: string;
+  onExpand: () => void;
+}) {
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between">
+        <Badge variant="secondary" className="text-xs">
+          {label}
+        </Badge>
+        <button
+          onClick={onExpand}
+          className="text-blue-600 hover:underline text-xs"
+        >
+          Fullscreen
+        </button>
+      </div>
+      <TransformWrapper
+        initialScale={1}
+        minScale={1}
+        maxScale={4}
+        wheel={{ step: 0.1 }}
+        doubleClick={{ mode: "reset" }}
+      >
+        <TransformComponent
+          wrapperStyle={{ width: "100%", maxHeight: "400px", overflow: "hidden" }}
+          contentStyle={{ width: "100%" }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={url}
+            alt={label}
+            className="rounded border w-full cursor-grab active:cursor-grabbing"
+          />
+        </TransformComponent>
+      </TransformWrapper>
+      <p className="text-xs text-gray-400 text-center">
+        Scroll to zoom &middot; drag to pan &middot; double-click to reset
+      </p>
+    </div>
+  );
+}
+
+function ScreenshotPlaceholder({
+  label,
+  message = "Waiting...",
+}: {
+  label: string;
+  message?: string;
+}) {
+  return (
+    <div className="space-y-1">
+      <Badge variant="secondary" className="text-xs">
+        {label}
+      </Badge>
+      <div className="rounded border bg-gray-100 dark:bg-gray-800 flex items-center justify-center h-48 text-sm text-gray-400">
+        {message}
+      </div>
+    </div>
+  );
+}
+
+function InlineText({
+  runId,
+  artifact,
+  label,
+}: {
+  runId: string;
+  artifact: Artifact;
+  label: string;
+}) {
+  const url = artifactDownloadUrl(runId, artifact.id);
+  const { data: text } = useQuery<string>({
+    queryKey: ["artifact-text", artifact.id],
+    queryFn: async () => {
+      const res = await fetch(url);
+      if (!res.ok) return "";
+      return res.text();
+    },
+  });
+
+  if (!text) return null;
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between">
+        <Badge variant="outline" className="text-xs">
+          {label}
+        </Badge>
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-blue-600 hover:underline text-xs"
+        >
+          Download
+        </a>
+      </div>
+      <pre className="text-sm whitespace-pre-wrap bg-gray-50 dark:bg-gray-900 rounded border p-3 max-h-64 overflow-y-auto">
+        {text}
+      </pre>
+    </div>
+  );
+}
+
+function CoverLetterViewer({
+  runId,
+  artifact,
+}: {
+  runId: string;
+  artifact: Artifact;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [numPages, setNumPages] = useState<number>(0);
+  const url = artifactDownloadUrl(runId, artifact.id);
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between">
+        <Badge variant="outline" className="text-xs">
+          Cover Letter
+        </Badge>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="text-blue-600 hover:underline text-xs"
+          >
+            {expanded ? "Hide" : "Preview"}
+          </button>
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:underline text-xs"
+          >
+            Download PDF
+          </a>
+        </div>
+      </div>
+      {expanded && (
+        <div className="rounded border bg-white p-4 overflow-y-auto max-h-[600px]">
+          <Document
+            file={url}
+            onLoadSuccess={({ numPages: n }) => setNumPages(n)}
+            loading={
+              <div className="text-sm text-gray-400 text-center py-8">
+                Loading PDF...
+              </div>
+            }
+            error={
+              <div className="text-sm text-red-500 text-center py-8">
+                Failed to load PDF
+              </div>
+            }
+          >
+            {Array.from({ length: numPages }, (_, i) => (
+              <Page
+                key={i}
+                pageNumber={i + 1}
+                width={560}
+                className="mb-4 last:mb-0"
+              />
+            ))}
+          </Document>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function ArtifactViewer({
@@ -20,10 +241,42 @@ export function ArtifactViewer({
   artifacts: Artifact[];
   runId: string;
 }) {
+  const { devMode } = useDevMode();
+  const [lightboxIndex, setLightboxIndex] = useState(-1);
+
   if (artifacts.length === 0) return null;
 
-  const screenshots = artifacts.filter((a) => isImage(a.artifact_type));
-  const others = artifacts.filter((a) => !isImage(a.artifact_type));
+  const screenshots = artifacts.filter((a) => a.artifact_type === "screenshot");
+  const byStep = screenshotByStep(screenshots);
+  const leftShot = pickLeftScreenshot(byStep);
+  const rightShot = pickRightScreenshot(byStep);
+
+  // Build lightbox slides from the two primary slots + all in dev mode
+  const primarySlots = [leftShot, rightShot].filter(Boolean) as Artifact[];
+  const lightboxSources = devMode ? screenshots : primarySlots;
+  const lightboxSlides = lightboxSources.map((a) => ({
+    src: artifactDownloadUrl(runId, a.id),
+  }));
+
+  const openLightbox = useCallback(
+    (index: number) => setLightboxIndex(index),
+    []
+  );
+
+  // Inline content artifacts
+  const confirmation = artifacts.find((a) => a.artifact_type === "confirmation");
+  const coverLetter = artifacts.find((a) => a.artifact_type === "cover_letter");
+
+  // Everything else (form_schema, field_mappings, trace, submitted_values, etc.)
+  const inlineTypes = new Set(["screenshot", "confirmation", "cover_letter"]);
+  const others = artifacts.filter((a) => !inlineTypes.has(a.artifact_type));
+  const downloadable = devMode
+    ? others
+    : others.filter(
+        (a) =>
+          a.artifact_type !== "submitted_values" &&
+          a.artifact_type !== "field_mappings"
+      );
 
   return (
     <Card>
@@ -31,32 +284,77 @@ export function ArtifactViewer({
         <CardTitle className="text-lg">Artifacts</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {screenshots.length > 0 && (
+        {devMode ? (
+          /* Dev mode: show all screenshots in a grid */
+          screenshots.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {screenshots.map((a, i) => {
+                const url = artifactDownloadUrl(runId, a.id);
+                const step =
+                  (a.metadata as Record<string, string>)?.step ?? a.artifact_type;
+                return (
+                  <ScreenshotThumbnail
+                    key={a.id}
+                    url={url}
+                    label={screenshotLabel(step)}
+                    onExpand={() => openLightbox(i)}
+                  />
+                );
+              })}
+            </div>
+          )
+        ) : (
+          /* Normal mode: two fixed slots */
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {screenshots.map((a) => {
-              const url = artifactDownloadUrl(runId, a.id);
-              return (
-                <div key={a.id} className="space-y-1">
-                  <Badge variant="secondary" className="text-xs">
-                    {artifactLabel(a.artifact_type)}
-                  </Badge>
-                  <a href={url} target="_blank" rel="noopener noreferrer">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={url}
-                      alt={a.artifact_type}
-                      className="rounded border w-full hover:opacity-90 transition"
-                    />
-                  </a>
-                </div>
-              );
-            })}
+            {leftShot ? (
+              <ScreenshotThumbnail
+                url={artifactDownloadUrl(runId, leftShot.id)}
+                label={screenshotLabel(
+                  (leftShot.metadata as Record<string, string>)?.step ?? "progress"
+                )}
+                onExpand={() => openLightbox(0)}
+              />
+            ) : (
+              <ScreenshotPlaceholder label="Progress" message="In Progress..." />
+            )}
+            {rightShot ? (
+              <ScreenshotThumbnail
+                url={artifactDownloadUrl(runId, rightShot.id)}
+                label={screenshotLabel(
+                  (rightShot.metadata as Record<string, string>)?.step ?? "outcome"
+                )}
+                onExpand={() => openLightbox(leftShot ? 1 : 0)}
+              />
+            ) : (
+              <ScreenshotPlaceholder label="Outcome" message="Submission Pending" />
+            )}
           </div>
         )}
 
-        {others.length > 0 && (
+        <Lightbox
+          open={lightboxIndex >= 0}
+          close={() => setLightboxIndex(-1)}
+          index={lightboxIndex}
+          slides={lightboxSlides}
+          plugins={[Zoom]}
+          zoom={{ maxZoomPixelRatio: 5, scrollToZoom: true }}
+        />
+
+        {confirmation && (
+          <InlineText
+            runId={runId}
+            artifact={confirmation}
+            label="Confirmation"
+          />
+        )}
+
+        {coverLetter && (
+          <CoverLetterViewer runId={runId} artifact={coverLetter} />
+        )}
+
+        {downloadable.length > 0 && (
           <div className="space-y-2">
-            {others.map((a) => {
+            {downloadable.map((a) => {
               const url = artifactDownloadUrl(runId, a.id);
               return (
                 <div
@@ -65,7 +363,9 @@ export function ArtifactViewer({
                 >
                   <div className="flex items-center gap-2">
                     <Badge variant="outline" className="text-xs">
-                      {artifactLabel(a.artifact_type)}
+                      {a.artifact_type
+                        .replace(/_/g, " ")
+                        .replace(/\b\w/g, (c) => c.toUpperCase())}
                     </Badge>
                     <span className="text-gray-500 text-xs">
                       {new Date(a.created_at).toLocaleTimeString()}

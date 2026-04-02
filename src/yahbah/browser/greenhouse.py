@@ -556,7 +556,7 @@ class GreenhouseFiller:
         field_mappings: list[FieldMapping],
         cover_letter_path: str | None,
         cover_letter_text: str | None = None,
-    ) -> None:
+    ) -> list[dict]:
         # Ensure React/JS has fully hydrated before touching any field.
         # Without this, the first field(s) may be filled before event listeners
         # are attached, causing silent no-ops (especially on a fresh page load).
@@ -567,6 +567,7 @@ class GreenhouseFiller:
         except Exception:
             logger.debug("[fill] 'networkidle' timed out — proceeding anyway")
 
+        submitted_values: list[dict] = []
         seen_labels: set[str] = set()
         for mapping in field_mappings:
             # File uploads use well-known IDs, not labels — exempt from dedup
@@ -596,7 +597,7 @@ class GreenhouseFiller:
                 f"required={form_field.required if form_field else '?'})"
             )
             try:
-                await self._fill_field(mapping, form_field, cover_letter_path, cover_letter_text)
+                submitted = await self._fill_field(mapping, form_field, cover_letter_path, cover_letter_text)
             except _FieldNotFoundError:
                 if form_field and form_field.required:
                     raise RuntimeError(
@@ -610,6 +611,12 @@ class GreenhouseFiller:
                     f"(mapped_to={mapping.mapped_to!r}, value={mapping.value[:60]!r}): {exc}"
                 )
                 raise
+
+            submitted_values.append({
+                "form_label": mapping.form_label,
+                "mapped_to": mapping.mapped_to,
+                "value": submitted if submitted is not None else "(file upload)",
+            })
 
             # Best-effort settle wait — lets React/Vue controlled inputs re-render.
             # Timeout is intentionally swallowed; missing it just risks a stale screenshot.
@@ -644,13 +651,16 @@ class GreenhouseFiller:
         await self._page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         await self._page.wait_for_load_state("networkidle", timeout=5_000)
 
+        return submitted_values
+
     async def _fill_field(
         self,
         mapping: FieldMapping,
         form_field: FormField | None,
         cover_letter_path: str | None,
         cover_letter_text: str | None = None,
-    ) -> None:
+    ) -> str | None:
+        """Fill a single field. Returns the value that was actually submitted, or None for file uploads."""
         value = mapping.value
         mapped_to = mapping.mapped_to
 
@@ -680,7 +690,7 @@ class GreenhouseFiller:
                     await loc.wait_for(state="attached", timeout=self._LOCATE_TIMEOUT)
                     await self._upload_file(loc, value)
                     logger.debug(f"Uploaded resume: {value}")
-                    return
+                    return None
                 except Exception:
                     continue
             raise _FieldNotFoundError("resume file input")
@@ -693,7 +703,7 @@ class GreenhouseFiller:
             if is_file_field:
                 if not cover_letter_path:
                     logger.warning("Cover letter field is a file upload but no PDF available — skipping")
-                    return
+                    return None
                 # Target by well-known ID first, then form_field metadata, then
                 # positional fallback (second file input).
                 candidates = [
@@ -711,7 +721,7 @@ class GreenhouseFiller:
                         await loc.wait_for(state="attached", timeout=self._LOCATE_TIMEOUT)
                         await self._upload_file(loc, cover_letter_path)
                         logger.debug(f"Uploaded cover letter PDF: {cover_letter_path}")
-                        return
+                        return None
                     except Exception:
                         continue
 
@@ -721,18 +731,18 @@ class GreenhouseFiller:
                 # Text/textarea field — paste the cover letter body directly
                 if not cover_letter_text:
                     logger.warning("Cover letter field is text entry but no text available — skipping")
-                    return
+                    return None
                 locator = await self._resolve_locator(mapping.form_label, form_field)
                 await locator.fill(cover_letter_text, timeout=self._LOCATE_TIMEOUT)
                 logger.debug(f"Filled cover letter text into '{mapping.form_label}'")
-                return
+                return "(cover letter text)"
 
         # ── Checkboxes ────────────────────────────────────────────────────────
         if form_field and form_field.field_type == "checkbox":
             locator = await self._resolve_locator(mapping.form_label, form_field)
             await locator.check(timeout=self._LOCATE_TIMEOUT)
             logger.debug(f"Checked checkbox '{mapping.form_label}'")
-            return
+            return "true"
 
         # ── Build locator chain ───────────────────────────────────────────────
         locator = await self._resolve_locator(mapping.form_label, form_field)
@@ -778,6 +788,7 @@ class GreenhouseFiller:
         if is_select:
             required = bool(form_field and form_field.required)
             await self._select_best_option(locator, mapping.form_label, value, required=required)
+            return value
         else:
 
             # TODO FIX- this assumes country phone codes always start with +
@@ -789,6 +800,7 @@ class GreenhouseFiller:
             await locator.fill(value, timeout=self._LOCATE_TIMEOUT)
             printable = value if len(value) <= 40 else f"{value[:40]}–"
             logger.debug(f"Filled '{mapping.form_label}' → '{printable}'")
+            return value
 
     async def _select_best_option(self, locator, field_label: str, value: str, required: bool = False) -> None:
         """

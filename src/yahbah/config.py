@@ -38,6 +38,7 @@ class Settings(BaseSettings):
 
     # Prompts / known answers config
     prompts_path: str = "config/prompts.yaml"
+    personal_path: str = "config/personal.yaml"
 
     # App
     app_env: str = "dev"
@@ -49,6 +50,26 @@ settings = Settings()
 
 @lru_cache
 def load_prompts_config() -> dict:
-    """Load prompts and known answers from YAML. Cached per process."""
+    """Load prompts from prompts.yaml, merge with personal.yaml (cover_letter + known_answers).
+
+    prompts.yaml is safe to publish; personal.yaml contains personal info and is gitignored.
+    """
     with open(Path(settings.prompts_path)) as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+
+    with open(Path(settings.personal_path)) as f:
+        personal = yaml.safe_load(f)
+
+    # Merge personal prompts (e.g. cover_letter) into the prompts dict
+    if "prompts" in personal:
+        config.setdefault("prompts", {}).update(personal["prompts"])
+
+    # Merge known_answers
+    if "known_answers" in personal:
+        config["known_answers"] = personal["known_answers"]
+
+    # Merge profile
+    if "profile" in personal:
+        config["profile"] = personal["profile"]
+
+    return config

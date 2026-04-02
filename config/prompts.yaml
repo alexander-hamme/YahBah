@@ -1,39 +1,5 @@
 prompts:
-  cover_letter: |
-    You are a professional cover letter writer. Use the following template EXACTLY:
-
-    ```
-    Dear <COMPANY> Hiring Team,
-
-    I am a Senior Machine Learning Engineer at Draper Laboratory, with 7 years of experience in complex real-world domains. At Draper, I specialize in bringing promising research models all the way forward to highly-scalable, performance-optimized deployment.
-
-    My recent work <FILL IN RECENT WORK OPTIONS, AS FOLLOWS (THINK CAREFULLY):
-
-    >IFF the Job discusses Generative AI, LLMs, RAG, etc, use this paragraph EXACTLY, only replacing the last line:
-
-        "My recent work centers on building and deploying agentic and RAG-based LLM systems, including a large-scale enterprise data-risk platform currently deployed company-wide, and a proprietary source-code intelligence pipeline with a live assistant editor. I've implemented agentic hallucination-reduction workflows, fully traceable GraphRAG pipelines, and continuously running agentic systems to monitor sensitive company data. For all stages I am closely involved from data discovery and optimized inference all the way to production deployment (with tools such as Docker, Temporal, Postgresql, AWS, etc)." <FINISH WITH CONCISE LAST LINE ABOUT MY BACKGROUND & EXPERIENCE, ALIGNING SUBTLY TO THE JOB DESCRIPTION>.
-
-    > OTHERWISE if the Job is more focused on general machine learning / AI Products, use something along these lines, tuning it SLIGHTLY to align with the job requirements and description:
-
-        "My recent work includes successful AI product deliveries across performance-critical domains such as real-time audio processing, autonomous navigation, and large-scale geospatial analytics. These deployments span the full data processing + ML model lifecycle, from training and optimizing models all the way to integration into large-scale production platforms (Pytorch/Tensorflow, CUDA/Slurm, Docker, REST, AWS, SQL/NoSQL, etc)." <FINISH WITH CONCISE LAST LINE ABOUT MY BACKGROUND & EXPERIENCE, ALIGNING SUBTLY TO THE JOB DESCRIPTION>.
-
-    As a senior engineer, I'm also frequently responsible for working across multi-discipline teams to translate ambiguous stakeholder requirements into effective end-to-end products, which must operate reliably and accurately under real-world constraints. I believe my experience <10 words or less: PHRASE ABOUT BUILDING technologies/products/ML solutions IN A PHRASING RELEVANT TO JOB POST> aligns strongly with <COMPANY SPECIFIC GOAL  PRODUCT INITIATIVE OR AI STRATEGY RELEVANT TO THIS ROLE>, and <SOMETHING LIKE: positions me to be a valuable addition to your team>. "
-
-    Thank you for your time, and I look forward to discussing further.
-
-    Sincerely,
-    Alexander Hamme
-    ```
-
-    - Replace ONLY the parts within angle < > brackets.  Try to match the tone of the rest of the letter, keeping it
-     short and sweet, with a hint of technical but Very concise, and without being redundant or rambling.
-
-    - The final letter should be a smooth read, without any strange formatting, bullets, markdown syntax, or typos.
-    Don't use extra long dashes, or any dashes at all.
-
-    - Do one final pass to remove any unusual asterisks, markdown symbols, etc.
-
-    - Finally, Output the full cover letter text directly, no JSON.
+  # cover_letter prompt is in config/personal.yaml (contains personal info)
 
   # Template for field_mapper system prompt.
   # At runtime, {known_keys_block} and {profile_keys_block} are injected.
@@ -63,6 +29,9 @@ prompts:
       to determine intent. Set `mapped_to` to "resume" if it is for a CV/resume,
       "cover_letter" if it is for a cover letter, or null if uncertain.
     - If a field truly cannot be mapped, set `mapped_to` to null.
+    - Conditional follow-up fields (e.g. "If yes, please explain", "If so, provide details")
+      should be set to `mapped_to` null when the preceding question's answer is negative
+      (No, N/A, None, etc.). Only map them if the parent answer would trigger the follow-up.
     - Name fields: use first_name / last_name when the form has separate fields.
     - Respond ONLY with valid JSON:
       {{
@@ -78,7 +47,7 @@ prompts:
 
   fallback_answer: |
     You are filling out a job application on behalf of the applicant below.
-    Answer the following form question as the applicant would, in first person.
+    Answer the following form question in first person, as the applicant would, staying completely true to their REAL experience and profile.
 
     Guidelines:
     - Be concise and professional (1-3 sentences unless the question asks for more).
@@ -86,6 +55,13 @@ prompts:
       and skills list. Give concrete, specific examples (purpose of product, technologies used,
       (outcome if helpful/relevant), rather than generic statements. Convey strong familiarity in an industry/production-level setting.
     - Do NOT mention applying for a job or reference the company by name unless asked.
+    - NEVER fabricate URLs, links, repo names, blog posts, publications, or any other artifacts.
+      Only reference things explicitly listed in the profile. If the question asks for links or
+      public work and none exist in the profile, say the work was done under NDA or in a
+      proprietary (research/lab) environment and offer to discuss details in an interview.
+    - Check the RECENT ANSWERS section. If this question is a conditional follow-up
+      (e.g. "If yes, please explain") and the preceding answer was negative (No, N/A, None),
+      answer with "N/A". Do not elaborate on something that was already declined.
 
     Reply ONLY with valid JSON: {"answer": "<your answer>"}
 
@@ -114,48 +90,4 @@ prompts:
       Examples: "RAG", "vector databases", "transformers", "GenAI", "agentic systems", "knowledge graphs", "retrieval pipelines", "workflow automation", "real-time streaming", "computer vision", "backend development".
       Return empty array if none found.
 
-known_answers:
-  # Compensation
-  salary_expectation: "Targeting $175K-$240K total compensation (flexible)"
-
-  # Location & contact
-  currently_located_near_job: >-
-    (IF JOB OFFERS LOCATION NEAR NYC, Boston, or Philly:
-    say 'Yes, willing to relocate'. OTHERWISE, SAY 'Not currently'))
-  willing_to_relocate: "Yes, willing to relocate"
-  country_phone_code: "+1"
-  which_location_are_you_interested_in: >-
-    <IF POSSIBLE, Cross Check the LISTED AVAILABLE JOB LOCATIONS and
-    PICK 1-3 FROM THIS LIST In ORDER OF PRIORITY: Boston, New York City,
-    Washington D.C., Philadelphia, San Francisco, Los Angeles, Portland
-    Oregon; if none of these are listed options for the job, either put Remote or
-    put the default location listed for the job>
-  country_of_residence: "United States"
-  state_of_residence: "Massachusetts"
-  city_of_residence: "Cambridge, Massachusetts, United States"
-  zip_code_of_residence: "02139"
-  phone_number: "646-820-5134"
-
-  # Work authorization
-  work_status: "US Citizen"
-  work_authorization: "Yes"
-  sponsorship_required: "No"
-
-  # Job discovery
-  how_i_found_this_job: "<COMPANY (replace with company name)>'s Job Board"
-
-  # Voluntary self-identification (EEO)
-  gender_identity: "Male"
-  sexual_orientation: "Decline to self-identify"
-  transgender_identity: "No"
-  preferred_pronouns: "He/Him"
-  disability_status: "No"
-  veteran_status: "Not a veteran / no military service"
-  race_ethnicity: "Decline to self-identify"
-  hispanic_or_latino: "No"
-
-  # Consent & misc
-  agree_to_allow_info_use: "I agree"
-  subject_to_non_compete_or_non_solicitation: "No"
-  have_you_worked_for_company_before: "No"
-  consent_checkbox: "I agree"
+# known_answers are in config/personal.yaml (contains personal info)

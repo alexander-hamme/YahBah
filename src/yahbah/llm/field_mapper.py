@@ -124,6 +124,7 @@ class FieldMapper:
                 duration=e.get("duration", ""),
             )
             for e in profile.work_experience
+            if e.get("use_in_custom_prompts", True)
         )
 
         profile_text = f"""
@@ -175,7 +176,7 @@ education:
             if item.mapped_to == "resume":
                 value = profile.resume_path
             elif item.mapped_to == "custom_question":
-                value = await self._fallback_answer(item.form_label, profile_text, job_description)
+                value = await self._fallback_answer(item.form_label, profile_text, job_description, mappings)
             else:
                 value = _known_answers().get(item.mapped_to, item.value)
 
@@ -200,7 +201,7 @@ education:
 
         # Fallback: LLM-generate answers for required fields still unmapped
         for field in unmapped_required:
-            answer = await self._fallback_answer(field.label, profile_text, job_description)
+            answer = await self._fallback_answer(field.label, profile_text, job_description, mappings)
             mappings.append(FieldMapping(
                 form_label=field.label,
                 mapped_to="llm_fallback",
@@ -220,10 +221,25 @@ education:
         return FieldMappingResult(field_mappings=deduped)
 
     async def _fallback_answer(
-        self, field_label: str, profile_text: str, job_description: str
+        self,
+        field_label: str,
+        profile_text: str,
+        job_description: str,
+        prior_mappings: list[FieldMapping] | None = None,
     ) -> str:
+        # Include recent prior answers so the LLM has context about what
+        # was already answered (e.g. "No" to a parent yes/no question means
+        # the follow-up "If yes, explain" should be "N/A").
+        prior_context = ""
+        if prior_mappings:
+            recent = prior_mappings[-5:]  # last 5 for context
+            lines = [f"  {m.form_label}: {m.value}" for m in recent if m.value]
+            if lines:
+                prior_context = f"\nRECENT ANSWERS ON THIS FORM:\n" + "\n".join(lines) + "\n"
+
         user_prompt = (
-            f"QUESTION: {field_label}\n\n"
+            f"QUESTION: {field_label}\n"
+            f"{prior_context}\n"
             f"APPLICANT PROFILE:\n{profile_text}\n\n"
             f"JOB DESCRIPTION (excerpt):\n{job_description[:1500]}"
         )

@@ -14,12 +14,12 @@ End-to-end system that takes a job URL, autonomously fills and submits the appli
                               Temporal Workflow
                          (durable, retryable steps)
                                       │
-         ┌────────────────────────────┼────────────────────────────┐
-         │                            │                            │
-   Browser Activities          LLM Activities              DB Activities
-   (Playwright)                (Ollama)                    (Postgres)
-         │                            │                            │
-   ┌─────┴──────┐          ┌─────────┴──────────┐        ┌───────┴────────┐
+         ┌────────────────────────────┼───────────────────────────┐
+         │                            │                           │
+ Browser Activities            LLM Activities               DB Activities
+    (Playwright)                  (Ollama)                   (Postgres)
+         │                            │                           │
+   ┌─────┴───────┐          ┌─────────┴──────────┐        ┌───────┴────────┐
    │ Auth walls  │          │ Field mapping      │        │ Run state      │
    │ Form extract│          │ Cover letter gen   │        │ Artifacts      │
    │ Form fill   │          │ Metadata extraction│        │ Job metadata   │
@@ -120,10 +120,10 @@ CREATE ROLE yahbah_app WITH LOGIN PASSWORD 'yahbah_app';
 GRANT CONNECT ON DATABASE yahbah TO yahbah_app;
 GRANT USAGE ON SCHEMA public TO yahbah_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO yahbah_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE alex IN SCHEMA public
+ALTER DEFAULT PRIVILEGES FOR ROLE admin IN SCHEMA public
     GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO yahbah_app;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO yahbah_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE alex IN SCHEMA public
+ALTER DEFAULT PRIVILEGES FOR ROLE admin IN SCHEMA public
     GRANT USAGE ON SEQUENCES TO yahbah_app;
 ```
 
@@ -138,17 +138,17 @@ uv run python scripts/seed_profile.py
 ### 6. Pull the LLM model
 
 ```bash
-ollama pull llama3:70b
+ollama pull gpt-oss:120b  # or llama4, llama3:70b, gpt-oss:20b, etc
 ```
 
-### 7. Gmail integration (optional — required for email verification)
+### 7. Gmail integration (required for automatic entry of email verification code)
 
 ```bash
 # Place OAuth2 client secret from Google Cloud Console
 mkdir -p ~/.config/yahbah/gmail
 # Save credentials.json to ~/.config/yahbah/gmail/credentials.json
 
-# Complete one-time OAuth flow
+# Complete one-time OAuth flow  --> complete setup in browser
 uv run python -m yahbah.gmail.client
 ```
 

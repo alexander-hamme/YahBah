@@ -48,3 +48,35 @@ known_answers:
   subject_to_non_compete_or_non_solicitation: "No"
   have_you_worked_for_company_before: "No"
   consent_checkbox: "I agree"
+
+profile:
+  full_name: "Jane Doe"
+  email: "jane.doe@example.com"
+  phone: "555-555-5555"
+  location: "San Francisco, CA"
+  linkedin_url: "https://linkedin.com/in/janedoe"
+  github_url: "https://github.com/janedoe"
+  portfolio_url: null
+  resume_path: "/absolute/path/to/your/resume.pdf"
+  years_of_experience: 5
+  skills:
+    - Python
+    - Docker
+    - AWS
+  work_experience:
+    - title: "Software Engineer"
+      company: "Acme Corp"
+      location: "San Francisco, CA"
+      duration: "Jan 2020 - Present"
+      use_in_custom_prompts: true
+      summary: |
+        Built and deployed production ML pipelines.
+        Led migration to microservices architecture.
+  education:
+    - degree: "B.S. Computer Science"
+      institution: "State University"
+      year: "2019"
+      gpa: "3.7"
+  bio: >-
+    Software engineer with 5 years of experience building production systems.
+    Looking for opportunities at high-impact teams.

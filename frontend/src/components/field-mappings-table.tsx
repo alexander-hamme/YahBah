@@ -12,7 +12,13 @@ import {
 } from "@/components/ui/table";
 import { artifactDownloadUrl } from "@/lib/api";
 import { useDevMode } from "@/components/dev-mode-context";
-import type { Artifact, FieldMapping } from "@/lib/types";
+import type { Artifact } from "@/lib/types";
+
+interface SubmittedValue {
+  form_label: string;
+  mapped_to: string;
+  value: string;
+}
 
 export function FieldMappingsTable({
   artifacts,
@@ -23,24 +29,30 @@ export function FieldMappingsTable({
 }) {
   const { devMode } = useDevMode();
 
-  const mappingsArtifact = artifacts.find(
+  // Prefer submitted_values (what was actually typed into the form);
+  // fall back to field_mappings (pre-fill template values) for older runs.
+  const submittedArtifact = artifacts.find(
+    (a) => a.artifact_type === "submitted_values"
+  );
+  const fallbackArtifact = artifacts.find(
     (a) => a.artifact_type === "field_mappings"
   );
+  const artifact = submittedArtifact ?? fallbackArtifact;
 
-  const { data: mappings } = useQuery<FieldMapping[]>({
-    queryKey: ["field-mappings", runId],
+  const { data: rows } = useQuery<SubmittedValue[]>({
+    queryKey: ["submitted-values", runId, artifact?.id],
     queryFn: async () => {
-      if (!mappingsArtifact) return [];
-      const url = artifactDownloadUrl(runId, mappingsArtifact.id);
+      if (!artifact) return [];
+      const url = artifactDownloadUrl(runId, artifact.id);
       const res = await fetch(url);
       if (!res.ok) return [];
       const data = await res.json();
       return Array.isArray(data) ? data : [];
     },
-    enabled: !!mappingsArtifact,
+    enabled: !!artifact,
   });
 
-  if (!mappingsArtifact || !mappings || mappings.length === 0) return null;
+  if (!artifact || !rows || rows.length === 0) return null;
 
   return (
     <Card>
@@ -66,7 +78,7 @@ export function FieldMappingsTable({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {mappings.map((m, i) => (
+              {rows.map((m, i) => (
                 <TableRow key={i}>
                   <TableCell className="text-sm font-medium whitespace-normal break-words align-top">
                     {m.form_label}

@@ -210,17 +210,39 @@ async def browser_fill_and_submit_activity(input: BrowserFillInput) -> BrowserFi
     filler = GreenhouseFiller(fill_page, form_schema=form_schema)
 
     # Screenshot before fill
-    await registry.screenshot(input.run_id, "before_fill")
+    before_fill_path = await registry.screenshot(input.run_id, "before_fill")
+    await persist_artifact_activity(
+        input.run_id,
+        "screenshot",
+        before_fill_path,
+        {"step": "before_fill"},
+    )
 
-    await filler.fill(
+    submitted_values = await filler.fill(
         field_mappings,
         cover_letter_path=input.cover_letter_path,
         cover_letter_text=input.cover_letter_text,
     )
     activity.logger.info(f"[fill] All fields filled — taking pre-submit screenshot")
 
+    # Save what was actually submitted to each field
+    submitted_path = registry.artifact_path(input.run_id, "submitted_values.json")
+    with open(submitted_path, "w") as f:
+        json.dump(submitted_values, f, indent=2)
+    await persist_artifact_activity(
+        input.run_id,
+        "submitted_values",
+        submitted_path,
+    )
+
     # Screenshot after fill, before submit
-    await registry.screenshot(input.run_id, "before_submit")
+    before_submit_path = await registry.screenshot(input.run_id, "before_submit")
+    await persist_artifact_activity(
+        input.run_id,
+        "screenshot",
+        before_submit_path,
+        {"step": "before_submit"},
+    )
 
     # Resolve the email used for this application — needed if Greenhouse
     # triggers an email verification challenge.  Prefer the account alias
@@ -231,7 +253,13 @@ async def browser_fill_and_submit_activity(input: BrowserFillInput) -> BrowserFi
     try:
         confirmation_url, confirmation_text = await filler.submit(email=submit_email, run_id=input.run_id)
     except Exception:
-        await registry.screenshot(input.run_id, "submit_failed")
+        failed_path = await registry.screenshot(input.run_id, "submit_failed")
+        await persist_artifact_activity(
+            input.run_id,
+            "screenshot",
+            failed_path,
+            {"step": "submit_failed"},
+        )
         raise
     activity.logger.info(f"[fill] Submission result — URL: {confirmation_url}")
 

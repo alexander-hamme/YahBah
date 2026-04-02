@@ -70,7 +70,7 @@ class BrowserRegistry:
         trace_path = self.artifact_path(run_id, "trace.zip")
         context = await self._browser.new_context(
             viewport={"width": 1280, "height": 900},
-            device_scale_factor=1.5,  # 2
+            device_scale_factor=0.67,  # 2
         )
         await context.tracing.start(screenshots=True, snapshots=True, sources=True)
 

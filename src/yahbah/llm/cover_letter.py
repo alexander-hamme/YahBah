@@ -22,7 +22,8 @@ class CoverLetterGenerator:
         if profile.work_experience:
             exp_lines = [
                 f"  - {exp.get('title', '')} at {exp.get('company', '')}: {exp.get('summary', '')}"
-                for exp in profile.work_experience[:2]
+                for exp in profile.work_experience
+                if exp.get("use_in_custom_prompts", True)
             ]
             profile_text += "Recent experience:\n" + "\n".join(exp_lines)
 

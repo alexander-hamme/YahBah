@@ -183,6 +183,7 @@ _MEDIA_TYPES: dict[str, str] = {
     "trace": "application/zip",
     "form_schema": "application/json",
     "field_mappings": "application/json",
+    "submitted_values": "application/json",
     "confirmation": "text/plain",
 }
 
