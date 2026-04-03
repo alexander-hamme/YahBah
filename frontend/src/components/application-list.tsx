@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, ArrowUp, ArrowDown } from "lucide-react";
 import { CompanyLogo } from "@/components/company-logo";
 import {
   Table,
@@ -36,7 +36,56 @@ function formatStep(step: string | null): string {
   return step.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-export function ApplicationList({ items }: { items: ApplicationListItem[] }) {
+interface SortableColumnProps {
+  label: string;
+  sortKey: string;
+  currentSort: string;
+  onSort: (sort: string) => void;
+}
+
+function SortableColumn({ label, sortKey, currentSort, onSort }: SortableColumnProps) {
+  const isAsc = currentSort === `${sortKey}_asc`;
+  const isDesc = currentSort === `${sortKey}_desc`;
+  const isActive = isAsc || isDesc;
+
+  function handleClick() {
+    if (isDesc) {
+      onSort(`${sortKey}_asc`);
+    } else {
+      onSort(`${sortKey}_desc`);
+    }
+  }
+
+  return (
+    <TableHead
+      className="font-semibold cursor-pointer select-none hover:text-foreground transition-colors"
+      onClick={handleClick}
+    >
+      <span className="inline-flex items-center gap-1">
+        {label}
+        {isActive ? (
+          isAsc ? (
+            <ArrowUp className="h-3 w-3 text-primary" />
+          ) : (
+            <ArrowDown className="h-3 w-3 text-primary" />
+          )
+        ) : (
+          <ArrowDown className="h-3 w-3 opacity-0 group-hover:opacity-30" />
+        )}
+      </span>
+    </TableHead>
+  );
+}
+
+export function ApplicationList({
+  items,
+  sort,
+  onSort,
+}: {
+  items: ApplicationListItem[];
+  sort: string;
+  onSort: (sort: string) => void;
+}) {
   if (items.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
@@ -59,12 +108,12 @@ export function ApplicationList({ items }: { items: ApplicationListItem[] }) {
       <Table>
         <TableHeader>
           <TableRow className="bg-muted/50">
-            <TableHead className="font-semibold">Company</TableHead>
-            <TableHead className="font-semibold">Role</TableHead>
-            <TableHead className="font-semibold">Status</TableHead>
-            <TableHead className="font-semibold">Current Step</TableHead>
-            <TableHead className="font-semibold">Created</TableHead>
-            <TableHead className="font-semibold">Updated</TableHead>
+            <SortableColumn label="Company" sortKey="company" currentSort={sort} onSort={onSort} />
+            <SortableColumn label="Role" sortKey="title" currentSort={sort} onSort={onSort} />
+            <SortableColumn label="Status" sortKey="status" currentSort={sort} onSort={onSort} />
+            <SortableColumn label="Current Step" sortKey="current_state" currentSort={sort} onSort={onSort} />
+            <SortableColumn label="Created" sortKey="created_at" currentSort={sort} onSort={onSort} />
+            <SortableColumn label="Updated" sortKey="updated_at" currentSort={sort} onSort={onSort} />
             <TableHead className="w-8" />
           </TableRow>
         </TableHeader>

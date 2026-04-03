@@ -85,7 +85,7 @@ export default function ApplicationsPage() {
         <LoadingSplash />
       ) : data ? (
         <div className="space-y-4">
-          <ApplicationList items={data.items} />
+          <ApplicationList items={data.items} sort={sort} onSort={setSort} />
           <Pagination
             page={data.page}
             perPage={data.per_page}

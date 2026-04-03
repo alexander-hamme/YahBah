@@ -83,12 +83,21 @@ async def list_applications(
     total = (await session.execute(count_q)).scalar_one()
 
     # Sort
-    if sort == "created_at_asc":
-        base = base.order_by(ApplicationRun.created_at.asc())
-    elif sort == "updated_at_desc":
-        base = base.order_by(ApplicationRun.updated_at.desc())
-    else:
-        base = base.order_by(ApplicationRun.created_at.desc())
+    sort_map = {
+        "created_at_asc": ApplicationRun.created_at.asc(),
+        "created_at_desc": ApplicationRun.created_at.desc(),
+        "updated_at_desc": ApplicationRun.updated_at.desc(),
+        "updated_at_asc": ApplicationRun.updated_at.asc(),
+        "company_asc": JobPosting.company.asc(),
+        "company_desc": JobPosting.company.desc(),
+        "title_asc": JobPosting.title.asc(),
+        "title_desc": JobPosting.title.desc(),
+        "status_asc": ApplicationRun.status.asc(),
+        "status_desc": ApplicationRun.status.desc(),
+        "current_state_asc": ApplicationRun.current_state.asc(),
+        "current_state_desc": ApplicationRun.current_state.desc(),
+    }
+    base = base.order_by(sort_map.get(sort, ApplicationRun.created_at.desc()))
 
     # Paginate
     base = base.offset((page - 1) * per_page).limit(per_page)
