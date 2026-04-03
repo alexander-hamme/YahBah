@@ -40,6 +40,8 @@ class JobPosting(Base):
     technologies: Mapped[list[str] | None] = mapped_column(JSONB)
     specialties: Mapped[list[str] | None] = mapped_column(JSONB)
     company_website: Mapped[str | None] = mapped_column(String)
+    company_description: Mapped[str | None] = mapped_column(String)
+    posted_date: Mapped[str | None] = mapped_column(String)
     ats_type: Mapped[str] = mapped_column(String, default="greenhouse")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow

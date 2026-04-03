@@ -30,6 +30,8 @@ class JobPostingInfo(BaseModel):
     salary_min: int | None
     salary_max: int | None
     company_website: str | None
+    company_description: str | None
+    posted_date: str | None
     technologies: list[str] | None
     specialties: list[str] | None
     ats_type: str
@@ -111,6 +113,8 @@ async def get_run(
             salary_min=jp.salary_min,
             salary_max=jp.salary_max,
             company_website=jp.company_website,
+            company_description=jp.company_description,
+            posted_date=jp.posted_date,
             technologies=jp.technologies,
             specialties=jp.specialties,
             ats_type=jp.ats_type,

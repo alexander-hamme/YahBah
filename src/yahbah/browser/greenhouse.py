@@ -276,12 +276,23 @@ class GreenhouseExtractor:
         await self.validate_application_page()
         logger.debug(f"[extract] Page validated — title: {await self._page.title()!r}")
 
-        # Extract job description from the main page BEFORE switching to the
-        # iframe — on embedded pages the description is on the Role Overview
-        # tab, not inside the Greenhouse iframe.
+        # Extract job description from the main page first. On some embedded
+        # pages the description is on the Role Overview tab (parent page), but
+        # on others everything lives inside the Greenhouse iframe.
         job_description = await self._extract_job_description()
 
         await self._activate_embedded_form()
+
+        # If the parent page text was too short (e.g. just a tagline), try
+        # extracting from the iframe/activated page instead.
+        if len(job_description) < 500:
+            iframe_description = await self._extract_job_description()
+            if len(iframe_description) > len(job_description):
+                logger.debug(
+                    f"[extract] Parent page text too short ({len(job_description)} chars), "
+                    f"using iframe text ({len(iframe_description)} chars)"
+                )
+                job_description = iframe_description
 
         fields: list[FormField] = []
 
@@ -456,7 +467,7 @@ class GreenhouseExtractor:
             if el:
                 text = await el.inner_text()
                 if len(text) > 100:
-                    return text[:4000]  # cap for LLM prompt
+                    return text
         return await self._page.evaluate("document.body.innerText") or ""
 
     async def extract_job_metadata(self) -> tuple[str | None, str | None, str | None, str]:

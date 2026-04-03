@@ -37,6 +37,8 @@ export interface JobPostingInfo {
   salary_min: number | null;
   salary_max: number | null;
   company_website: string | null;
+  company_description: string | null;
+  posted_date: string | null;
   technologies: string[] | null;
   specialties: string[] | null;
   ats_type: string;

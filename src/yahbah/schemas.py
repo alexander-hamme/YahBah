@@ -79,6 +79,8 @@ class JobMetadataOutput:
     salary_min: int | None = None
     salary_max: int | None = None
     company_website: str | None = None
+    company_description: str | None = None
+    posted_date: str | None = None
     technologies: list[str] | None = None
     specialties: list[str] | None = None
 
@@ -94,6 +96,8 @@ class DuplicateCheckInput:
     salary_min: int | None = None
     salary_max: int | None = None
     company_website: str | None = None
+    company_description: str | None = None
+    posted_date: str | None = None
     technologies: list[str] | None = None
     specialties: list[str] | None = None
 

@@ -7,6 +7,8 @@ import {
   DollarSign,
   ExternalLink,
   Monitor,
+  CalendarDays,
+  Info,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { JobPostingInfo } from "@/lib/types";
@@ -56,6 +58,12 @@ export function JobMetadataCard({
         <h3 className="text-sm font-semibold text-foreground" style={{ fontFamily: "var(--font-heading)" }}>
           Job Details
         </h3>
+        {jobPosting.company_description && (
+          <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
+            <Info className="h-3 w-3 shrink-0" />
+            {jobPosting.company_description}
+          </p>
+        )}
       </div>
       <div className="px-5 pb-5 space-y-4">
         <div className="grid grid-cols-2 gap-x-6 gap-y-3">
@@ -77,9 +85,11 @@ export function JobMetadataCard({
               "-"
             )}
           </Field>
-          <Field icon={<Monitor className="h-3 w-3" />} label="ATS">
-            <span className="capitalize">{jobPosting.ats_type}</span>
-          </Field>
+          {jobPosting.posted_date && (
+            <Field icon={<CalendarDays className="h-3 w-3" />} label="Posted">
+              {jobPosting.posted_date}
+            </Field>
+          )}
           <Field icon={<ExternalLink className="h-3 w-3" />} label="Job URL">
             <a
               href={jobUrl}

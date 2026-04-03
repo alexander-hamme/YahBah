@@ -28,7 +28,7 @@ class CoverLetterGenerator:
             profile_text += "Recent experience:\n" + "\n".join(exp_lines)
 
         user_prompt = (
-            f"JOB DESCRIPTION:\n{job_description[:3000]}\n\n"
+            f"JOB DESCRIPTION:\n{job_description}\n\n"
             f"APPLICANT PROFILE:\n{profile_text}"
         )
 

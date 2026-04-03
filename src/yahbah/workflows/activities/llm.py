@@ -123,6 +123,8 @@ class _JobMetadata(BaseModel):
     salary_min: int | None = None
     salary_max: int | None = None
     company_website: str | None = None
+    company_description: str | None = None
+    posted_date: str | None = None
 
 
 class _JobTechExtraction(BaseModel):
@@ -135,7 +137,7 @@ async def _extract_metadata(llm: OllamaClient, job_description: str) -> _JobMeta
     prompts = load_prompts_config()["prompts"]
     return await llm.generate_structured(
         system_prompt=prompts["job_metadata"],
-        user_prompt=f"Job posting text:\n\n{job_description[:3000]}",
+        user_prompt=f"Job posting text:\n\n{job_description}",
         response_model=_JobMetadata,
     )
 
@@ -145,7 +147,7 @@ async def _extract_tech(llm: OllamaClient, job_description: str) -> _JobTechExtr
     prompts = load_prompts_config()["prompts"]
     return await llm.generate_structured(
         system_prompt=prompts["job_tech_extraction"],
-        user_prompt=f"Job posting text:\n\n{job_description[:3000]}",
+        user_prompt=f"Job posting text:\n\n{job_description}",
         response_model=_JobTechExtraction,
     )
 
@@ -188,6 +190,8 @@ async def extract_job_metadata_activity(input: JobMetadataInput) -> JobMetadataO
         salary_min=metadata.salary_min,
         salary_max=metadata.salary_max,
         company_website=metadata.company_website,
+        company_description=metadata.company_description,
+        posted_date=metadata.posted_date,
         technologies=tech.technologies,
         specialties=tech.specialties,
     )

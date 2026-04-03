@@ -241,7 +241,7 @@ education:
             f"QUESTION: {field_label}\n"
             f"{prior_context}\n"
             f"APPLICANT PROFILE:\n{profile_text}\n\n"
-            f"JOB DESCRIPTION (excerpt):\n{job_description[:1500]}"
+            f"JOB DESCRIPTION:\n{job_description}"
         )
         fallback_prompt = load_prompts_config()["prompts"]["fallback_answer"]
         result = await self._client.generate_structured(

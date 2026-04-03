@@ -129,6 +129,8 @@ class ApplicationWorkflow:
                     salary_min=metadata_output.salary_min,
                     salary_max=metadata_output.salary_max,
                     company_website=metadata_output.company_website,
+                    company_description=metadata_output.company_description,
+                    posted_date=metadata_output.posted_date,
                     technologies=metadata_output.technologies,
                     specialties=metadata_output.specialties,
                 ),

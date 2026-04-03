@@ -7,6 +7,7 @@ import {
   XCircle,
   Clock,
   Copy,
+  PlayCircle,
 } from "lucide-react";
 import { getApplicationStats } from "@/lib/api";
 
@@ -31,7 +32,7 @@ const pipeline: StatusDef[] = [
   {
     label: "Running",
     key: "running",
-    icon: <Loader2 className="h-3.5 w-3.5 animate-spin" />,
+    icon: null, // rendered dynamically in StatusPill based on count
     color: "text-cyan-400",
     bg: "bg-cyan-500/10 hover:bg-cyan-500/20 hover:shadow-[0_0_16px_rgba(56,189,248,0.2)]",
     barColor: "bg-cyan-400",
@@ -74,12 +75,23 @@ function StatusPill({
   count: number;
   onClick: () => void;
 }) {
+  const icon =
+    def.key === "running" ? (
+      count > 0 ? (
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      ) : (
+        <PlayCircle className="h-3.5 w-3.5" />
+      )
+    ) : (
+      def.icon
+    );
+
   return (
     <button
       onClick={onClick}
       className={`group/pill flex items-center gap-2 px-3.5 py-2 rounded-xl border border-white/5 ${def.bg} transition-all duration-200 hover:-translate-y-0.5 cursor-pointer`}
     >
-      <span className={def.color}>{def.icon}</span>
+      <span className={def.color}>{icon}</span>
       <span
         className={`text-lg font-bold tabular-nums ${def.color}`}
         style={{ fontFamily: "var(--font-heading)" }}

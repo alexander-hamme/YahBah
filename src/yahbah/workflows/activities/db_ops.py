@@ -85,7 +85,7 @@ async def mark_run_duplicate_activity(run_id: str, reason: str) -> None:
 
 
 @activity.defn
-async def check_duplicate_activity(input: DuplicateCheckInput) -> DuplicateCheckOutput:
+async def check_duplicate_activity(input_: DuplicateCheckInput) -> DuplicateCheckOutput:
     """
     1. Updates the JobPosting with extracted metadata (canonical_url, title,
        company, location) — filling in blanks without overwriting known values.
@@ -97,46 +97,50 @@ async def check_duplicate_activity(input: DuplicateCheckInput) -> DuplicateCheck
     """
     async with AsyncSessionLocal() as session:
         # Load run to get job_posting_id
-        run = await session.get(ApplicationRun, uuid.UUID(input.run_id))
+        run = await session.get(ApplicationRun, uuid.UUID(input_.run_id))
         if run is None:
-            raise ValueError(f"ApplicationRun {input.run_id} not found")
+            raise ValueError(f"ApplicationRun {input_.run_id} not found")
 
         posting = await session.get(JobPosting, run.job_posting_id)
         if posting is None:
             raise ValueError(f"JobPosting {run.job_posting_id} not found")
 
         # Fill in metadata blanks (don't overwrite values set by a previous run)
-        if input.canonical_url and not posting.canonical_url:
-            posting.canonical_url = input.canonical_url
-        if input.job_title and not posting.title:
-            posting.title = input.job_title
-        if input.job_company and not posting.company:
-            posting.company = input.job_company
-        if input.job_location and not posting.location:
-            posting.location = input.job_location
-        if input.job_description and not posting.description:
-            posting.description = input.job_description
-        if input.salary_min and not posting.salary_min:
-            posting.salary_min = input.salary_min
-        if input.salary_max and not posting.salary_max:
-            posting.salary_max = input.salary_max
-        if input.technologies and not posting.technologies:
-            posting.technologies = input.technologies
-        if input.specialties and not posting.specialties:
-            posting.specialties = input.specialties
-        if input.company_website and not posting.company_website:
-            posting.company_website = input.company_website
+        if input_.canonical_url and not posting.canonical_url:
+            posting.canonical_url = input_.canonical_url
+        if input_.job_title and not posting.title:
+            posting.title = input_.job_title
+        if input_.job_company and not posting.company:
+            posting.company = input_.job_company
+        if input_.job_location and not posting.location:
+            posting.location = input_.job_location
+        if input_.job_description and not posting.description:
+            posting.description = input_.job_description
+        if input_.salary_min and not posting.salary_min:
+            posting.salary_min = input_.salary_min
+        if input_.salary_max and not posting.salary_max:
+            posting.salary_max = input_.salary_max
+        if input_.technologies and not posting.technologies:
+            posting.technologies = input_.technologies
+        if input_.specialties and not posting.specialties:
+            posting.specialties = input_.specialties
+        if input_.company_website and not posting.company_website:
+            posting.company_website = input_.company_website
+        if input_.company_description and not posting.company_description:
+            posting.company_description = input_.company_description
+        if input_.posted_date and not posting.posted_date:
+            posting.posted_date = input_.posted_date
         await session.commit()
 
         window_start = datetime.now(timezone.utc) - timedelta(days=settings.duplicate_window_days)
 
         # ── Check A: canonical URL match ──────────────────────────────────────
-        if input.canonical_url:
+        if input_.canonical_url:
             result = await session.execute(
                 select(ApplicationRun)
                 .join(JobPosting, ApplicationRun.job_posting_id == JobPosting.id)
                 .where(
-                    JobPosting.canonical_url == input.canonical_url,
+                    JobPosting.canonical_url == input_.canonical_url,
                     ApplicationRun.id != run.id,
                     ApplicationRun.status == "COMPLETED",
                 )
@@ -151,14 +155,14 @@ async def check_duplicate_activity(input: DuplicateCheckInput) -> DuplicateCheck
                 )
 
         # ── Check B: title + company + location within window ─────────────────
-        if input.job_title and input.job_company and input.job_location:
+        if input_.job_title and input_.job_company and input_.job_location:
             result = await session.execute(
                 select(ApplicationRun)
                 .join(JobPosting, ApplicationRun.job_posting_id == JobPosting.id)
                 .where(
-                    JobPosting.title == input.job_title,
-                    JobPosting.company == input.job_company,
-                    JobPosting.location == input.job_location,
+                    JobPosting.title == input_.job_title,
+                    JobPosting.company == input_.job_company,
+                    JobPosting.location == input_.job_location,
                     ApplicationRun.id != run.id,
                     ApplicationRun.status == "COMPLETED",
                     ApplicationRun.completed_at >= window_start,
@@ -170,8 +174,8 @@ async def check_duplicate_activity(input: DuplicateCheckInput) -> DuplicateCheck
                 return DuplicateCheckOutput(
                     is_duplicate=True,
                     reason=(
-                        f"Already applied to '{input.job_title}' at '{input.job_company}' "
-                        f"in '{input.job_location}' within the last "
+                        f"Already applied to '{input_.job_title}' at '{input_.job_company}' "
+                        f"in '{input_.job_location}' within the last "
                         f"{settings.duplicate_window_days} days (run {existing.id})"
                     ),
                     existing_run_id=str(existing.id),
