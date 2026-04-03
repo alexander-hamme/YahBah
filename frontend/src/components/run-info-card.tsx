@@ -11,7 +11,6 @@ import {
   Clipboard,
   Check,
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge } from "@/components/status-badge";
 import type { RunDetail } from "@/lib/types";
 
@@ -55,11 +54,11 @@ function CopyButton({ text }: { text: string }) {
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       }}
-      className="text-muted-foreground hover:text-foreground transition-colors"
+      className="text-muted-foreground hover:text-cyan-400 transition-colors"
       title="Copy to clipboard"
     >
       {copied ? (
-        <Check className="h-3 w-3 text-emerald-500" />
+        <Check className="h-3 w-3 text-emerald-400" />
       ) : (
         <Clipboard className="h-3 w-3" />
       )}
@@ -89,11 +88,14 @@ function Field({
 
 export function RunInfoCard({ run }: { run: RunDetail }) {
   return (
-    <Card className="shadow-sm">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base font-semibold">Run Info</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <div className="glass-panel rounded-xl overflow-hidden">
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+      <div className="px-5 pt-4 pb-2">
+        <h3 className="text-sm font-semibold text-foreground" style={{ fontFamily: "var(--font-heading)" }}>
+          Run Info
+        </h3>
+      </div>
+      <div className="px-5 pb-5 space-y-4">
         <div className="grid grid-cols-2 gap-x-6 gap-y-3">
           <Field icon={<Activity className="h-3 w-3" />} label="Status">
             <StatusBadge status={run.status} />
@@ -131,19 +133,17 @@ export function RunInfoCard({ run }: { run: RunDetail }) {
         </div>
 
         {run.error_message && (
-          <div className="flex gap-3 p-3 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800">
-            <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+          <div className="flex gap-3 p-3 rounded-lg bg-red-500/10 border border-red-500/20 shadow-[0_0_12px_rgba(239,68,68,0.08)]">
+            <AlertTriangle className="h-4 w-4 text-red-400 shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-medium text-red-800 dark:text-red-200">
-                Error
-              </p>
-              <p className="text-sm text-red-700 dark:text-red-300 mt-0.5 whitespace-pre-wrap">
+              <p className="text-sm font-medium text-red-400">Error</p>
+              <p className="text-sm text-red-300/80 mt-0.5 whitespace-pre-wrap">
                 {run.error_message}
               </p>
             </div>
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

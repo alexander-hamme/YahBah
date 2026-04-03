@@ -33,7 +33,7 @@ export function CompanyLogo({
   if (!domain || failed) {
     return (
       <div
-        className={`flex items-center justify-center rounded-lg bg-muted text-muted-foreground shrink-0 ${className}`}
+        className={`flex items-center justify-center rounded-lg bg-white/5 text-muted-foreground shrink-0 ${className}`}
         style={{ width: size, height: size }}
       >
         <Building2 className="h-1/2 w-1/2" />

@@ -4,9 +4,9 @@ import { use } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Bug } from "lucide-react";
-import { CompanyLogo } from "@/components/company-logo";
 import { getRunDetail, getRunSteps, getRunArtifacts } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { CompanyLogo } from "@/components/company-logo";
 import { useDevMode } from "@/components/dev-mode-context";
 import { JobMetadataCard } from "@/components/job-metadata-card";
 import { RunInfoCard } from "@/components/run-info-card";
@@ -16,13 +16,13 @@ import { FieldMappingsTable } from "@/components/field-mappings-table";
 
 function DetailSkeleton() {
   return (
-    <div className="space-y-6 animate-pulse">
-      <div className="h-8 bg-muted rounded-lg w-64" />
+    <div className="space-y-6">
+      <div className="h-8 bg-white/5 rounded-lg w-64 animate-pulse" />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="h-64 bg-muted rounded-xl" />
-        <div className="h-64 bg-muted rounded-xl" />
+        <div className="h-64 bg-white/5 rounded-xl animate-pulse" />
+        <div className="h-64 bg-white/5 rounded-xl animate-pulse" />
       </div>
-      <div className="h-48 bg-muted rounded-xl" />
+      <div className="h-48 bg-white/5 rounded-xl animate-pulse" />
     </div>
   );
 }
@@ -69,7 +69,7 @@ export default function ApplicationDetailPage({
             <Button
               variant="ghost"
               size="icon"
-              className="h-8 w-8 text-muted-foreground hover:text-foreground"
+              className="h-8 w-8 text-muted-foreground hover:text-cyan-400 hover:bg-white/5"
             >
               <ArrowLeft className="h-4 w-4" />
             </Button>
@@ -90,7 +90,11 @@ export default function ApplicationDetailPage({
           variant={devMode ? "default" : "ghost"}
           size="sm"
           onClick={toggleDevMode}
-          className="gap-1.5 text-xs"
+          className={`gap-1.5 text-xs ${
+            devMode
+              ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 hover:bg-cyan-500/30"
+              : "text-muted-foreground hover:text-foreground hover:bg-white/5"
+          }`}
         >
           <Bug className="h-3.5 w-3.5" />
           Dev

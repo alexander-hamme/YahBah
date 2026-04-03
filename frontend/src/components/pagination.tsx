@@ -19,7 +19,6 @@ export function Pagination({
   const totalPages = Math.max(1, Math.ceil(total / perPage));
   if (totalPages <= 1) return null;
 
-  // Show up to 5 page buttons centered on current page
   const range: number[] = [];
   const start = Math.max(1, page - 2);
   const end = Math.min(totalPages, start + 4);
@@ -35,7 +34,7 @@ export function Pagination({
         <Button
           variant="outline"
           size="icon"
-          className="h-8 w-8"
+          className="h-8 w-8 bg-white/5 border-white/10 hover:bg-white/10 hover:border-white/20"
           onClick={() => onPageChange(page - 1)}
           disabled={page <= 1}
         >
@@ -46,7 +45,11 @@ export function Pagination({
             key={p}
             variant={p === page ? "default" : "outline"}
             size="icon"
-            className="h-8 w-8 text-xs"
+            className={`h-8 w-8 text-xs ${
+              p === page
+                ? "bg-cyan-500/20 text-cyan-400 border-cyan-500/30 shadow-[0_0_8px_rgba(56,189,248,0.15)]"
+                : "bg-white/5 border-white/10 hover:bg-white/10 hover:border-white/20"
+            }`}
             onClick={() => onPageChange(p)}
           >
             {p}
@@ -55,7 +58,7 @@ export function Pagination({
         <Button
           variant="outline"
           size="icon"
-          className="h-8 w-8"
+          className="h-8 w-8 bg-white/5 border-white/10 hover:bg-white/10 hover:border-white/20"
           onClick={() => onPageChange(page + 1)}
           disabled={page >= totalPages}
         >

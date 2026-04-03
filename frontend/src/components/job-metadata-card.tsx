@@ -9,7 +9,6 @@ import {
   Monitor,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { JobPostingInfo } from "@/lib/types";
 
 function formatSalary(min: number | null, max: number | null): string | null {
@@ -51,33 +50,27 @@ export function JobMetadataCard({
   const salary = formatSalary(jobPosting.salary_min, jobPosting.salary_max);
 
   return (
-    <Card className="shadow-sm">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base font-semibold">Job Details</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <div className="glass-panel rounded-xl overflow-hidden">
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+      <div className="px-5 pt-4 pb-2">
+        <h3 className="text-sm font-semibold text-foreground" style={{ fontFamily: "var(--font-heading)" }}>
+          Job Details
+        </h3>
+      </div>
+      <div className="px-5 pb-5 space-y-4">
         <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-          <Field
-            icon={<Building2 className="h-3 w-3" />}
-            label="Company"
-          >
+          <Field icon={<Building2 className="h-3 w-3" />} label="Company">
             {jobPosting.company ?? "Unknown"}
           </Field>
-          <Field
-            icon={<Briefcase className="h-3 w-3" />}
-            label="Title"
-          >
+          <Field icon={<Briefcase className="h-3 w-3" />} label="Title">
             {jobPosting.title ?? "Untitled"}
           </Field>
           <Field icon={<MapPin className="h-3 w-3" />} label="Location">
             {jobPosting.location ?? "-"}
           </Field>
-          <Field
-            icon={<DollarSign className="h-3 w-3" />}
-            label="Salary"
-          >
+          <Field icon={<DollarSign className="h-3 w-3" />} label="Salary">
             {salary ? (
-              <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
+              <span className="text-emerald-400 font-semibold text-glow-green">
                 {salary}
               </span>
             ) : (
@@ -87,15 +80,12 @@ export function JobMetadataCard({
           <Field icon={<Monitor className="h-3 w-3" />} label="ATS">
             <span className="capitalize">{jobPosting.ats_type}</span>
           </Field>
-          <Field
-            icon={<ExternalLink className="h-3 w-3" />}
-            label="Job URL"
-          >
+          <Field icon={<ExternalLink className="h-3 w-3" />} label="Job URL">
             <a
               href={jobUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-primary hover:underline text-xs break-all inline-flex items-center gap-1"
+              className="text-cyan-400 hover:text-cyan-300 hover:underline text-xs break-all inline-flex items-center gap-1 transition-colors"
             >
               View posting
               <ExternalLink className="h-3 w-3 shrink-0" />
@@ -112,7 +102,7 @@ export function JobMetadataCard({
               {jobPosting.technologies.map((tech) => (
                 <Badge
                   key={tech}
-                  className="bg-primary/10 text-primary border-primary/20 hover:bg-primary/20 transition-colors text-xs"
+                  className="bg-cyan-500/10 text-cyan-400 border-cyan-500/20 hover:bg-cyan-500/20 transition-colors text-xs"
                 >
                   {tech}
                 </Badge>
@@ -131,7 +121,7 @@ export function JobMetadataCard({
                 <Badge
                   key={s}
                   variant="outline"
-                  className="text-xs border-violet-300 text-violet-700 dark:border-violet-700 dark:text-violet-300"
+                  className="text-xs border-violet-500/30 text-violet-400 bg-violet-500/10"
                 >
                   {s}
                 </Badge>
@@ -139,7 +129,7 @@ export function JobMetadataCard({
             </div>
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

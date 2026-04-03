@@ -86,7 +86,7 @@ function ScreenshotThumbnail({
         </Badge>
         <button
           onClick={onExpand}
-          className="text-blue-600 hover:underline text-xs"
+          className="text-cyan-400 hover:text-cyan-300 hover:underline text-xs transition-colors"
         >
           Fullscreen
         </button>
@@ -106,11 +106,11 @@ function ScreenshotThumbnail({
           <img
             src={url}
             alt={label}
-            className="rounded border w-full cursor-grab active:cursor-grabbing"
+            className="rounded border border-white/10 w-full cursor-grab active:cursor-grabbing"
           />
         </TransformComponent>
       </TransformWrapper>
-      <p className="text-xs text-gray-400 text-center">
+      <p className="text-xs text-muted-foreground text-center">
         Scroll to zoom &middot; drag to pan &middot; double-click to reset
       </p>
     </div>
@@ -129,7 +129,7 @@ function ScreenshotPlaceholder({
       <Badge variant="secondary" className="text-xs">
         {label}
       </Badge>
-      <div className="rounded border bg-gray-100 dark:bg-gray-800 flex items-center justify-center h-48 text-sm text-gray-400">
+      <div className="rounded-lg border border-white/5 bg-white/[0.02] flex items-center justify-center h-48 text-sm text-muted-foreground">
         {message}
       </div>
     </div>
@@ -167,12 +167,12 @@ function InlineText({
           href={url}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-blue-600 hover:underline text-xs"
+          className="text-cyan-400 hover:text-cyan-300 hover:underline text-xs transition-colors"
         >
           Download
         </a>
       </div>
-      <pre className="text-sm whitespace-pre-wrap bg-gray-50 dark:bg-gray-900 rounded border p-3 max-h-64 overflow-y-auto">
+      <pre className="text-sm whitespace-pre-wrap bg-white/[0.02] border border-white/5 rounded-lg p-3 max-h-64 overflow-y-auto text-foreground/80">
         {text}
       </pre>
     </div>
@@ -199,7 +199,7 @@ function CoverLetterViewer({
         <div className="flex items-center gap-2">
           <button
             onClick={() => setExpanded(!expanded)}
-            className="text-blue-600 hover:underline text-xs"
+            className="text-cyan-400 hover:text-cyan-300 hover:underline text-xs transition-colors"
           >
             {expanded ? "Hide" : "Preview"}
           </button>
@@ -207,14 +207,14 @@ function CoverLetterViewer({
             href={url}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-blue-600 hover:underline text-xs"
+            className="text-cyan-400 hover:text-cyan-300 hover:underline text-xs transition-colors"
           >
             Download PDF
           </a>
         </div>
       </div>
       {expanded && (
-        <div className="rounded border bg-white p-4 overflow-y-auto max-h-[600px]">
+        <div className="rounded-lg border border-white/5 bg-white/[0.02] p-4 overflow-y-auto max-h-[600px]">
           <PdfDocument
             file={url}
             onLoadSuccess={({ numPages: n }: { numPages: number }) => setNumPages(n)}
@@ -289,11 +289,14 @@ export function ArtifactViewer({
       );
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-lg">Artifacts</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <div className="glass-panel rounded-xl overflow-hidden">
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+      <div className="px-5 pt-4 pb-2">
+        <h3 className="text-sm font-semibold text-foreground" style={{ fontFamily: "var(--font-heading)" }}>
+          Artifacts
+        </h3>
+      </div>
+      <div className="px-5 pb-5 space-y-4">
         {devMode ? (
           /* Dev mode: show all screenshots in a grid */
           screenshots.length > 0 && (
@@ -369,7 +372,7 @@ export function ArtifactViewer({
               return (
                 <div
                   key={a.id}
-                  className="flex items-center justify-between p-2 rounded border text-sm"
+                  className="flex items-center justify-between p-2 rounded-lg border border-white/5 bg-white/[0.02] text-sm"
                 >
                   <div className="flex items-center gap-2">
                     <Badge variant="outline" className="text-xs">
@@ -385,7 +388,7 @@ export function ArtifactViewer({
                     href={url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-blue-600 hover:underline text-xs"
+                    className="text-cyan-400 hover:text-cyan-300 hover:underline text-xs transition-colors"
                   >
                     Download
                   </a>
@@ -394,7 +397,7 @@ export function ArtifactViewer({
             })}
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

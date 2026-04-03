@@ -58,20 +58,18 @@ function SortableColumn({ label, sortKey, currentSort, onSort }: SortableColumnP
 
   return (
     <TableHead
-      className="font-semibold cursor-pointer select-none hover:text-foreground transition-colors"
+      className="font-semibold cursor-pointer select-none text-muted-foreground hover:text-foreground transition-colors"
       onClick={handleClick}
     >
       <span className="inline-flex items-center gap-1">
         {label}
         {isActive ? (
           isAsc ? (
-            <ArrowUp className="h-3 w-3 text-primary" />
+            <ArrowUp className="h-3 w-3 text-cyan-400" />
           ) : (
-            <ArrowDown className="h-3 w-3 text-primary" />
+            <ArrowDown className="h-3 w-3 text-cyan-400" />
           )
-        ) : (
-          <ArrowDown className="h-3 w-3 opacity-0 group-hover:opacity-30" />
-        )}
+        ) : null}
       </span>
     </TableHead>
   );
@@ -88,7 +86,7 @@ export function ApplicationList({
 }) {
   if (items.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+      <div className="flex flex-col items-center justify-center py-16">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/YahBah_Logo.png"
@@ -98,16 +96,16 @@ export function ApplicationList({
           className="animate-float mb-4 drop-shadow-lg"
         />
         <p className="text-base font-semibold text-foreground">No applications yet</p>
-        <p className="text-sm mt-1">Paste a job URL above to get started</p>
+        <p className="text-sm text-muted-foreground mt-1">Paste a job URL above to get started</p>
       </div>
     );
   }
 
   return (
-    <div className="rounded-xl border bg-card shadow-sm overflow-hidden">
+    <div className="glass-panel rounded-xl overflow-hidden">
       <Table>
         <TableHeader>
-          <TableRow className="bg-muted/50">
+          <TableRow className="border-b border-white/5 bg-white/[0.02]">
             <SortableColumn label="Company" sortKey="company" currentSort={sort} onSort={onSort} />
             <SortableColumn label="Role" sortKey="title" currentSort={sort} onSort={onSort} />
             <SortableColumn label="Status" sortKey="status" currentSort={sort} onSort={onSort} />
@@ -121,12 +119,12 @@ export function ApplicationList({
           {items.map((item) => (
             <TableRow
               key={item.run_id}
-              className="group cursor-pointer hover:bg-accent/50 transition-colors border-l-2 border-l-transparent hover:border-l-primary"
+              className="group cursor-pointer border-b border-white/[0.03] hover:bg-white/[0.04] transition-all border-l-2 border-l-transparent hover:border-l-cyan-400 hover:shadow-[inset_0_0_20px_rgba(56,189,248,0.03)]"
             >
               <TableCell>
                 <Link
                   href={`/applications/${item.run_id}`}
-                  className="flex items-center gap-2.5 font-semibold text-foreground group-hover:text-primary transition-colors"
+                  className="flex items-center gap-2.5 font-semibold text-foreground group-hover:text-cyan-400 transition-colors"
                 >
                   <CompanyLogo
                     companyWebsite={item.company_website}
@@ -165,7 +163,7 @@ export function ApplicationList({
                 {timeAgo(item.updated_at)}
               </TableCell>
               <TableCell>
-                <ChevronRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-primary transition-colors" />
+                <ChevronRight className="h-4 w-4 text-white/10 group-hover:text-cyan-400 transition-colors" />
               </TableCell>
             </TableRow>
           ))}

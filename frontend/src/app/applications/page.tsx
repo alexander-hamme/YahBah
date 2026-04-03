@@ -58,11 +58,25 @@ export default function ApplicationsPage() {
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-8 space-y-6 animate-fade-in">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Applications</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Track and manage your job applications
+      <div className="relative">
+        <div className="absolute -top-6 -left-10 w-40 h-40 bg-white/[0.03] rounded-full blur-3xl pointer-events-none" />
+        <h1
+          className="text-7xl text-white uppercase"
+          style={{
+            fontFamily: "var(--font-bungee)",
+            textShadow: "0 0 40px rgba(255,255,255,0.15), 0 0 80px rgba(255,255,255,0.05)",
+            letterSpacing: "0.04em",
+          }}
+        >
+          Dashboard
+        </h1>
+        <div className="flex items-center gap-2 mt-2">
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500" />
+          </span>
+          <p className="text-sm text-muted-foreground">
+            Tracking your job applications in real-time
           </p>
         </div>
       </div>

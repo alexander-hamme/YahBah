@@ -11,34 +11,48 @@ import {
   ChevronDown,
   ChevronRight,
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Step } from "@/lib/types";
 
 function StepIcon({ status }: { status: string }) {
   switch (status) {
     case "COMPLETED":
-      return <CheckCircle2 className="h-5 w-5 text-emerald-500" />;
+      return (
+        <div className="relative">
+          <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+          <div className="absolute inset-0 rounded-full bg-emerald-400/20 blur-sm" />
+        </div>
+      );
     case "RUNNING":
-      return <Loader2 className="h-5 w-5 text-blue-500 animate-spin" />;
+      return (
+        <div className="relative">
+          <Loader2 className="h-5 w-5 text-cyan-400 animate-spin" />
+          <div className="absolute inset-0 rounded-full bg-cyan-400/20 blur-sm animate-pulse" />
+        </div>
+      );
     case "FAILED":
-      return <XCircle className="h-5 w-5 text-red-500" />;
+      return (
+        <div className="relative">
+          <XCircle className="h-5 w-5 text-red-400" />
+          <div className="absolute inset-0 rounded-full bg-red-400/20 blur-sm" />
+        </div>
+      );
     case "SKIPPED":
-      return <MinusCircle className="h-5 w-5 text-slate-400" />;
+      return <MinusCircle className="h-5 w-5 text-slate-500" />;
     default:
-      return <Circle className="h-5 w-5 text-slate-300" />;
+      return <Circle className="h-5 w-5 text-white/15" />;
   }
 }
 
 function lineColor(status: string): string {
   switch (status) {
     case "COMPLETED":
-      return "bg-emerald-300 dark:bg-emerald-700";
+      return "bg-emerald-500/40";
     case "RUNNING":
-      return "bg-blue-300 dark:bg-blue-700";
+      return "bg-cyan-500/40";
     case "FAILED":
-      return "bg-red-300 dark:bg-red-700";
+      return "bg-red-500/40";
     default:
-      return "bg-border";
+      return "bg-white/5";
   }
 }
 
@@ -91,7 +105,7 @@ function StepItem({
           {hasLogs && (
             <button
               onClick={() => setExpanded(!expanded)}
-              className="text-muted-foreground hover:text-foreground transition-colors"
+              className="text-muted-foreground hover:text-cyan-400 transition-colors"
             >
               {expanded ? (
                 <ChevronDown className="h-3.5 w-3.5" />
@@ -102,7 +116,7 @@ function StepItem({
           )}
         </div>
         {expanded && step.logs && (
-          <pre className="mt-2 text-xs text-muted-foreground bg-muted rounded-md p-3 overflow-x-auto whitespace-pre-wrap font-mono">
+          <pre className="mt-2 text-xs text-muted-foreground bg-white/[0.02] border border-white/5 rounded-md p-3 overflow-x-auto whitespace-pre-wrap font-mono">
             {step.logs}
           </pre>
         )}
@@ -115,11 +129,14 @@ export function StepTimeline({ steps }: { steps: Step[] }) {
   if (steps.length === 0) return null;
 
   return (
-    <Card className="shadow-sm">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base font-semibold">Step Timeline</CardTitle>
-      </CardHeader>
-      <CardContent>
+    <div className="glass-panel rounded-xl overflow-hidden">
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+      <div className="px-5 pt-4 pb-2">
+        <h3 className="text-sm font-semibold text-foreground" style={{ fontFamily: "var(--font-heading)" }}>
+          Step Timeline
+        </h3>
+      </div>
+      <div className="px-5 pb-5">
         {steps.map((step, i) => (
           <StepItem
             key={step.id}
@@ -127,7 +144,7 @@ export function StepTimeline({ steps }: { steps: Step[] }) {
             isLast={i === steps.length - 1}
           />
         ))}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

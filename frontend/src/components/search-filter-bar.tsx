@@ -54,23 +54,23 @@ export function SearchFilterBar({
   return (
     <div className="flex flex-col sm:flex-row gap-2">
       <div className="relative flex-1 group/search">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground transition-colors group-focus-within/search:text-primary" />
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground transition-colors group-focus-within/search:text-cyan-400" />
         <Input
           type="search"
           placeholder="Search by company, title, or URL..."
           value={search}
           onChange={(e) => onSearchChange(e.target.value)}
-          className="pl-9 transition-shadow focus:shadow-[0_0_0_3px_oklch(0.55_0.22_270_/_0.15)] focus:border-primary"
+          className="pl-9 bg-white/5 border-white/10 placeholder:text-muted-foreground transition-all focus:shadow-[0_0_0_3px_rgba(56,189,248,0.15)] focus:border-cyan-500/40"
         />
       </div>
       <div className="flex gap-2">
         <div className="relative">
           <SlidersHorizontal className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
           <Select value={status} onValueChange={handleSelect(onStatusChange)}>
-            <SelectTrigger className="w-[170px] pl-9">
+            <SelectTrigger className="w-[170px] pl-9 bg-white/5 border-white/10">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent className="bg-[#111827] border-white/10">
               {STATUSES.map((s) => (
                 <SelectItem key={s.value} value={s.value}>
                   {s.label}
@@ -82,10 +82,10 @@ export function SearchFilterBar({
         <div className="relative">
           <ArrowUpDown className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
           <Select value={sort} onValueChange={handleSelect(onSortChange)}>
-            <SelectTrigger className="w-[180px] pl-9">
+            <SelectTrigger className="w-[180px] pl-9 bg-white/5 border-white/10">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent className="bg-[#111827] border-white/10">
               {SORTS.map((s) => (
                 <SelectItem key={s.value} value={s.value}>
                   {s.label}
@@ -102,7 +102,7 @@ export function SearchFilterBar({
               onSearchChange("");
               onStatusChange("all");
             }}
-            className="text-muted-foreground hover:text-foreground"
+            className="text-muted-foreground hover:text-foreground hover:bg-white/5"
             title="Clear filters"
           >
             <X className="h-4 w-4" />
