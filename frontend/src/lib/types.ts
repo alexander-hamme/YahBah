@@ -4,6 +4,7 @@ export interface ApplicationListItem {
   company: string | null;
   title: string | null;
   location: string | null;
+  company_website: string | null;
   ats_type: string;
   status: string;
   current_state: string | null;
@@ -35,6 +36,7 @@ export interface JobPostingInfo {
   location: string | null;
   salary_min: number | null;
   salary_max: number | null;
+  company_website: string | null;
   technologies: string[] | null;
   specialties: string[] | null;
   ats_type: string;

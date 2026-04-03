@@ -24,6 +24,7 @@ class ApplicationListItem(BaseModel):
     company: str | None
     title: str | None
     location: str | None
+    company_website: str | None
     ats_type: str
     status: str
     current_state: str | None
@@ -103,6 +104,7 @@ async def list_applications(
                 company=r.job_posting.company if r.job_posting else None,
                 title=r.job_posting.title if r.job_posting else None,
                 location=r.job_posting.location if r.job_posting else None,
+                company_website=r.job_posting.company_website if r.job_posting else None,
                 ats_type=r.job_posting.ats_type if r.job_posting else "unknown",
                 status=r.status,
                 current_state=r.current_state,

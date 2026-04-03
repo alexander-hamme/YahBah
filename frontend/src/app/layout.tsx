@@ -1,12 +1,18 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { DM_Sans, Sora, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import { Providers } from "@/components/providers";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const dmSans = DM_Sans({
+  variable: "--font-dm-sans",
   subsets: ["latin"],
+});
+
+const sora = Sora({
+  variable: "--font-sora",
+  subsets: ["latin"],
+  weight: ["600", "700", "800"],
 });
 
 const geistMono = Geist_Mono({
@@ -27,25 +33,30 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${dmSans.variable} ${sora.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-gray-50 dark:bg-gray-950">
+      <body className="min-h-full flex flex-col bg-background">
         <Providers>
-          <header className="border-b bg-white dark:bg-gray-900 px-6 py-3 flex items-center gap-6">
-            <Link
-              href="/applications"
-              className="text-lg font-semibold tracking-tight"
-            >
-              YahBah
-            </Link>
-            <nav className="flex gap-4 text-sm text-gray-600 dark:text-gray-400">
+          <header className="sticky top-0 z-40 border-b bg-card/80 backdrop-blur-md">
+            <div className="max-w-7xl mx-auto px-6 py-3 flex items-center gap-6">
               <Link
                 href="/applications"
-                className="hover:text-gray-900 dark:hover:text-gray-100"
+                className="flex items-center gap-2 text-lg font-bold tracking-tight text-primary hover:opacity-80 transition-opacity"
               >
-                Applications
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src="/yahbah-logo.svg" alt="YahBah" width={32} height={32} className="rounded" />
+                YahBah
               </Link>
-            </nav>
+              <nav className="flex gap-1">
+                <Link
+                  href="/applications"
+                  className="px-3 py-1.5 text-sm font-medium text-muted-foreground rounded-md hover:text-foreground hover:bg-accent transition-colors"
+                >
+                  Applications
+                </Link>
+              </nav>
+            </div>
+            <div className="h-[2px] bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
           </header>
           <main className="flex-1">{children}</main>
         </Providers>

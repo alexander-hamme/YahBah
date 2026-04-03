@@ -73,6 +73,7 @@ prompts:
     - "description_summary": a concise summary of the role in at most 40 words. Focus on what the role does, not the company.
     - "salary_min": the minimum annual salary in USD as an integer (no decimals, no currency symbols). Use null if not stated.
     - "salary_max": the maximum annual salary in USD as an integer. Use null if not stated.
+    - "company_website": the company's main website domain (e.g. "databricks.com", "grafana.com"). Look for it in the posting footer, "About Us" section, or company description. Return just the domain, no https:// prefix. Use null if not found.
     If salary is given as hourly, multiply by 2080 to annualize. If a single number is given, use it for both min and max.
 
   job_tech_extraction: |

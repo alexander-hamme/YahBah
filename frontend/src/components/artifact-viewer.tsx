@@ -6,16 +6,26 @@ import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import Lightbox from "yet-another-react-lightbox";
 import Zoom from "yet-another-react-lightbox/plugins/zoom";
 import "yet-another-react-lightbox/styles.css";
-import { Document, Page, pdfjs } from "react-pdf";
+import dynamic from "next/dynamic";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
+
+const PdfDocument = dynamic(
+  () => import("react-pdf").then((mod) => {
+    mod.pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+    return mod.Document;
+  }),
+  { ssr: false }
+);
+const PdfPage = dynamic(
+  () => import("react-pdf").then((mod) => mod.Page),
+  { ssr: false }
+);
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { artifactDownloadUrl } from "@/lib/api";
 import { useDevMode } from "@/components/dev-mode-context";
 import type { Artifact } from "@/lib/types";
-
-pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
 function screenshotLabel(step: string): string {
   switch (step) {
@@ -205,9 +215,9 @@ function CoverLetterViewer({
       </div>
       {expanded && (
         <div className="rounded border bg-white p-4 overflow-y-auto max-h-[600px]">
-          <Document
+          <PdfDocument
             file={url}
-            onLoadSuccess={({ numPages: n }) => setNumPages(n)}
+            onLoadSuccess={({ numPages: n }: { numPages: number }) => setNumPages(n)}
             loading={
               <div className="text-sm text-gray-400 text-center py-8">
                 Loading PDF...
@@ -220,14 +230,14 @@ function CoverLetterViewer({
             }
           >
             {Array.from({ length: numPages }, (_, i) => (
-              <Page
+              <PdfPage
                 key={i}
                 pageNumber={i + 1}
                 width={560}
                 className="mb-4 last:mb-0"
               />
             ))}
-          </Document>
+          </PdfDocument>
         </div>
       )}
     </div>

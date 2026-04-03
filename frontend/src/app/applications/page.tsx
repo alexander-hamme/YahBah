@@ -9,6 +9,24 @@ import { SearchFilterBar } from "@/components/search-filter-bar";
 import { ApplicationList } from "@/components/application-list";
 import { Pagination } from "@/components/pagination";
 
+function LoadingSplash() {
+  return (
+    <div className="flex flex-col items-center justify-center py-24">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/YahBah_Logo.png"
+        alt="Loading..."
+        width={180}
+        height={180}
+        className="animate-breathe drop-shadow-lg"
+      />
+      <p className="text-sm text-muted-foreground mt-4 animate-pulse">
+        Loading applications...
+      </p>
+    </div>
+  );
+}
+
 export default function ApplicationsPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
@@ -39,14 +57,19 @@ export default function ApplicationsPage() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
+    <div className="max-w-7xl mx-auto px-6 py-8 space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Applications</h1>
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Applications</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Track and manage your job applications
+          </p>
+        </div>
       </div>
 
-      <SummaryCards />
+      <SummaryCards onStatusClick={handleStatusChange} />
 
-      <div className="space-y-4">
+      <div className="space-y-3">
         <SubmitJobForm />
         <SearchFilterBar
           search={search}
@@ -59,9 +82,9 @@ export default function ApplicationsPage() {
       </div>
 
       {isLoading ? (
-        <div className="text-center py-12 text-gray-500">Loading...</div>
+        <LoadingSplash />
       ) : data ? (
-        <>
+        <div className="space-y-4">
           <ApplicationList items={data.items} />
           <Pagination
             page={data.page}
@@ -69,7 +92,7 @@ export default function ApplicationsPage() {
             total={data.total}
             onPageChange={setPage}
           />
-        </>
+        </div>
       ) : null}
     </div>
   );

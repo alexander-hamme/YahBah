@@ -3,6 +3,8 @@
 import { use } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
+import { ArrowLeft, Bug } from "lucide-react";
+import { CompanyLogo } from "@/components/company-logo";
 import { getRunDetail, getRunSteps, getRunArtifacts } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { useDevMode } from "@/components/dev-mode-context";
@@ -11,6 +13,19 @@ import { RunInfoCard } from "@/components/run-info-card";
 import { StepTimeline } from "@/components/step-timeline";
 import { ArtifactViewer } from "@/components/artifact-viewer";
 import { FieldMappingsTable } from "@/components/field-mappings-table";
+
+function DetailSkeleton() {
+  return (
+    <div className="space-y-6 animate-pulse">
+      <div className="h-8 bg-muted rounded-lg w-64" />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="h-64 bg-muted rounded-xl" />
+        <div className="h-64 bg-muted rounded-xl" />
+      </div>
+      <div className="h-48 bg-muted rounded-xl" />
+    </div>
+  );
+}
 
 export default function ApplicationDetailPage({
   params,
@@ -41,32 +56,43 @@ export default function ApplicationDetailPage({
   if (runLoading || !run) {
     return (
       <div className="max-w-5xl mx-auto px-6 py-8">
-        <p className="text-gray-500">Loading...</p>
+        <DetailSkeleton />
       </div>
     );
   }
 
   return (
-    <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+    <div className="max-w-5xl mx-auto px-6 py-8 space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Link
-            href="/applications"
-            className="text-sm text-gray-500 hover:text-gray-900 dark:hover:text-gray-100"
-          >
-            &larr; Back
+          <Link href="/applications">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-muted-foreground hover:text-foreground"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
           </Link>
-          <h1 className="text-2xl font-bold">
-            {run.job_posting?.company ?? "Unknown"} &mdash;{" "}
-            {run.job_posting?.title ?? "Untitled"}
-          </h1>
+          <CompanyLogo
+            companyWebsite={run.job_posting?.company_website ?? null}
+            companyName={run.job_posting?.company ?? null}
+            size={36}
+          />
+          <div>
+            <h1 className="text-xl font-bold tracking-tight">
+              {run.job_posting?.company ?? "Unknown"} &mdash;{" "}
+              {run.job_posting?.title ?? "Untitled"}
+            </h1>
+          </div>
         </div>
         <Button
-          variant={devMode ? "default" : "outline"}
+          variant={devMode ? "default" : "ghost"}
           size="sm"
           onClick={toggleDevMode}
-          className="text-xs"
+          className="gap-1.5 text-xs"
         >
+          <Bug className="h-3.5 w-3.5" />
           Dev
         </Button>
       </div>

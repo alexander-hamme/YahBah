@@ -1,35 +1,44 @@
 "use client";
 
+import { useState } from "react";
+import {
+  CheckCircle2,
+  Loader2,
+  XCircle,
+  MinusCircle,
+  Circle,
+  Clock,
+  ChevronDown,
+  ChevronRight,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Step } from "@/lib/types";
 
-function statusIcon(status: string): string {
+function StepIcon({ status }: { status: string }) {
   switch (status) {
     case "COMPLETED":
-      return "\u2713";
+      return <CheckCircle2 className="h-5 w-5 text-emerald-500" />;
     case "RUNNING":
-      return "\u25CB";
+      return <Loader2 className="h-5 w-5 text-blue-500 animate-spin" />;
     case "FAILED":
-      return "\u2717";
+      return <XCircle className="h-5 w-5 text-red-500" />;
     case "SKIPPED":
-      return "\u2014";
+      return <MinusCircle className="h-5 w-5 text-slate-400" />;
     default:
-      return "\u00B7";
+      return <Circle className="h-5 w-5 text-slate-300" />;
   }
 }
 
-function statusColor(status: string): string {
+function lineColor(status: string): string {
   switch (status) {
     case "COMPLETED":
-      return "text-green-600 bg-green-100 dark:bg-green-900";
+      return "bg-emerald-300 dark:bg-emerald-700";
     case "RUNNING":
-      return "text-blue-600 bg-blue-100 dark:bg-blue-900 animate-pulse";
+      return "bg-blue-300 dark:bg-blue-700";
     case "FAILED":
-      return "text-red-600 bg-red-100 dark:bg-red-900";
-    case "SKIPPED":
-      return "text-gray-400 bg-gray-100 dark:bg-gray-800";
+      return "bg-red-300 dark:bg-red-700";
     default:
-      return "text-gray-400 bg-gray-100 dark:bg-gray-800";
+      return "bg-border";
   }
 }
 
@@ -47,48 +56,77 @@ function formatStepName(name: string): string {
   return name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-export function StepTimeline({ steps }: { steps: Step[] }) {
-  if (steps.length === 0) {
-    return null;
-  }
+function StepItem({
+  step,
+  isLast,
+}: {
+  step: Step;
+  isLast: boolean;
+}) {
+  const [expanded, setExpanded] = useState(step.status === "FAILED");
+  const duration = formatDuration(step.started_at, step.completed_at);
+  const hasLogs = !!step.logs;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-lg">Step Timeline</CardTitle>
+    <div className="flex gap-3">
+      <div className="flex flex-col items-center">
+        <StepIcon status={step.status} />
+        {!isLast && (
+          <div
+            className={`w-0.5 flex-1 mt-1 min-h-[16px] ${lineColor(step.status)}`}
+          />
+        )}
+      </div>
+      <div className="flex-1 pb-4 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-foreground">
+            {formatStepName(step.step_name)}
+          </span>
+          {duration && (
+            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+              <Clock className="h-3 w-3" />
+              {duration}
+            </span>
+          )}
+          {hasLogs && (
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {expanded ? (
+                <ChevronDown className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5" />
+              )}
+            </button>
+          )}
+        </div>
+        {expanded && step.logs && (
+          <pre className="mt-2 text-xs text-muted-foreground bg-muted rounded-md p-3 overflow-x-auto whitespace-pre-wrap font-mono">
+            {step.logs}
+          </pre>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function StepTimeline({ steps }: { steps: Step[] }) {
+  if (steps.length === 0) return null;
+
+  return (
+    <Card className="shadow-sm">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base font-semibold">Step Timeline</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="space-y-3">
-          {steps.map((step, i) => (
-            <div key={step.id} className="flex items-start gap-3">
-              <div className="flex flex-col items-center">
-                <div
-                  className={`w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold ${statusColor(step.status)}`}
-                >
-                  {statusIcon(step.status)}
-                </div>
-                {i < steps.length - 1 && (
-                  <div className="w-px h-6 bg-gray-200 dark:bg-gray-700 mt-1" />
-                )}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">
-                    {formatStepName(step.step_name)}
-                  </span>
-                  <span className="text-xs text-gray-400">
-                    {formatDuration(step.started_at, step.completed_at)}
-                  </span>
-                </div>
-                {step.logs && (
-                  <p className="text-xs text-gray-500 mt-0.5 whitespace-pre-wrap truncate">
-                    {step.logs}
-                  </p>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
+        {steps.map((step, i) => (
+          <StepItem
+            key={step.id}
+            step={step}
+            isLast={i === steps.length - 1}
+          />
+        ))}
       </CardContent>
     </Card>
   );

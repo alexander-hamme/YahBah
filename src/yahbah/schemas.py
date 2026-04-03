@@ -78,6 +78,7 @@ class JobMetadataOutput:
     description_summary: str | None = None  # ≤40 word LLM summary
     salary_min: int | None = None
     salary_max: int | None = None
+    company_website: str | None = None
     technologies: list[str] | None = None
     specialties: list[str] | None = None
 
@@ -92,6 +93,7 @@ class DuplicateCheckInput:
     job_description: str | None = None
     salary_min: int | None = None
     salary_max: int | None = None
+    company_website: str | None = None
     technologies: list[str] | None = None
     specialties: list[str] | None = None
 
