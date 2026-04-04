@@ -126,8 +126,12 @@ async def check_duplicate_activity(input_: DuplicateCheckInput) -> DuplicateChec
             posting.specialties = input_.specialties
         if input_.company_website and not posting.company_website:
             posting.company_website = input_.company_website
+        if input_.industry and not posting.industry:
+            posting.industry = input_.industry
         if input_.company_description and not posting.company_description:
             posting.company_description = input_.company_description
+        if input_.work_model and not posting.work_model:
+            posting.work_model = input_.work_model
         if input_.posted_date and not posting.posted_date:
             posting.posted_date = input_.posted_date
         await session.commit()

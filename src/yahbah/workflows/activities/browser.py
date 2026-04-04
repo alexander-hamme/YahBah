@@ -44,6 +44,8 @@ from yahbah.workflows.activities.db_ops import (
     store_credentials_activity,
 )
 from yahbah.url_utils import ats_normalize, strip_tracking
+from yahbah.db.session import AsyncSessionLocal
+from yahbah.db.models import ApplicationRun
 from sqlalchemy import select
 
 
@@ -251,7 +253,7 @@ async def browser_fill_and_submit_activity(input: BrowserFillInput) -> BrowserFi
 
     activity.logger.info(f"[fill] Submitting form (verification email: {submit_email})")
     try:
-        confirmation_url, confirmation_text = await filler.submit(email=submit_email, run_id=input.run_id)
+        confirmation_url, confirmation_text, confirmation_html, tracking_url = await filler.submit(email=submit_email, run_id=input.run_id)
     except Exception:
         failed_path = await registry.screenshot(input.run_id, "submit_failed")
         await persist_artifact_activity(
@@ -261,7 +263,9 @@ async def browser_fill_and_submit_activity(input: BrowserFillInput) -> BrowserFi
             {"step": "submit_failed"},
         )
         raise
-    activity.logger.info(f"[fill] Submission result — URL: {confirmation_url}")
+    activity.logger.info(
+        f"[fill] Submission result — URL: {confirmation_url}, tracking: {tracking_url}"
+    )
 
     # Screenshot of confirmation
     screenshot_path = await registry.screenshot(input.run_id, "confirmation")
@@ -283,9 +287,34 @@ async def browser_fill_and_submit_activity(input: BrowserFillInput) -> BrowserFi
             conf_path,
         )
 
+    # Save confirmation HTML as artifact
+    if confirmation_html:
+        html_path = registry.artifact_path(input.run_id, "confirmation.html")
+        with open(html_path, "w") as f:
+            f.write(confirmation_html)
+        await persist_artifact_activity(
+            input.run_id,
+            "confirmation_html",
+            html_path,
+        )
+
+    # Store tracking URL and confirmation HTML on the run record
+    if tracking_url or confirmation_html:
+        async with AsyncSessionLocal() as session:
+            import uuid as _uuid
+            run = await session.get(ApplicationRun, _uuid.UUID(input.run_id))
+            if run:
+                if tracking_url:
+                    run.tracking_url = tracking_url
+                if confirmation_html:
+                    run.confirmation_html = confirmation_html
+                await session.commit()
+
     await registry.close_page(input.run_id)
 
     return BrowserFillOutput(
         confirmation_url=confirmation_url,
         confirmation_text=confirmation_text,
+        confirmation_html=confirmation_html,
+        tracking_url=tracking_url,
     )

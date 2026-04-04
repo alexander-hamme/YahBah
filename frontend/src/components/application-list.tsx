@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { ChevronRight, ArrowUp, ArrowDown } from "lucide-react";
 import { CompanyLogo } from "@/components/company-logo";
+import { RunActions } from "@/components/run-actions";
 import {
   Table,
   TableBody,
@@ -112,7 +113,7 @@ export function ApplicationList({
             <SortableColumn label="Current Step" sortKey="current_state" currentSort={sort} onSort={onSort} />
             <SortableColumn label="Created" sortKey="created_at" currentSort={sort} onSort={onSort} />
             <SortableColumn label="Updated" sortKey="updated_at" currentSort={sort} onSort={onSort} />
-            <TableHead className="w-8" />
+            <TableHead className="w-24 sticky right-0 bg-[#0c1018]" />
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -134,10 +135,11 @@ export function ApplicationList({
                   {item.company ?? "Unknown"}
                 </Link>
               </TableCell>
-              <TableCell>
+              <TableCell className="max-w-[200px]">
                 <Link
                   href={`/applications/${item.run_id}`}
-                  className="block text-sm text-muted-foreground group-hover:text-foreground transition-colors"
+                  className="block text-sm text-muted-foreground group-hover:text-foreground transition-colors truncate"
+                  title={item.title ?? "Untitled"}
                 >
                   {item.title ?? "Untitled"}
                 </Link>
@@ -162,8 +164,11 @@ export function ApplicationList({
               >
                 {timeAgo(item.updated_at)}
               </TableCell>
-              <TableCell>
-                <ChevronRight className="h-4 w-4 text-white/10 group-hover:text-cyan-400 transition-colors" />
+              <TableCell className="sticky right-0 bg-[#0a0e1a] group-hover:bg-[#0f1420]">
+                <div className="flex items-center gap-1">
+                  <RunActions runId={item.run_id} status={item.status} compact />
+                  <ChevronRight className="h-4 w-4 text-white/10 group-hover:text-cyan-400 transition-colors" />
+                </div>
               </TableCell>
             </TableRow>
           ))}

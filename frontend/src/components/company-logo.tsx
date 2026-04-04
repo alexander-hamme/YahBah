@@ -3,8 +3,9 @@
 import { useState } from "react";
 import { Building2 } from "lucide-react";
 
-function logoUrl(domain: string): string {
-  return `https://logo.clearbit.com/${domain}`;
+function logoUrl(domain: string, size: number): string {
+  // Google Favicons API — reliable, no API key needed
+  return `https://www.google.com/s2/favicons?domain=${domain}&sz=${size}`;
 }
 
 function domainFromWebsite(website: string | null): string | null {
@@ -41,10 +42,13 @@ export function CompanyLogo({
     );
   }
 
+  // Request a larger icon than display size for crisp rendering on retina
+  const fetchSize = Math.min(size * 2, 256);
+
   return (
     /* eslint-disable-next-line @next/next/no-img-element */
     <img
-      src={logoUrl(domain)}
+      src={logoUrl(domain, fetchSize)}
       alt={companyName ?? "Company logo"}
       width={size}
       height={size}

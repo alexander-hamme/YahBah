@@ -40,7 +40,9 @@ class JobPosting(Base):
     technologies: Mapped[list[str] | None] = mapped_column(JSONB)
     specialties: Mapped[list[str] | None] = mapped_column(JSONB)
     company_website: Mapped[str | None] = mapped_column(String)
+    industry: Mapped[str | None] = mapped_column(String)
     company_description: Mapped[str | None] = mapped_column(String)
+    work_model: Mapped[str | None] = mapped_column(String)
     posted_date: Mapped[str | None] = mapped_column(String)
     ats_type: Mapped[str] = mapped_column(String, default="greenhouse")
     created_at: Mapped[datetime] = mapped_column(
@@ -74,6 +76,8 @@ class ApplicationRun(Base):
     account_email: Mapped[str | None] = mapped_column(String)
     account_password: Mapped[str | None] = mapped_column(String)
     error_message: Mapped[str | None] = mapped_column(Text)
+    tracking_url: Mapped[str | None] = mapped_column(String)
+    confirmation_html: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
     )

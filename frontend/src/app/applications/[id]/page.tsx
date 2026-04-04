@@ -4,6 +4,7 @@ import { use } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Bug } from "lucide-react";
+import { RunActions } from "@/components/run-actions";
 import { getRunDetail, getRunSteps, getRunArtifacts } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { CompanyLogo } from "@/components/company-logo";
@@ -86,19 +87,22 @@ export default function ApplicationDetailPage({
             </h1>
           </div>
         </div>
-        <Button
-          variant={devMode ? "default" : "ghost"}
-          size="sm"
-          onClick={toggleDevMode}
-          className={`gap-1.5 text-xs ${
-            devMode
-              ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 hover:bg-cyan-500/30"
-              : "text-muted-foreground hover:text-foreground hover:bg-white/5"
-          }`}
-        >
-          <Bug className="h-3.5 w-3.5" />
-          Dev
-        </Button>
+        <div className="flex items-center gap-2">
+          <RunActions runId={id} status={run.status} />
+          <Button
+            variant={devMode ? "default" : "ghost"}
+            size="sm"
+            onClick={toggleDevMode}
+            className={`gap-1.5 text-xs ${
+              devMode
+                ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 hover:bg-cyan-500/30"
+                : "text-muted-foreground hover:text-foreground hover:bg-white/5"
+            }`}
+          >
+            <Bug className="h-3.5 w-3.5" />
+            Dev
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

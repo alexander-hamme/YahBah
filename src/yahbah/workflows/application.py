@@ -92,6 +92,18 @@ class ApplicationWorkflow:
                 retry_policy=retry,
             )
 
+            # ── Guard: no form fields ────────────────────────────────────────
+            form_fields = extract_output.form_schema_dict.get("fields", [])
+            if not form_fields:
+                reason = "No form fields found — the application form may not have loaded correctly"
+                await workflow.execute_activity(
+                    mark_run_failed_activity,
+                    args=[run_id, reason],
+                    start_to_close_timeout=short,
+                    retry_policy=retry,
+                )
+                raise RuntimeError(reason)
+
             # ── EXTRACT_METADATA (LLM) ───────────────────────────────────────
             await workflow.execute_activity(
                 update_run_state_activity,
@@ -129,7 +141,9 @@ class ApplicationWorkflow:
                     salary_min=metadata_output.salary_min,
                     salary_max=metadata_output.salary_max,
                     company_website=metadata_output.company_website,
+                    industry=metadata_output.industry,
                     company_description=metadata_output.company_description,
+                    work_model=metadata_output.work_model,
                     posted_date=metadata_output.posted_date,
                     technologies=metadata_output.technologies,
                     specialties=metadata_output.specialties,
@@ -163,6 +177,17 @@ class ApplicationWorkflow:
                 start_to_close_timeout=medium,
                 retry_policy=retry,
             )
+
+            # ── Guard: no field mappings ──────────────────────────────────────
+            if not map_output.field_mappings:
+                reason = "No fields could be mapped — the form may be incompatible"
+                await workflow.execute_activity(
+                    mark_run_failed_activity,
+                    args=[run_id, reason],
+                    start_to_close_timeout=short,
+                    retry_policy=retry,
+                )
+                raise RuntimeError(reason)
 
             # ── GENERATE_COVER_LETTER (LLM) ──────────────────────────────────
             await workflow.execute_activity(

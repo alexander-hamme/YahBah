@@ -36,7 +36,9 @@ class JobMetadata(BaseModel):
     salary_min: int | None = None
     salary_max: int | None = None
     company_website: str | None = None
+    industry: str | None = None
     company_description: str | None = None
+    work_model: str | None = None
     posted_date: str | None = None
 
 
@@ -127,7 +129,9 @@ async def run_extraction(job_description: str) -> None:
     print(f"  salary_min:         {metadata.salary_min}")
     print(f"  salary_max:         {metadata.salary_max}")
     print(f"  company_website:    {metadata.company_website}")
+    print(f"  industry:           {metadata.industry}")
     print(f"  company_description:{metadata.company_description}")
+    print(f"  work_model:         {metadata.work_model}")
     print(f"  posted_date:        {metadata.posted_date}")
 
     # Call 2: Tech extraction

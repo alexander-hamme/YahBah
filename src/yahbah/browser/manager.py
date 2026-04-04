@@ -89,8 +89,25 @@ class BrowserRegistry:
         path = self.artifact_path(run_id, f"screenshot_{label}.png")
         page = self.get_page(run_id)
         if page:
-            await page.screenshot(path=path, full_page=True)
-            logger.debug(f"Screenshot saved: {path}", )
+            # For embedded forms, try to screenshot just the form area
+            # (iframe element or form container) to avoid huge screenshots
+            # dominated by job description text.
+            captured = False
+            try:
+                iframe_el = await page.query_selector(
+                    "iframe[src*='greenhouse'], #grnhse_app"
+                )
+                if iframe_el and await iframe_el.is_visible():
+                    await iframe_el.scroll_into_view_if_needed()
+                    await iframe_el.screenshot(path=path)
+                    captured = True
+                    logger.debug(f"Screenshot saved (form element): {path}")
+            except Exception:
+                pass
+
+            if not captured:
+                await page.screenshot(path=path, full_page=True)
+                logger.debug(f"Screenshot saved (full page): {path}")
         return path
 
     async def close_page(self, run_id: str) -> None:

@@ -79,7 +79,9 @@ class JobMetadataOutput:
     salary_min: int | None = None
     salary_max: int | None = None
     company_website: str | None = None
+    industry: str | None = None
     company_description: str | None = None
+    work_model: str | None = None
     posted_date: str | None = None
     technologies: list[str] | None = None
     specialties: list[str] | None = None
@@ -96,7 +98,9 @@ class DuplicateCheckInput:
     salary_min: int | None = None
     salary_max: int | None = None
     company_website: str | None = None
+    industry: str | None = None
     company_description: str | None = None
+    work_model: str | None = None
     posted_date: str | None = None
     technologies: list[str] | None = None
     specialties: list[str] | None = None
@@ -148,6 +152,8 @@ class BrowserFillInput:
 class BrowserFillOutput:
     confirmation_url: str | None
     confirmation_text: str | None
+    confirmation_html: str | None
+    tracking_url: str | None
 
 
 # ---------------------------------------------------------------------------

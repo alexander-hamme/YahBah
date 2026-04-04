@@ -26,6 +26,39 @@ async def activate_and_resolve_embed(page: Page) -> Page | Frame:
     """
     app_div = await page.query_selector("#grnhse_app")
     if not app_div:
+        # No #grnhse_app wrapper. Greenhouse has two embed patterns:
+        #
+        # 1. Iframe embed: form renders inside an iframe (older style)
+        # 2. DOM injection: Greenhouse script injects the form directly
+        #    into the host page DOM (newer style, e.g. Klaviyo).
+        #    Look for #application-form or .application--form on the parent.
+        #
+        # Check for DOM-injected form first (it's on the parent page),
+        # then fall back to iframe.
+
+        dom_form = await page.query_selector(
+            "#application-form, .application--form, "
+            "form[action*='greenhouse']"
+        )
+        if dom_form:
+            logger.info("[embed] Greenhouse form injected directly into page DOM")
+            return page
+
+        for f in page.frames:
+            if "greenhouse" in (f.url or "") and f != page.main_frame:
+                # Check if the iframe actually has form fields
+                try:
+                    await f.wait_for_selector(
+                        "input:not([type='hidden']), select, textarea",
+                        state="visible",
+                        timeout=5_000,
+                    )
+                    logger.info(f"[embed] Greenhouse iframe with form fields: {f.url[:80]}")
+                    return f
+                except Exception:
+                    logger.debug(f"[embed] Greenhouse iframe has no form fields: {f.url[:80]}")
+                    continue
+
         return page
 
     # Always click the Application tab to make the panel visible.
@@ -1298,8 +1331,35 @@ class GreenhouseFiller:
         self._page.remove_listener("response", _on_response)
 
         confirmation_url = self._page.url
+
+        # Capture both plain text and HTML for rich rendering
         confirmation_text = await self._page.inner_text("body")
-        return confirmation_url, confirmation_text[:2000]
+
+        # Try to get the main content HTML (not full page boilerplate)
+        confirmation_html = ""
+        for sel in ["#content", "main", ".content", "body"]:
+            el = await self._page.query_selector(sel)
+            if el:
+                html = await el.inner_html()
+                if len(html) > 50:
+                    confirmation_html = html
+                    break
+
+        # Extract tracking/status URL if present
+        tracking_url = await self._page.evaluate("""() => {
+            const links = document.querySelectorAll('a');
+            for (const a of links) {
+                const text = (a.textContent || '').toLowerCase();
+                const href = a.href || '';
+                if ((text.includes('track') || text.includes('status') || text.includes('mygreen') || text.includes('sign in'))
+                    && href && !href.includes('javascript:') && href !== window.location.href) {
+                    return href;
+                }
+            }
+            return null;
+        }""")
+
+        return confirmation_url, confirmation_text[:2000], confirmation_html[:4000], tracking_url
 
     async def _handle_email_verification(self, email: str | None = None) -> None:
         """

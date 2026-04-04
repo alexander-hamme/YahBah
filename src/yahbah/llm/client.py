@@ -93,7 +93,16 @@ class OllamaClient:
 
             body = resp.json()
 
+        llm_symbol_replacements = {
+            "*": "",
+            "—": "-",
+        }
+
         try:
-            return body["message"]["content"].replace('*', '')
+            response = body["message"]["content"]
+            for symb, repl in llm_symbol_replacements.items():
+                response = response.replace(symb, repl)
+            body["message"]["content"] = response
+            return response
         except KeyError as exc:
             raise LLMError(f"Unexpected Ollama response shape: {body}") from exc

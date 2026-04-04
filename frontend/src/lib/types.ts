@@ -37,7 +37,9 @@ export interface JobPostingInfo {
   salary_min: number | null;
   salary_max: number | null;
   company_website: string | null;
+  industry: string | null;
   company_description: string | null;
+  work_model: string | null;
   posted_date: string | null;
   technologies: string[] | null;
   specialties: string[] | null;
@@ -52,6 +54,8 @@ export interface RunDetail {
   temporal_workflow_id: string | null;
   account_email: string | null;
   error_message: string | null;
+  tracking_url: string | null;
+  confirmation_html: string | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;

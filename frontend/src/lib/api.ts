@@ -62,6 +62,20 @@ export function submitJob(jobUrl: string): Promise<EnqueueJobResponse> {
   });
 }
 
+export function deleteRun(id: string): Promise<{ success: boolean; message: string }> {
+  return fetchJSON(`${BASE}/runs/${id}`, { method: "DELETE" });
+}
+
+export function cancelRun(id: string): Promise<{ success: boolean; message: string }> {
+  return fetchJSON(`${BASE}/runs/${id}/cancel`, { method: "POST" });
+}
+
+export function retryRun(
+  id: string
+): Promise<{ success: boolean; message: string; run_id: string }> {
+  return fetchJSON(`${BASE}/runs/${id}/retry`, { method: "POST" });
+}
+
 export function artifactDownloadUrl(
   runId: string,
   artifactId: string

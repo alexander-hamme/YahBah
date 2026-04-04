@@ -6,9 +6,10 @@ import {
   MapPin,
   DollarSign,
   ExternalLink,
-  Monitor,
   CalendarDays,
   Info,
+  Laptop,
+  Factory,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { JobPostingInfo } from "@/lib/types";
@@ -58,12 +59,6 @@ export function JobMetadataCard({
         <h3 className="text-sm font-semibold text-foreground" style={{ fontFamily: "var(--font-heading)" }}>
           Job Details
         </h3>
-        {jobPosting.company_description && (
-          <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
-            <Info className="h-3 w-3 shrink-0" />
-            {jobPosting.company_description}
-          </p>
-        )}
       </div>
       <div className="px-5 pb-5 space-y-4">
         <div className="grid grid-cols-2 gap-x-6 gap-y-3">
@@ -90,18 +85,47 @@ export function JobMetadataCard({
               {jobPosting.posted_date}
             </Field>
           )}
+        </div>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-3">
+          {jobPosting.work_model && (
+            <Field icon={<Laptop className="h-3 w-3" />} label="Flexibility">
+              {jobPosting.work_model}
+            </Field>
+          )}
           <Field icon={<ExternalLink className="h-3 w-3" />} label="Job URL">
             <a
               href={jobUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-cyan-400 hover:text-cyan-300 hover:underline text-xs break-all inline-flex items-center gap-1 transition-colors"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 hover:bg-cyan-500/20 hover:shadow-[0_0_12px_rgba(56,189,248,0.15)] transition-all"
             >
+              <ExternalLink className="h-3 w-3" />
               View posting
-              <ExternalLink className="h-3 w-3 shrink-0" />
             </a>
           </Field>
         </div>
+
+        {(jobPosting.company_description || jobPosting.industry) && (
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                <Info className="h-3 w-3" />
+                About the Company
+              </div>
+              {jobPosting.industry && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-white/5 border border-white/10 text-muted-foreground">
+                  <Factory className="h-2.5 w-2.5" />
+                  {jobPosting.industry}
+                </span>
+              )}
+            </div>
+            {jobPosting.company_description && (
+              <p className="text-sm font-medium text-foreground/80">
+                {jobPosting.company_description}
+              </p>
+            )}
+          </div>
+        )}
 
         {jobPosting.technologies && jobPosting.technologies.length > 0 && (
           <div className="space-y-1.5">

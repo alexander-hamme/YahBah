@@ -21,7 +21,7 @@ const PdfPage = dynamic(
   () => import("react-pdf").then((mod) => mod.Page),
   { ssr: false }
 );
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Maximize2, Download, Eye, EyeOff, FileDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { artifactDownloadUrl } from "@/lib/api";
 import { useDevMode } from "@/components/dev-mode-context";
@@ -86,8 +86,9 @@ function ScreenshotThumbnail({
         </Badge>
         <button
           onClick={onExpand}
-          className="text-cyan-400 hover:text-cyan-300 hover:underline text-xs transition-colors"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 hover:bg-cyan-500/20 hover:shadow-[0_0_12px_rgba(56,189,248,0.15)] transition-all"
         >
+          <Maximize2 className="h-3 w-3" />
           Fullscreen
         </button>
       </div>
@@ -167,8 +168,9 @@ function InlineText({
           href={url}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-cyan-400 hover:text-cyan-300 hover:underline text-xs transition-colors"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 hover:bg-cyan-500/20 hover:shadow-[0_0_12px_rgba(56,189,248,0.15)] transition-all"
         >
+          <Download className="h-3 w-3" />
           Download
         </a>
       </div>
@@ -199,16 +201,17 @@ function CoverLetterViewer({
         <div className="flex items-center gap-2">
           <button
             onClick={() => setExpanded(!expanded)}
-            className="text-cyan-400 hover:text-cyan-300 hover:underline text-xs transition-colors"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 hover:bg-cyan-500/20 hover:shadow-[0_0_12px_rgba(56,189,248,0.15)] transition-all"
           >
-            {expanded ? "Hide" : "Preview"}
+            {expanded ? <><EyeOff className="h-3 w-3" />Hide</> : <><Eye className="h-3 w-3" />Preview</>}
           </button>
           <a
             href={url}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-cyan-400 hover:text-cyan-300 hover:underline text-xs transition-colors"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 hover:bg-cyan-500/20 hover:shadow-[0_0_12px_rgba(56,189,248,0.15)] transition-all"
           >
+            <FileDown className="h-3 w-3" />
             Download PDF
           </a>
         </div>
@@ -274,11 +277,10 @@ export function ArtifactViewer({
   );
 
   // Inline content artifacts
-  const confirmation = artifacts.find((a) => a.artifact_type === "confirmation");
   const coverLetter = artifacts.find((a) => a.artifact_type === "cover_letter");
 
-  // Everything else (form_schema, field_mappings, trace, submitted_values, etc.)
-  const inlineTypes = new Set(["screenshot", "confirmation", "cover_letter"]);
+  // Everything else — confirmation is now shown in RunInfoCard
+  const inlineTypes = new Set(["screenshot", "confirmation", "confirmation_html", "cover_letter"]);
   const others = artifacts.filter((a) => !inlineTypes.has(a.artifact_type));
   const downloadable = devMode
     ? others
@@ -353,14 +355,6 @@ export function ArtifactViewer({
           zoom={{ maxZoomPixelRatio: 5, scrollToZoom: true }}
         />
 
-        {confirmation && (
-          <InlineText
-            runId={runId}
-            artifact={confirmation}
-            label="Confirmation"
-          />
-        )}
-
         {coverLetter && (
           <CoverLetterViewer runId={runId} artifact={coverLetter} />
         )}
@@ -388,8 +382,9 @@ export function ArtifactViewer({
                     href={url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-cyan-400 hover:text-cyan-300 hover:underline text-xs transition-colors"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 hover:bg-cyan-500/20 hover:shadow-[0_0_12px_rgba(56,189,248,0.15)] transition-all"
                   >
+                    <Download className="h-3 w-3" />
                     Download
                   </a>
                 </div>

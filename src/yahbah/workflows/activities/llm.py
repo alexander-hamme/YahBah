@@ -123,7 +123,9 @@ class _JobMetadata(BaseModel):
     salary_min: int | None = None
     salary_max: int | None = None
     company_website: str | None = None
+    industry: str | None = None
     company_description: str | None = None
+    work_model: str | None = None
     posted_date: str | None = None
 
 
@@ -190,7 +192,9 @@ async def extract_job_metadata_activity(input: JobMetadataInput) -> JobMetadataO
         salary_min=metadata.salary_min,
         salary_max=metadata.salary_max,
         company_website=metadata.company_website,
+        industry=metadata.industry,
         company_description=metadata.company_description,
+        work_model=metadata.work_model,
         posted_date=metadata.posted_date,
         technologies=tech.technologies,
         specialties=tech.specialties,

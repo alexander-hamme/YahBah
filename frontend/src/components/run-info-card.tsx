@@ -10,6 +10,8 @@ import {
   CheckCheck,
   Clipboard,
   Check,
+  ExternalLink,
+  MessageSquareCheck,
 } from "lucide-react";
 import { StatusBadge } from "@/components/status-badge";
 import type { RunDetail } from "@/lib/types";
@@ -141,6 +143,31 @@ export function RunInfoCard({ run }: { run: RunDetail }) {
                 {run.error_message}
               </p>
             </div>
+          </div>
+        )}
+
+        {run.tracking_url && (
+          <a
+            href={run.tracking_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 hover:bg-cyan-500/20 hover:shadow-[0_0_16px_rgba(56,189,248,0.2)] transition-all"
+          >
+            <ExternalLink className="h-4 w-4" />
+            Track Application Status
+          </a>
+        )}
+
+        {run.confirmation_html && (
+          <div>
+            <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+              <MessageSquareCheck className="h-3 w-3" />
+              Confirmation
+            </div>
+            <div
+              className="text-sm text-foreground/80 bg-white/[0.02] border border-white/5 rounded-lg p-3 max-h-48 overflow-y-auto [&_a]:text-cyan-400 [&_a]:underline [&_h1]:text-lg [&_h1]:font-bold [&_h2]:text-base [&_h2]:font-semibold [&_p]:my-1 [&_ul]:list-disc [&_ul]:pl-4"
+              dangerouslySetInnerHTML={{ __html: run.confirmation_html }}
+            />
           </div>
         )}
       </div>
