@@ -69,8 +69,53 @@ async def map_fields_activity(input: MapFieldsInput) -> MapFieldsOutput:
         mappings_path,
     )
 
+    # Compute match score (separate LLM call)
+    match_score, match_rationale = None, None
+    try:
+        # Build profile text the same way the mapper does
+        name_parts = profile.full_name.split(maxsplit=1)
+        profile_summary = (
+            f"Name: {profile.full_name}\n"
+            f"Location: {profile.location}\n"
+            f"Years of experience: {profile.years_of_experience}\n"
+            f"Skills: {', '.join(profile.skills)}\n"
+            f"Bio: {profile.bio or 'N/A'}\n"
+        )
+        relevant_exp = [
+            e for e in profile.work_experience
+            if e.get("use_in_custom_prompts", True)
+        ]
+        if relevant_exp:
+            exp_lines = [
+                f"  - {e.get('title', '')} at {e.get('company', '')} ({e.get('duration', '')})"
+                for e in relevant_exp
+            ]
+            profile_summary += "Work experience:\n" + "\n".join(exp_lines)
+
+        match_score, match_rationale = await mapper.compute_match_score(
+            profile_summary, input.job_description
+        )
+        activity.logger.info(
+            f"[match] Score: {match_score}% — {match_rationale}"
+        )
+
+        # Persist to DB
+        from yahbah.db.session import AsyncSessionLocal
+        from yahbah.db.models import ApplicationRun
+        import uuid as _uuid
+        async with AsyncSessionLocal() as session:
+            run = await session.get(ApplicationRun, _uuid.UUID(input.run_id))
+            if run:
+                run.match_score = match_score
+                run.match_rationale = match_rationale
+                await session.commit()
+    except Exception as exc:
+        activity.logger.warning(f"[match] Failed to compute match score: {exc}")
+
     return MapFieldsOutput(
         field_mappings=[asdict(m) for m in result.field_mappings],
+        match_score=match_score,
+        match_rationale=match_rationale,
     )
 
 

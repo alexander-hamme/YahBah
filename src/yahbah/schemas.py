@@ -123,6 +123,8 @@ class MapFieldsInput:
 @dataclass
 class MapFieldsOutput:
     field_mappings: list[dict]  # list[FieldMapping] serialized
+    match_score: int | None = None
+    match_rationale: str | None = None
 
 
 @dataclass

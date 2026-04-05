@@ -8,6 +8,7 @@ export interface ApplicationListItem {
   ats_type: string;
   status: string;
   current_state: string | null;
+  match_score: number | null;
   error_message: string | null;
   created_at: string;
   updated_at: string;
@@ -54,6 +55,8 @@ export interface RunDetail {
   temporal_workflow_id: string | null;
   account_email: string | null;
   error_message: string | null;
+  match_score: number | null;
+  match_rationale: string | null;
   tracking_url: string | null;
   confirmation_html: string | null;
   created_at: string;

@@ -89,19 +89,23 @@ class BrowserRegistry:
         path = self.artifact_path(run_id, f"screenshot_{label}.png")
         page = self.get_page(run_id)
         if page:
-            # For embedded forms, try to screenshot just the form area
-            # (iframe element or form container) to avoid huge screenshots
-            # dominated by job description text.
+            # Try to screenshot the form container element to capture the
+            # full form without excess job description text.
             captured = False
+            form_selectors = [
+                "#application-form",       # DOM-injected (Klaviyo style)
+                ".application--container", # Greenhouse embed wrapper
+                "#grnhse_app",             # Classic Greenhouse embed div
+            ]
             try:
-                iframe_el = await page.query_selector(
-                    "iframe[src*='greenhouse'], #grnhse_app"
-                )
-                if iframe_el and await iframe_el.is_visible():
-                    await iframe_el.scroll_into_view_if_needed()
-                    await iframe_el.screenshot(path=path)
-                    captured = True
-                    logger.debug(f"Screenshot saved (form element): {path}")
+                for sel in form_selectors:
+                    el = await page.query_selector(sel)
+                    if el and await el.is_visible():
+                        await el.scroll_into_view_if_needed()
+                        await el.screenshot(path=path)
+                        captured = True
+                        logger.debug(f"Screenshot saved (form: {sel}): {path}")
+                        break
             except Exception:
                 pass
 

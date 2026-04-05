@@ -12,6 +12,7 @@ import {
   Check,
   ExternalLink,
   MessageSquareCheck,
+  Target,
 } from "lucide-react";
 import { StatusBadge } from "@/components/status-badge";
 import type { RunDetail } from "@/lib/types";
@@ -133,6 +134,54 @@ export function RunInfoCard({ run }: { run: RunDetail }) {
             )}
           </Field>
         </div>
+
+        {run.match_score != null && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                <Target className="h-3 w-3" />
+                Match Score
+              </div>
+              <span
+                className={`text-2xl font-bold tabular-nums ${
+                  run.match_score >= 85
+                    ? "text-emerald-400"
+                    : run.match_score >= 75
+                    ? "text-teal-400"
+                    : run.match_score >= 50
+                    ? "text-cyan-400"
+                    : run.match_score >= 35
+                    ? "text-amber-400"
+                    : "text-red-400"
+                }`}
+                style={{ fontFamily: "var(--font-heading)" }}
+              >
+                {run.match_score}%
+              </span>
+            </div>
+            <div className="h-2 rounded-full overflow-hidden bg-white/5">
+              <div
+                className={`h-full rounded-full transition-all duration-500 ${
+                  run.match_score >= 85
+                    ? "bg-emerald-500 shadow-[0_0_8px_rgba(52,211,153,0.4)]"
+                    : run.match_score >= 75
+                    ? "bg-teal-500 shadow-[0_0_8px_rgba(20,184,166,0.4)]"
+                    : run.match_score >= 50
+                    ? "bg-cyan-500 shadow-[0_0_8px_rgba(56,189,248,0.4)]"
+                    : run.match_score >= 35
+                    ? "bg-amber-500 shadow-[0_0_8px_rgba(251,191,36,0.4)]"
+                    : "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.4)]"
+                }`}
+                style={{ width: `${run.match_score}%` }}
+              />
+            </div>
+            {run.match_rationale && (
+              <p className="text-xs text-muted-foreground">
+                {run.match_rationale}
+              </p>
+            )}
+          </div>
+        )}
 
         {run.error_message && (
           <div className="flex gap-3 p-3 rounded-lg bg-red-500/10 border border-red-500/20 shadow-[0_0_12px_rgba(239,68,68,0.08)]">

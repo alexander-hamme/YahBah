@@ -10,6 +10,7 @@ import {
   Info,
   Laptop,
   Factory,
+  Target,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { JobPostingInfo } from "@/lib/types";
@@ -46,9 +47,11 @@ function Field({
 export function JobMetadataCard({
   jobPosting,
   jobUrl,
+  matchScore,
 }: {
   jobPosting: JobPostingInfo;
   jobUrl: string;
+  matchScore?: number | null;
 }) {
   const salary = formatSalary(jobPosting.salary_min, jobPosting.salary_max);
 
@@ -62,14 +65,11 @@ export function JobMetadataCard({
       </div>
       <div className="px-5 pb-5 space-y-4">
         <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-          <Field icon={<Building2 className="h-3 w-3" />} label="Company">
-            {jobPosting.company ?? "Unknown"}
-          </Field>
           <Field icon={<Briefcase className="h-3 w-3" />} label="Title">
             {jobPosting.title ?? "Untitled"}
           </Field>
-          <Field icon={<MapPin className="h-3 w-3" />} label="Location">
-            {jobPosting.location ?? "-"}
+          <Field icon={<Building2 className="h-3 w-3" />} label="Company">
+            {jobPosting.company ?? "Unknown"}
           </Field>
           <Field icon={<DollarSign className="h-3 w-3" />} label="Salary">
             {salary ? (
@@ -80,18 +80,9 @@ export function JobMetadataCard({
               "-"
             )}
           </Field>
-          {jobPosting.posted_date && (
-            <Field icon={<CalendarDays className="h-3 w-3" />} label="Posted">
-              {jobPosting.posted_date}
-            </Field>
-          )}
-        </div>
-        <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-          {jobPosting.work_model && (
-            <Field icon={<Laptop className="h-3 w-3" />} label="Flexibility">
-              {jobPosting.work_model}
-            </Field>
-          )}
+          <Field icon={<MapPin className="h-3 w-3" />} label="Location">
+            {jobPosting.location ?? "-"}
+          </Field>
           <Field icon={<ExternalLink className="h-3 w-3" />} label="Job URL">
             <a
               href={jobUrl}
@@ -103,29 +94,52 @@ export function JobMetadataCard({
               View posting
             </a>
           </Field>
+          <Field icon={<Laptop className="h-3 w-3" />} label="Flexibility">
+            {jobPosting.work_model ?? "-"}
+          </Field>
+          <Field icon={<Target className="h-3 w-3" />} label="Match">
+            {matchScore != null ? (
+              <span
+                className={`font-bold ${
+                  matchScore >= 85
+                    ? "text-emerald-400"
+                    : matchScore >= 75
+                    ? "text-teal-400"
+                    : matchScore >= 50
+                    ? "text-cyan-400"
+                    : matchScore >= 35
+                    ? "text-amber-400"
+                    : "text-red-400"
+                }`}
+              >
+                {matchScore}%
+              </span>
+            ) : (
+              "-"
+            )}
+          </Field>
+          <Field icon={<CalendarDays className="h-3 w-3" />} label="Posted">
+            {jobPosting.posted_date ?? "-"}
+          </Field>
         </div>
 
-        {(jobPosting.company_description || jobPosting.industry) && (
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                <Info className="h-3 w-3" />
-                About the Company
-              </div>
-              {jobPosting.industry && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-white/5 border border-white/10 text-muted-foreground">
-                  <Factory className="h-2.5 w-2.5" />
-                  {jobPosting.industry}
-                </span>
-              )}
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+              <Info className="h-3 w-3" />
+              About the Company
             </div>
-            {jobPosting.company_description && (
-              <p className="text-sm font-medium text-foreground/80">
-                {jobPosting.company_description}
-              </p>
+            {jobPosting.industry && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-white/5 border border-white/10 text-muted-foreground">
+                <Factory className="h-2.5 w-2.5" />
+                {jobPosting.industry}
+              </span>
             )}
           </div>
-        )}
+          <p className="text-sm font-medium text-foreground/80">
+            {jobPosting.company_description ?? "-"}
+          </p>
+        </div>
 
         {jobPosting.technologies && jobPosting.technologies.length > 0 && (
           <div className="space-y-1.5">

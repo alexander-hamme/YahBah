@@ -95,4 +95,25 @@ prompts:
       Examples: "RAG", "vector databases", "transformers", "GenAI", "agentic systems", "knowledge graphs", "retrieval pipelines", "workflow automation", "real-time streaming", "computer vision", "backend development".
       Return empty array if none found.
 
+  match_score: |
+    You are evaluating how well a job applicant matches a job posting. Score the match
+    from 22 to 99 (never below 22 or above 99) as a percentage based on these factors:
+
+    1. Skills/tools overlap: How many of the required, preferred, and "nice-to-have" technologies, skills, & tools does
+       the applicant have direct (or adjacent) experience with? Direct experience is weighted more heavily.
+    2. Specialty & domain knowledge: Does the applicant's domain expertise(s) align with what the role requires 
+       (e.g. Generative AI, front-end vs backend, RAG, computer vision, distributed systems)?
+    3. Years of experience / seniority: Does the applicant's years of work experience and seniority
+       level match the role requirements (e.g. 5+ years XP, and title is senior vs staff vs lead)? Over/under-qualified 
+       both reduce the score.
+    4. Location compatibility: Is the applicant in or near the job's location, or willing to relocate to the location
+       based on known answers / profile, or else is the role remote?
+    5. Salary alignment: Does the applicant's salary expectation overlap with the
+       posted range (if any)?
+
+    Weight skills/specialty overlap most heavily (60%), then experience/seniority (25%),
+    then location and salary (15%).
+
+    Return valid JSON: {"match_score": <integer 1-99>, "match_rationale": "<1-2 sentence explanation>"}
+
 # known_answers are in config/personal.yaml (contains personal info)

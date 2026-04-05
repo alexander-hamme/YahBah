@@ -26,40 +26,45 @@ async def activate_and_resolve_embed(page: Page) -> Page | Frame:
     """
     app_div = await page.query_selector("#grnhse_app")
     if not app_div:
-        # No #grnhse_app wrapper. Greenhouse has two embed patterns:
-        #
-        # 1. Iframe embed: form renders inside an iframe (older style)
-        # 2. DOM injection: Greenhouse script injects the form directly
-        #    into the host page DOM (newer style, e.g. Klaviyo).
-        #    Look for #application-form or .application--form on the parent.
-        #
-        # Check for DOM-injected form first (it's on the parent page),
-        # then fall back to iframe.
+        # No #grnhse_app wrapper. Find where the form fields actually live
+        # by checking parent page and all frames. Greenhouse has multiple
+        # embed patterns (iframe, DOM injection, etc.) — this handles all.
+        best, best_count = page, 0
 
-        dom_form = await page.query_selector(
-            "#application-form, .application--form, "
-            "form[action*='greenhouse']"
-        )
-        if dom_form:
-            logger.info("[embed] Greenhouse form injected directly into page DOM")
-            return page
+        # Check parent page for visible form fields
+        parent_count = await page.locator(
+            "input:not([type='hidden']):not([type='submit']):visible, "
+            "select:visible, textarea:visible"
+        ).count()
+        if parent_count > 0:
+            best, best_count = page, parent_count
+            logger.debug(f"[embed] Parent page has {parent_count} visible form fields")
 
+        # Check each frame
         for f in page.frames:
-            if "greenhouse" in (f.url or "") and f != page.main_frame:
-                # Check if the iframe actually has form fields
-                try:
-                    await f.wait_for_selector(
-                        "input:not([type='hidden']), select, textarea",
-                        state="visible",
-                        timeout=5_000,
-                    )
-                    logger.info(f"[embed] Greenhouse iframe with form fields: {f.url[:80]}")
-                    return f
-                except Exception:
-                    logger.debug(f"[embed] Greenhouse iframe has no form fields: {f.url[:80]}")
-                    continue
+            if f == page.main_frame:
+                continue
+            try:
+                count = await f.locator(
+                    "input:not([type='hidden']):not([type='submit']):visible, "
+                    "select:visible, textarea:visible"
+                ).count()
+                if count > best_count:
+                    best, best_count = f, count
+                    logger.debug(f"[embed] Frame {f.url[:60]} has {count} visible form fields")
+            except Exception:
+                continue
 
-        return page
+        if best != page:
+            logger.info(
+                f"[embed] Using iframe with {best_count} fields: {best.url[:80]}"
+            )
+        elif best_count > 0:
+            logger.info(f"[embed] Form fields on parent page ({best_count} fields)")
+        else:
+            logger.warning("[embed] No visible form fields found anywhere")
+
+        return best
 
     # Always click the Application tab to make the panel visible.
     # The Greenhouse embed script may create the iframe on page load,

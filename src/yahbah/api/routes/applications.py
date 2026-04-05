@@ -28,6 +28,7 @@ class ApplicationListItem(BaseModel):
     ats_type: str
     status: str
     current_state: str | None
+    match_score: int | None
     error_message: str | None
     created_at: str
     updated_at: str
@@ -96,6 +97,8 @@ async def list_applications(
         "status_desc": ApplicationRun.status.desc(),
         "current_state_asc": ApplicationRun.current_state.asc(),
         "current_state_desc": ApplicationRun.current_state.desc(),
+        "match_score_asc": ApplicationRun.match_score.asc(),
+        "match_score_desc": ApplicationRun.match_score.desc(),
     }
     base = base.order_by(sort_map.get(sort, ApplicationRun.created_at.desc()))
 
@@ -117,6 +120,7 @@ async def list_applications(
                 ats_type=r.job_posting.ats_type if r.job_posting else "unknown",
                 status=r.status,
                 current_state=r.current_state,
+                match_score=r.match_score,
                 error_message=r.error_message,
                 created_at=r.created_at.isoformat(),
                 updated_at=r.updated_at.isoformat(),

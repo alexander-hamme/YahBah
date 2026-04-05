@@ -55,6 +55,11 @@ class _FallbackAnswer(BaseModel):
     answer: str
 
 
+class _MatchScoreResponse(BaseModel):
+    match_score: int
+    match_rationale: str
+
+
 def _known_answers() -> dict[str, str]:
     """Load known answers from config/prompts.yaml."""
     return load_prompts_config()["known_answers"]
@@ -250,3 +255,27 @@ education:
             response_model=_FallbackAnswer,
         )
         return result.answer
+
+    async def compute_match_score(
+        self,
+        profile_text: str,
+        job_description: str,
+    ) -> tuple[int, str]:
+        """Score how well the applicant matches the job (22-99%)."""
+        known = _known_answers()
+        salary_info = known.get("salary_expectation", "Not specified")
+
+        user_prompt = (
+            f"APPLICANT PROFILE:\n{profile_text}\n\n"
+            f"APPLICANT SALARY EXPECTATION: {salary_info}\n\n"
+            f"JOB DESCRIPTION:\n{job_description}"
+        )
+        prompt = load_prompts_config()["prompts"]["match_score"]
+        result = await self._client.generate_structured(
+            system_prompt=prompt,
+            user_prompt=user_prompt,
+            response_model=_MatchScoreResponse,
+        )
+        # Clamp to 22-99
+        score = max(22, min(99, result.match_score))
+        return score, result.match_rationale

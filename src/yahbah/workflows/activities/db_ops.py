@@ -2,9 +2,13 @@
 DB-only activities — thin wrappers that persist state/artifacts.
 These are fast and don't do any I/O beyond the database.
 """
+import re
+import socket
 import uuid
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
+from loguru import logger
 from sqlalchemy import select
 from temporalio import activity
 
@@ -12,6 +16,55 @@ from yahbah.config import settings
 from yahbah.db.session import AsyncSessionLocal
 from yahbah.db.models import ApplicationRun, ApplicationArtifact, JobPosting
 from yahbah.schemas import DuplicateCheckInput, DuplicateCheckOutput
+
+
+def _derive_company_website(url: str) -> str | None:
+    """Best-effort domain derivation from a job posting URL.
+
+    Tries to extract the company's website domain from the URL structure,
+    then validates it resolves via DNS before returning.
+    """
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.strip("/")
+
+    domain = None
+
+    # boards.greenhouse.io/{slug}/jobs/... or job-boards.greenhouse.io/...
+    if "greenhouse.io" in host:
+        parts = path.split("/")
+        if parts and parts[0]:
+            slug = parts[0]
+            # Common slug -> domain (try .com first, then .io, .co)
+            domain = f"{slug}.com"
+    # careers.{company}.com, jobs.{company}.com, www.{company}.com
+    elif re.match(r"^(careers|jobs|www|apply|hire)\.", host):
+        domain = re.sub(r"^(careers|jobs|www|apply|hire)\.", "", host)
+    # {company}.com/careers/... or {company}.com/jobs/...
+    elif host and not any(x in host for x in ["linkedin", "indeed", "glassdoor", "lever"]):
+        domain = host
+
+    if not domain:
+        return None
+
+    # Validate via DNS
+    try:
+        socket.getaddrinfo(domain, None, socket.AF_INET, socket.SOCK_STREAM)
+        logger.debug(f"[derive_website] {url[:60]} -> {domain} (DNS OK)")
+        return domain
+    except socket.gaierror:
+        # Try .io and .co as fallbacks for greenhouse slugs
+        if "greenhouse.io" in host:
+            for suffix in [".io", ".co", ".ai", ".dev"]:
+                alt = domain.rsplit(".", 1)[0] + suffix
+                try:
+                    socket.getaddrinfo(alt, None, socket.AF_INET, socket.SOCK_STREAM)
+                    logger.debug(f"[derive_website] {url[:60]} -> {alt} (DNS OK, fallback)")
+                    return alt
+                except socket.gaierror:
+                    continue
+        logger.debug(f"[derive_website] {url[:60]} -> {domain} (DNS failed)")
+        return None
 
 
 @activity.defn
@@ -134,6 +187,13 @@ async def check_duplicate_activity(input_: DuplicateCheckInput) -> DuplicateChec
             posting.work_model = input_.work_model
         if input_.posted_date and not posting.posted_date:
             posting.posted_date = input_.posted_date
+
+        # Fallback: derive company_website from URL if LLM didn't extract it
+        if not posting.company_website:
+            derived = _derive_company_website(posting.url)
+            if derived:
+                posting.company_website = derived
+
         await session.commit()
 
         window_start = datetime.now(timezone.utc) - timedelta(days=settings.duplicate_window_days)

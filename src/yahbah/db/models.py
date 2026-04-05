@@ -76,6 +76,8 @@ class ApplicationRun(Base):
     account_email: Mapped[str | None] = mapped_column(String)
     account_password: Mapped[str | None] = mapped_column(String)
     error_message: Mapped[str | None] = mapped_column(Text)
+    match_score: Mapped[int | None] = mapped_column()
+    match_rationale: Mapped[str | None] = mapped_column(Text)
     tracking_url: Mapped[str | None] = mapped_column(String)
     confirmation_html: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(

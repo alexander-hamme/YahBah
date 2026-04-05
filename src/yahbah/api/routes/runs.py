@@ -51,6 +51,8 @@ class RunResponse(BaseModel):
     temporal_workflow_id: str | None
     account_email: str | None
     error_message: str | None
+    match_score: int | None
+    match_rationale: str | None
     tracking_url: str | None
     confirmation_html: str | None
     created_at: str
@@ -111,6 +113,8 @@ async def get_run(
         temporal_workflow_id=run.temporal_workflow_id,
         account_email=run.account_email,
         error_message=run.error_message,
+        match_score=run.match_score,
+        match_rationale=run.match_rationale,
         tracking_url=run.tracking_url,
         confirmation_html=run.confirmation_html,
         created_at=run.created_at.isoformat(),

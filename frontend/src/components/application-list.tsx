@@ -111,6 +111,7 @@ export function ApplicationList({
             <SortableColumn label="Role" sortKey="title" currentSort={sort} onSort={onSort} />
             <SortableColumn label="Status" sortKey="status" currentSort={sort} onSort={onSort} />
             <SortableColumn label="Current Step" sortKey="current_state" currentSort={sort} onSort={onSort} />
+            <SortableColumn label="Match" sortKey="match_score" currentSort={sort} onSort={onSort} />
             <SortableColumn label="Created" sortKey="created_at" currentSort={sort} onSort={onSort} />
             <SortableColumn label="Updated" sortKey="updated_at" currentSort={sort} onSort={onSort} />
             <TableHead className="w-24 sticky right-0 bg-[#0c1018]" />
@@ -151,6 +152,27 @@ export function ApplicationList({
               </TableCell>
               <TableCell className="text-sm text-muted-foreground">
                 {formatStep(item.current_state)}
+              </TableCell>
+              <TableCell className="text-sm">
+                {item.match_score != null ? (
+                  <span
+                    className={`font-bold tabular-nums ${
+                      item.match_score >= 85
+                        ? "text-emerald-400"
+                        : item.match_score >= 75
+                        ? "text-teal-400"
+                        : item.match_score >= 50
+                        ? "text-cyan-400"
+                        : item.match_score >= 35
+                        ? "text-amber-400"
+                        : "text-red-400"
+                    }`}
+                  >
+                    {item.match_score}%
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">-</span>
+                )}
               </TableCell>
               <TableCell
                 className="text-sm text-muted-foreground"
