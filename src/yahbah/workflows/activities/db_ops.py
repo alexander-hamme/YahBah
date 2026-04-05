@@ -185,6 +185,10 @@ async def check_duplicate_activity(input_: DuplicateCheckInput) -> DuplicateChec
             posting.company_description = input_.company_description
         if input_.work_model and not posting.work_model:
             posting.work_model = input_.work_model
+        if input_.seniority_level and not posting.seniority_level:
+            posting.seniority_level = input_.seniority_level
+        if input_.experience_required and not posting.experience_required:
+            posting.experience_required = input_.experience_required
         if input_.posted_date and not posting.posted_date:
             posting.posted_date = input_.posted_date
 

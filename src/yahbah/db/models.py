@@ -43,6 +43,8 @@ class JobPosting(Base):
     industry: Mapped[str | None] = mapped_column(String)
     company_description: Mapped[str | None] = mapped_column(String)
     work_model: Mapped[str | None] = mapped_column(String)
+    seniority_level: Mapped[str | None] = mapped_column(String)
+    experience_required: Mapped[str | None] = mapped_column(String)
     posted_date: Mapped[str | None] = mapped_column(String)
     ats_type: Mapped[str] = mapped_column(String, default="greenhouse")
     created_at: Mapped[datetime] = mapped_column(

@@ -171,6 +171,8 @@ class _JobMetadata(BaseModel):
     industry: str | None = None
     company_description: str | None = None
     work_model: str | None = None
+    seniority_level: str | None = None
+    experience_required: str | None = None
     posted_date: str | None = None
 
 
@@ -240,6 +242,8 @@ async def extract_job_metadata_activity(input: JobMetadataInput) -> JobMetadataO
         industry=metadata.industry,
         company_description=metadata.company_description,
         work_model=metadata.work_model,
+        seniority_level=metadata.seniority_level,
+        experience_required=metadata.experience_required,
         posted_date=metadata.posted_date,
         technologies=tech.technologies,
         specialties=tech.specialties,

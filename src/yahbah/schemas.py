@@ -62,6 +62,7 @@ class BrowserExtractOutput:
     job_title: str | None = None
     job_company: str | None = None
     job_location: str | None = None
+    posted_date: str | None = None
 
 
 @dataclass
@@ -82,6 +83,8 @@ class JobMetadataOutput:
     industry: str | None = None
     company_description: str | None = None
     work_model: str | None = None
+    seniority_level: str | None = None
+    experience_required: str | None = None
     posted_date: str | None = None
     technologies: list[str] | None = None
     specialties: list[str] | None = None
@@ -101,6 +104,8 @@ class DuplicateCheckInput:
     industry: str | None = None
     company_description: str | None = None
     work_model: str | None = None
+    seniority_level: str | None = None
+    experience_required: str | None = None
     posted_date: str | None = None
     technologies: list[str] | None = None
     specialties: list[str] | None = None

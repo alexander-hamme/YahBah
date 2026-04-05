@@ -287,6 +287,7 @@ export function ArtifactViewer({
     : others.filter(
         (a) =>
           a.artifact_type !== "submitted_values" &&
+          a.artifact_type !== "form_schema" &&
           a.artifact_type !== "field_mappings"
       );
 

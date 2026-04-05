@@ -76,6 +76,16 @@ export function retryRun(
   return fetchJSON(`${BASE}/runs/${id}/retry`, { method: "POST" });
 }
 
+export function getRuntimeSettings(): Promise<{ testing_mode: boolean }> {
+  return fetchJSON(`${BASE}/settings`);
+}
+
+export function setTestingMode(enabled: boolean): Promise<{ testing_mode: boolean }> {
+  return fetchJSON(`${BASE}/settings/testing_mode?value=${enabled}`, {
+    method: "PUT",
+  });
+}
+
 export function artifactDownloadUrl(
   runId: string,
   artifactId: string

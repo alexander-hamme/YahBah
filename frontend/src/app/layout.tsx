@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { DM_Sans, Sora, Bungee, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import { Providers } from "@/components/providers";
+import { TestingToggle } from "@/components/testing-toggle";
 import "./globals.css";
 
 const dmSans = DM_Sans({
@@ -61,6 +62,9 @@ export default function RootLayout({
                   Applications
                 </Link>
               </nav>
+              <div className="ml-auto">
+                <TestingToggle />
+              </div>
             </div>
             <div className="h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
           </header>

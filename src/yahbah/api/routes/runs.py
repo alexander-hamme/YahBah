@@ -37,6 +37,8 @@ class JobPostingInfo(BaseModel):
     industry: str | None
     company_description: str | None
     work_model: str | None
+    seniority_level: str | None
+    experience_required: str | None
     posted_date: str | None
     technologies: list[str] | None
     specialties: list[str] | None
@@ -130,6 +132,8 @@ async def get_run(
             industry=jp.industry,
             company_description=jp.company_description,
             work_model=jp.work_model,
+            seniority_level=jp.seniority_level,
+            experience_required=jp.experience_required,
             posted_date=jp.posted_date,
             technologies=jp.technologies,
             specialties=jp.specialties,

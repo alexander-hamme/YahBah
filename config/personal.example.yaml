@@ -73,9 +73,13 @@ profile:
         Built and deployed production ML pipelines.
         Led migration to microservices architecture.
   education:
-    - degree: "B.S. Computer Science"
-      institution: "State University"
-      year: "2019"
+    - school: "State University"
+      degree_type: "Bachelor's Degree"
+      discipline: "Computer Science"
+      start_month: "September"
+      start_year: "2015"
+      end_month: "May"
+      end_year: "2019"
       gpa: "3.7"
   bio: >-
     Software engineer with 5 years of experience building production systems.

@@ -107,7 +107,7 @@ export default function ApplicationDetailPage({
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {run.job_posting && (
-          <JobMetadataCard jobPosting={run.job_posting} jobUrl={run.job_url} matchScore={run.match_score} />
+          <JobMetadataCard jobPosting={run.job_posting} jobUrl={run.job_url} matchScore={run.match_score} matchRationale={run.match_rationale} />
         )}
         <RunInfoCard run={run} />
       </div>

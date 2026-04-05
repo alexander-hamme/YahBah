@@ -65,8 +65,29 @@ def _known_answers() -> dict[str, str]:
     return load_prompts_config()["known_answers"]
 
 
-def _build_system_prompt() -> str:
-    known = _known_answers()
+def _education_answers(profile: "ApplicantProfile") -> dict[str, str]:
+    """Build education known-answer keys from the profile's most recent education entry."""
+    if not profile.education:
+        return {}
+    edu = profile.education[0]
+    answers: dict[str, str] = {}
+    for key in ("school", "degree_type", "discipline",
+                "start_month", "start_year", "end_month", "end_year", "gpa"):
+        val = edu.get(key)
+        if val:
+            answers[f"education_{key}"] = str(val)
+    return answers
+
+
+def _all_known_answers(profile: "ApplicantProfile") -> dict[str, str]:
+    """Merge base known answers with education-derived keys."""
+    answers = dict(_known_answers())
+    answers.update(_education_answers(profile))
+    return answers
+
+
+def _build_system_prompt(profile: "ApplicantProfile") -> str:
+    known = _all_known_answers(profile)
     known_keys_block = "\n".join(
         f'  - "{key}": use this for questions about {key.replace("_", " ")}'
         for key in known
@@ -108,10 +129,11 @@ class FieldMapper:
         )
 
         edu_lines = "\n".join(
-            "  - {degree} from {institution} ({year}){gpa}".format(
-                degree=e.get("degree", ""),
-                institution=e.get("institution", ""),
-                year=e.get("year", ""),
+            "  - {degree_type} in {discipline} from {school} ({end_year}){gpa}".format(
+                degree_type=e.get("degree_type", e.get("degree", "")),
+                discipline=e.get("discipline", ""),
+                school=e.get("school", e.get("institution", "")),
+                end_year=e.get("end_year", e.get("year", "")),
                 gpa=f", GPA: {e['gpa']}" if e.get("gpa") else "",
             )
             for e in profile.education
@@ -153,8 +175,10 @@ education:
 
         user_prompt = f"FORM FIELDS:\n{fields_text}\n\nAPPLICANT PROFILE:\n{profile_text}"
 
+        all_known = _all_known_answers(profile)
+
         response = await self._client.generate_structured(
-            system_prompt=_build_system_prompt(),
+            system_prompt=_build_system_prompt(profile),
             user_prompt=user_prompt,
             response_model=_FieldMappingResponse,
         )
@@ -183,13 +207,13 @@ education:
             elif item.mapped_to == "custom_question":
                 value = await self._fallback_answer(item.form_label, profile_text, job_description, mappings)
             else:
-                value = _known_answers().get(item.mapped_to, item.value)
+                value = all_known.get(item.mapped_to, item.value)
 
             # Confidence gate for required fields (known-answers always pass)
             if (
                 item.form_label in required_labels
                 and item.confidence < settings.min_field_confidence
-                and item.mapped_to not in _known_answers()
+                and item.mapped_to not in all_known
                 and item.mapped_to not in ("resume", "cover_letter", "custom_question")
             ):
                 raise LLMError(

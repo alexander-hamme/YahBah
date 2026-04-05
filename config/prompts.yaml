@@ -77,6 +77,8 @@ prompts:
     - "industry": the company's industry or sector (e.g. "Cloud Infrastructure", "FinTech", "Healthcare SaaS", "E-commerce", "Defense & Aerospace"). Keep it short (2-4 words). Use null if unclear.
     - "company_description": a single sentence describing what the company does, based on context in the posting. e.g. "Cloud-based manufacturing operations platform" or "Open-source observability and monitoring company". Use null if unclear.
     - "work_model": the work arrangement — one of "Remote", "Hybrid", or "On-site". Infer from the posting. Use null if unclear.
+    - "seniority_level": the seniority level of the role — one of "Junior", "Mid", "Senior", "Staff", "Lead", "Principal", "Director". Infer from the job title. Use null if unclear.
+    - "experience_required": years of experience required as stated in the posting (e.g. "5+", "5-7", "8+", "3-5"). Use null if not stated.
     - "posted_date": the job posting date in ISO format (YYYY-MM-DD) if stated in the posting. Use null if not found.
     If salary is given as hourly, multiply by 2080 to annualize. If a single number is given, use it for both min and max.
 

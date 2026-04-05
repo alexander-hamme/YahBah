@@ -41,6 +41,8 @@ export interface JobPostingInfo {
   industry: string | null;
   company_description: string | null;
   work_model: string | null;
+  seniority_level: string | null;
+  experience_required: string | null;
   posted_date: string | null;
   technologies: string[] | null;
   specialties: string[] | null;

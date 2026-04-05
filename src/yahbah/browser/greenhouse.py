@@ -6,6 +6,10 @@ Auth: detects login/signup walls and creates an account with generated credentia
 Filling: takes FieldMappings and applies them via Playwright locators.
 Select fields use an LLM fallback to pick the closest option when exact match fails.
 """
+import re
+from datetime import datetime
+
+import httpx
 from loguru import logger
 from playwright.async_api import Frame, Page
 from pydantic import BaseModel
@@ -261,7 +265,6 @@ class GreenhouseExtractor:
           - Embedded Greenhouse forms: pages with #grnhse_app or a Greenhouse
             embed script (e.g. Airbnb's /positions/<id> tab UI)
         """
-        import re
         url = self._page.url
         if "error=true" in url:
             raise ValueError(f"Job posting no longer available (redirected to: {url})")
@@ -518,8 +521,6 @@ class GreenhouseExtractor:
         on embedded career pages where title/company/location live outside
         the Greenhouse iframe.
         """
-        import re
-
         page = self._root_page
         canonical_url = page.url
 
@@ -561,6 +562,125 @@ class GreenhouseExtractor:
                 company = company or m.group(2).strip()
 
         return title, company, location, canonical_url
+
+    async def extract_posted_date(self) -> str | None:
+        """Extract the job posting date from structured data on the page.
+
+        Checks (in priority order):
+        1. JSON-LD JobPosting schema (datePosted field)
+        2. HTML meta tags (article:published_time, date, etc.)
+        3. <time> elements with datetime attribute
+        """
+        page = self._root_page
+
+        date = await page.evaluate("""() => {
+            // 1. JSON-LD structured data
+            const ldScripts = document.querySelectorAll('script[type="application/ld+json"]');
+            for (const script of ldScripts) {
+                try {
+                    let data = JSON.parse(script.textContent);
+                    // Handle @graph arrays
+                    if (data['@graph']) data = data['@graph'];
+                    const items = Array.isArray(data) ? data : [data];
+                    for (const item of items) {
+                        if (item.datePosted) return item.datePosted;
+                        if (item['@type'] === 'JobPosting' && item.datePosted) return item.datePosted;
+                    }
+                } catch {}
+            }
+
+            // 2. Meta tags
+            const metaSelectors = [
+                'meta[property="article:published_time"]',
+                'meta[name="date"]',
+                'meta[name="publish-date"]',
+                'meta[name="DC.date"]',
+                'meta[property="og:article:published_time"]',
+            ];
+            for (const sel of metaSelectors) {
+                const el = document.querySelector(sel);
+                if (el) {
+                    const content = el.getAttribute('content');
+                    if (content) return content;
+                }
+            }
+
+            // 3. <time> elements
+            const timeEl = document.querySelector('time[datetime]');
+            if (timeEl) return timeEl.getAttribute('datetime');
+
+            return null;
+        }""")
+
+        if not date:
+            # 4. Greenhouse public API fallback
+            url = self._root_page.url
+            # Try multiple URL patterns to find slug + job_id
+            slug, job_id = None, None
+
+            # Pattern 1: boards.greenhouse.io/{slug}/jobs/{id}
+            m = re.search(r"greenhouse\.io/(\w+)/jobs/(\d+)", url)
+            if m:
+                slug, job_id = m.group(1), m.group(2)
+
+            # Pattern 2: embedded ?for={slug}&token={id}
+            if not slug:
+                m = re.search(r"for=(\w+).*?token=(\d+)", url)
+                if m:
+                    slug, job_id = m.group(1), m.group(2)
+
+            # Pattern 3: gh_jid= param on parent URL, slug from iframe
+            if not slug:
+                m = re.search(r"gh_jid=(\d+)", url)
+                if m:
+                    job_id = m.group(1)
+                    # Get slug from greenhouse iframe URL
+                    for f in self._root_page.frames:
+                        fm = re.search(r"for=(\w+)", f.url or "")
+                        if fm:
+                            slug = fm.group(1)
+                            break
+
+            if slug and job_id:
+                try:
+                    async with httpx.AsyncClient(timeout=5.0) as client:
+                        resp = await client.get(
+                            f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs/{job_id}"
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            date = data.get("updated_at")
+                            logger.debug(f"[posted_date] Greenhouse API: {date}")
+                except Exception:
+                    pass
+
+        if not date:
+            return None
+
+        # Parse and normalize to YYYY-MM-DD
+        date = date.strip()
+        for fmt in (
+            "%Y-%m-%dT%H:%M:%S%z",      # 2026-04-03T14:32:21-04:00
+            "%Y-%m-%dT%H:%M:%S.%f%z",    # with microseconds
+            "%Y-%m-%dT%H:%M:%S",          # no timezone
+            "%Y-%m-%d",                    # already date-only
+            "%B %d, %Y",                   # April 3, 2026
+            "%b %d, %Y",                   # Apr 3, 2026
+            "%m/%d/%Y",                    # 04/03/2026
+            "%d/%m/%Y",                    # 03/04/2026
+        ):
+            try:
+                return datetime.strptime(date, fmt).strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+
+        # Last resort: dateutil if available
+        try:
+            from dateutil.parser import parse as dateutil_parse
+            return dateutil_parse(date).strftime("%Y-%m-%d")
+        except Exception:
+            logger.debug(f"[posted_date] Could not parse date: {date!r}")
+            return None
 
 
 class GreenhouseFiller:
@@ -673,6 +793,12 @@ class GreenhouseFiller:
                 await self._page.wait_for_load_state("domcontentloaded", timeout=2_000)
             except Exception:
                 pass
+
+        # ── Fill additional education entries ─────────────────────────────────────
+        # If the profile has multiple education entries and the form has an
+        # "Add another" button in the education section, click it and fill
+        # subsequent entries directly by their indexed IDs.
+        await self._fill_additional_education(submitted_values)
 
         # ── Auto-check any dynamically-revealed required checkboxes ─────────────
         # Greenhouse injects consent checkboxes (e.g. GDPR demographic consent)
@@ -844,7 +970,6 @@ class GreenhouseFiller:
             # For phone inputs inside intl-tel-input, strip the country code
             # prefix — the widget manages the country code via its own dropdown.
             if form_field and form_field.field_type == "tel":
-                import re
                 value = re.sub(r"^\+\d{1,3}[-.\s]?", "", value)
             await locator.fill(value, timeout=self._LOCATE_TIMEOUT)
             printable = value if len(value) <= 40 else f"{value[:40]}–"
@@ -1104,6 +1229,103 @@ class GreenhouseFiller:
         logger.debug("[upload] Trying set_input_files directly")
         await locator.set_input_files(file_path, timeout=self._UPLOAD_TIMEOUT)
         logger.debug(f"[upload] set_input_files succeeded: {file_path}")
+
+    async def _fill_additional_education(self, submitted_values: list[dict]) -> None:
+        """Fill additional education entries beyond the first one.
+
+        Greenhouse education sections use indexed field IDs (school--0, school--1, etc.)
+        and an "Add another" button to create new entry rows. We fill index 0 via the
+        normal field mapper, then directly fill subsequent entries here.
+        """
+        from yahbah.config import load_prompts_config
+
+        education = load_prompts_config().get("profile", {}).get("education", [])
+        if len(education) < 2:
+            return
+
+        # Check if there's an "Add another" button in an education section
+        add_btn = self._page.locator(
+            ".education--container .add-another-button, "
+            "button.add-another-button"
+        ).first
+        try:
+            if await add_btn.count() == 0 or not await add_btn.is_visible():
+                return
+        except Exception:
+            return
+
+        edu_field_keys = [
+            ("school", "school--{idx}"),
+            ("degree_type", "degree--{idx}"),
+            ("discipline", "discipline--{idx}"),
+            ("start_month", "start-month--{idx}"),
+            ("start_year", "start-year--{idx}"),
+            ("end_month", "end-month--{idx}"),
+            ("end_year", "end-year--{idx}"),
+        ]
+
+        for i, edu in enumerate(education[1:], start=1):
+            # Click "Add another" to create the new entry fields
+            try:
+                await add_btn.click()
+                logger.info(f"[education] Clicked 'Add another' for entry {i}")
+            except Exception as exc:
+                logger.warning(f"[education] Failed to click 'Add another': {exc}")
+                break
+
+            # Wait for the new fields to appear
+            new_field_id = f"school--{i}"
+            try:
+                await self._page.wait_for_selector(
+                    f"#{new_field_id}, [id='{new_field_id}']",
+                    state="visible",
+                    timeout=5_000,
+                )
+            except Exception:
+                logger.warning(
+                    f"[education] Fields for entry {i} didn't appear after 5s — "
+                    f"falling back to most recent education only"
+                )
+                break
+
+            # Fill each field for this entry
+            for yaml_key, id_template in edu_field_keys:
+                value = edu.get(yaml_key)
+                if not value:
+                    continue
+                value = str(value)
+                field_id = id_template.format(idx=i)
+
+                try:
+                    locator = self._page.locator(f"#{field_id}")
+                    if await locator.count() == 0:
+                        continue
+
+                    # Check if it's a combobox/select (has role=combobox)
+                    is_combobox = await locator.evaluate(
+                        "el => el.getAttribute('role') === 'combobox' || "
+                        "el.getAttribute('aria-autocomplete') !== null"
+                    )
+
+                    if is_combobox:
+                        label_text = yaml_key.replace("_", " ").title()
+                        await self._select_best_option(
+                            locator, f"{label_text} (entry {i})", value, required=False
+                        )
+                    else:
+                        await locator.fill(value, timeout=self._LOCATE_TIMEOUT)
+
+                    submitted_values.append({
+                        "form_label": f"{yaml_key} (education {i + 1})",
+                        "mapped_to": f"education_{yaml_key}_{i}",
+                        "value": value,
+                    })
+                    logger.debug(f"[education] Filled {field_id} = {value[:30]}")
+                except Exception as exc:
+                    logger.warning(f"[education] Failed to fill {field_id}: {exc}")
+
+            # Brief settle for React re-render
+            await self._page.wait_for_timeout(500)
 
     async def _resolve_locator(self, label: str, form_field: FormField | None):
         """

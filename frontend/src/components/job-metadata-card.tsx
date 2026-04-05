@@ -11,9 +11,27 @@ import {
   Laptop,
   Factory,
   Target,
+  Award,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { JobPostingInfo } from "@/lib/types";
+
+function formatPostedDate(iso: string | null): string {
+  if (!iso) return "-";
+  const d = new Date(iso + "T00:00:00");
+  const day = d.getDate();
+  const suffix =
+    day === 1 || day === 21 || day === 31
+      ? "st"
+      : day === 2 || day === 22
+      ? "nd"
+      : day === 3 || day === 23
+      ? "rd"
+      : "th";
+  const month = d.toLocaleDateString("en-US", { month: "short" });
+  const year = d.getFullYear();
+  return `${month} ${day}${suffix}, ${year}`;
+}
 
 function formatSalary(min: number | null, max: number | null): string | null {
   if (!min && !max) return null;
@@ -48,10 +66,12 @@ export function JobMetadataCard({
   jobPosting,
   jobUrl,
   matchScore,
+  matchRationale,
 }: {
   jobPosting: JobPostingInfo;
   jobUrl: string;
   matchScore?: number | null;
+  matchRationale?: string | null;
 }) {
   const salary = formatSalary(jobPosting.salary_min, jobPosting.salary_max);
 
@@ -97,29 +117,22 @@ export function JobMetadataCard({
           <Field icon={<Laptop className="h-3 w-3" />} label="Flexibility">
             {jobPosting.work_model ?? "-"}
           </Field>
-          <Field icon={<Target className="h-3 w-3" />} label="Match">
-            {matchScore != null ? (
-              <span
-                className={`font-bold ${
-                  matchScore >= 85
-                    ? "text-emerald-400"
-                    : matchScore >= 75
-                    ? "text-teal-400"
-                    : matchScore >= 50
-                    ? "text-cyan-400"
-                    : matchScore >= 35
-                    ? "text-amber-400"
-                    : "text-red-400"
-                }`}
-              >
-                {matchScore}%
+          <Field icon={<Award className="h-3 w-3" />} label="Seniority">
+            {jobPosting.seniority_level || jobPosting.experience_required ? (
+              <span>
+                {jobPosting.seniority_level ?? "-"}
+                {jobPosting.experience_required && (
+                  <span className="text-muted-foreground ml-1">
+                    ({jobPosting.experience_required} yrs)
+                  </span>
+                )}
               </span>
             ) : (
               "-"
             )}
           </Field>
           <Field icon={<CalendarDays className="h-3 w-3" />} label="Posted">
-            {jobPosting.posted_date ?? "-"}
+            {formatPostedDate(jobPosting.posted_date)}
           </Field>
         </div>
 
@@ -140,6 +153,54 @@ export function JobMetadataCard({
             {jobPosting.company_description ?? "-"}
           </p>
         </div>
+
+        {matchScore != null && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                <Target className="h-3 w-3" />
+                Match Score
+              </div>
+              <span
+                className={`text-2xl font-bold tabular-nums ${
+                  matchScore >= 85
+                    ? "text-emerald-400"
+                    : matchScore >= 75
+                    ? "text-teal-400"
+                    : matchScore >= 50
+                    ? "text-cyan-400"
+                    : matchScore >= 35
+                    ? "text-amber-400"
+                    : "text-red-400"
+                }`}
+                style={{ fontFamily: "var(--font-heading)" }}
+              >
+                {matchScore}%
+              </span>
+            </div>
+            <div className="h-2 rounded-full overflow-hidden bg-white/5">
+              <div
+                className={`h-full rounded-full transition-all duration-500 ${
+                  matchScore >= 85
+                    ? "bg-emerald-500 shadow-[0_0_8px_rgba(52,211,153,0.4)]"
+                    : matchScore >= 75
+                    ? "bg-teal-500 shadow-[0_0_8px_rgba(20,184,166,0.4)]"
+                    : matchScore >= 50
+                    ? "bg-cyan-500 shadow-[0_0_8px_rgba(56,189,248,0.4)]"
+                    : matchScore >= 35
+                    ? "bg-amber-500 shadow-[0_0_8px_rgba(251,191,36,0.4)]"
+                    : "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.4)]"
+                }`}
+                style={{ width: `${matchScore}%` }}
+              />
+            </div>
+            {matchRationale && (
+              <p className="text-xs text-muted-foreground">
+                {matchRationale}
+              </p>
+            )}
+          </div>
+        )}
 
         {jobPosting.technologies && jobPosting.technologies.length > 0 && (
           <div className="space-y-1.5">

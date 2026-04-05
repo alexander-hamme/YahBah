@@ -48,6 +48,40 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
+import json as _json
+import asyncio as _asyncio
+
+_SETTINGS_PATH = Path("config/settings.json")
+
+
+def _read_settings_sync() -> dict:
+    try:
+        with open(_SETTINGS_PATH) as f:
+            return _json.load(f)
+    except (FileNotFoundError, _json.JSONDecodeError):
+        return {"testing_mode": False}
+
+
+def _write_settings_sync(data: dict) -> None:
+    with open(_SETTINGS_PATH, "w") as f:
+        _json.dump(data, f, indent=2)
+
+
+async def get_runtime_settings() -> dict:
+    """Read runtime settings (async-safe, always fresh)."""
+    return await _asyncio.to_thread(_read_settings_sync)
+
+
+async def set_runtime_setting(key: str, value) -> dict:
+    """Update a single runtime setting and return the full settings dict."""
+    def _update():
+        settings_dict = _read_settings_sync()
+        settings_dict[key] = value
+        _write_settings_sync(settings_dict)
+        return settings_dict
+    return await _asyncio.to_thread(_update)
+
+
 @lru_cache
 def load_prompts_config() -> dict:
     """Load prompts from prompts.yaml, merge with personal.yaml (cover_letter + known_answers).

@@ -127,9 +127,10 @@ async def browser_extract_activity(input: BrowserExtractInput) -> BrowserExtract
     )
     job_title, job_company, job_location, raw_canonical = await extractor.extract_job_metadata()
     canonical_url = ats_normalize(strip_tracking(raw_canonical))
+    posted_date = await extractor.extract_posted_date()
     activity.logger.info(
         f"[extract] Job metadata — title={job_title!r} company={job_company!r} "
-        f"location={job_location!r} canonical={canonical_url}"
+        f"location={job_location!r} canonical={canonical_url} posted={posted_date}"
     )
 
     # Screenshot after extraction
@@ -158,6 +159,7 @@ async def browser_extract_activity(input: BrowserExtractInput) -> BrowserExtract
         job_title=job_title,
         job_company=job_company,
         job_location=job_location,
+        posted_date=posted_date,
     )
 
 
@@ -245,6 +247,19 @@ async def browser_fill_and_submit_activity(input: BrowserFillInput) -> BrowserFi
         before_submit_path,
         {"step": "before_submit"},
     )
+
+    # ── Testing mode check ─────────────────────────────────────────────────
+    from yahbah.config import get_runtime_settings
+    runtime = await get_runtime_settings()
+    if runtime.get("testing_mode"):
+        activity.logger.info("[fill] TESTING MODE — skipping submit")
+        await registry.close_page(input.run_id)
+        return BrowserFillOutput(
+            confirmation_url=None,
+            confirmation_text="TESTING MODE — submission skipped",
+            confirmation_html="<p><strong>Testing mode</strong> — form was filled but not submitted.</p>",
+            tracking_url=None,
+        )
 
     # Resolve the email used for this application — needed if Greenhouse
     # triggers an email verification challenge.  Prefer the account alias

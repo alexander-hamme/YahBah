@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from temporalio.client import Client as TemporalClient
 
-from yahbah.config import settings
+from yahbah.config import settings, get_runtime_settings, set_runtime_setting
 from yahbah.api.routes import applications, jobs, runs
 
 
@@ -42,3 +42,13 @@ app.include_router(runs.router, prefix="/runs", tags=["runs"])
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/settings")
+async def get_settings() -> dict:
+    return await get_runtime_settings()
+
+
+@app.put("/settings/{key}")
+async def update_setting(key: str, value: bool) -> dict:
+    return await set_runtime_setting(key, value)
