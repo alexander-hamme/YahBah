@@ -1,0 +1,18 @@
+{
+  "testing_mode": true,
+  "gmail_status_polling_enabled": false,
+  "gmail_status_polling_interval_minutes": 15,
+  "gmail_folder_label": "YahBah",
+  "gmail_status_label": "YahBah/Status",
+  "gmail_auto_archive": {
+    "RECEIVED": true,
+    "UNDER_REVIEW": true,
+    "ONLINE_ASSESSMENT": false,
+    "INTERVIEW_REQUEST": false,
+    "INTERVIEW_SCHEDULED": false,
+    "OFFER": false,
+    "REJECTED": true,
+    "WITHDRAWN": true,
+    "OTHER": true
+  }
+}
