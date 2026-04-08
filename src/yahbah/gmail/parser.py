@@ -19,6 +19,13 @@ class _ExtractedCode(BaseModel):
     code: str
 
 
+class EmailStatusClassification(BaseModel):
+    is_status_update: bool
+    status_type: str
+    confidence: float
+    summary: str
+
+
 class _H1Extractor(HTMLParser):
     """Extracts text content of the first <h1> tag."""
 
@@ -105,6 +112,26 @@ async def extract_code_llm(text: str) -> str:
         response_model=_ExtractedCode,
     )
     return result.code.strip()
+
+
+async def classify_status_email(
+    subject: str, sender: str, body_text: str
+) -> EmailStatusClassification:
+    """Classify a post-application email using the LLM."""
+    from yahbah.config import load_prompts_config
+
+    llm = OllamaClient()
+    prompt = load_prompts_config()["prompts"]["email_status_classification"]
+    user_prompt = (
+        f"Subject: {subject}\n"
+        f"From: {sender}\n\n"
+        f"Body:\n{body_text[:3000]}"
+    )
+    return await llm.generate_structured(
+        system_prompt=prompt,
+        user_prompt=user_prompt,
+        response_model=EmailStatusClassification,
+    )
 
 
 async def extract_verification_code(html: str | None, plain_text: str | None) -> str:

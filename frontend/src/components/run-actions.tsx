@@ -10,10 +10,11 @@ import { cancelRun, retryRun, deleteRun } from "@/lib/api";
 interface RunActionsProps {
   runId: string;
   status: string;
+  testMode?: boolean;
   compact?: boolean;
 }
 
-export function RunActions({ runId, status, compact = false }: RunActionsProps) {
+export function RunActions({ runId, status, testMode = false, compact = false }: RunActionsProps) {
   const queryClient = useQueryClient();
   const router = useRouter();
   const [confirmAction, setConfirmAction] = useState<"cancel" | "delete" | null>(null);
@@ -51,7 +52,7 @@ export function RunActions({ runId, status, compact = false }: RunActionsProps) 
   });
 
   const canCancel = status === "PENDING" || status === "RUNNING";
-  const canRetry = status === "FAILED" || status === "DUPLICATE";
+  const canRetry = status === "FAILED" || status === "DUPLICATE" || testMode;
   const canDelete = status === "FAILED" || status === "DUPLICATE" || status === "COMPLETED";
 
   if (!canCancel && !canRetry && !canDelete) return null;

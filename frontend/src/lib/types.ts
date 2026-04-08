@@ -9,6 +9,7 @@ export interface ApplicationListItem {
   status: string;
   current_state: string | null;
   match_score: number | null;
+  is_test_run: boolean;
   error_message: string | null;
   created_at: string;
   updated_at: string;
@@ -59,6 +60,7 @@ export interface RunDetail {
   error_message: string | null;
   match_score: number | null;
   match_rationale: string | null;
+  is_test_run: boolean;
   tracking_url: string | null;
   confirmation_html: string | null;
   created_at: string;

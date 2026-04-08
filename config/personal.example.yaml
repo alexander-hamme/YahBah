@@ -57,6 +57,7 @@ profile:
   linkedin_url: "https://linkedin.com/in/janedoe"
   github_url: "https://github.com/janedoe"
   portfolio_url: null
+  cover_letter_filename: "Jane Doe Cover Letter.pdf"
   resume_path: "/absolute/path/to/your/resume.pdf"
   years_of_experience: 5
   skills:

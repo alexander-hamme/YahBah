@@ -80,6 +80,7 @@ class ApplicationRun(Base):
     error_message: Mapped[str | None] = mapped_column(Text)
     match_score: Mapped[int | None] = mapped_column()
     match_rationale: Mapped[str | None] = mapped_column(Text)
+    is_test_run: Mapped[bool] = mapped_column(default=False)
     tracking_url: Mapped[str | None] = mapped_column(String)
     confirmation_html: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
@@ -96,6 +97,9 @@ class ApplicationRun(Base):
     )
     artifacts: Mapped[list["ApplicationArtifact"]] = relationship(
         back_populates="run", cascade="all, delete-orphan", order_by="ApplicationArtifact.created_at"
+    )
+    status_updates: Mapped[list["ApplicationStatusUpdate"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan", order_by="ApplicationStatusUpdate.email_date"
     )
 
 
@@ -147,6 +151,36 @@ class ApplicationArtifact(Base):
     )
 
     run: Mapped[ApplicationRun] = relationship(back_populates="artifacts")
+
+
+# ---------------------------------------------------------------------------
+# application_status_update — tracks post-submission email status changes
+# ---------------------------------------------------------------------------
+
+class ApplicationStatusUpdate(Base):
+    __tablename__ = "application_status_update"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("application_run.id"), nullable=False
+    )
+    status_type: Mapped[str] = mapped_column(String, nullable=False)
+    # RECEIVED | UNDER_REVIEW | ONLINE_ASSESSMENT | INTERVIEW_REQUEST |
+    # INTERVIEW_SCHEDULED | OFFER | REJECTED | WITHDRAWN | OTHER
+    subject: Mapped[str | None] = mapped_column(String)
+    sender: Mapped[str | None] = mapped_column(String)
+    summary: Mapped[str | None] = mapped_column(Text)
+    gmail_message_id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    raw_snippet: Mapped[str | None] = mapped_column(Text)
+    email_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+
+    run: Mapped[ApplicationRun] = relationship(back_populates="status_updates")
 
 
 # ---------------------------------------------------------------------------

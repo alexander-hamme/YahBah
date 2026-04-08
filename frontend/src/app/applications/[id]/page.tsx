@@ -88,7 +88,7 @@ export default function ApplicationDetailPage({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <RunActions runId={id} status={run.status} />
+          <RunActions runId={id} status={run.status} testMode={run.is_test_run} />
           <Button
             variant={devMode ? "default" : "ghost"}
             size="sm"

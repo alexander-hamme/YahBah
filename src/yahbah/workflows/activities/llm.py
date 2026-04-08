@@ -139,7 +139,8 @@ async def generate_cover_letter_activity(input: CoverLetterInput) -> CoverLetter
     cover_letter_text = await generator.generate(input.job_description, profile)
 
     registry = BrowserRegistry.instance()
-    cover_letter_path = registry.artifact_path(input.run_id, "cover_letter.pdf")
+    cl_filename = load_prompts_config().get("profile", {}).get("cover_letter_filename", "cover_letter.pdf")
+    cover_letter_path = registry.artifact_path(input.run_id, cl_filename)
     _text_to_pdf(cover_letter_text, cover_letter_path)
 
     await persist_artifact_activity(

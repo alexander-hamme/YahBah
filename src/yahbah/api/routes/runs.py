@@ -55,6 +55,7 @@ class RunResponse(BaseModel):
     error_message: str | None
     match_score: int | None
     match_rationale: str | None
+    is_test_run: bool
     tracking_url: str | None
     confirmation_html: str | None
     created_at: str
@@ -117,6 +118,7 @@ async def get_run(
         error_message=run.error_message,
         match_score=run.match_score,
         match_rationale=run.match_rationale,
+        is_test_run=run.is_test_run,
         tracking_url=run.tracking_url,
         confirmation_html=run.confirmation_html,
         created_at=run.created_at.isoformat(),
@@ -257,10 +259,10 @@ async def retry_run(
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    if run.status not in ("FAILED", "DUPLICATE"):
+    if run.status not in ("FAILED", "DUPLICATE") and not run.is_test_run:
         raise HTTPException(
             status_code=409,
-            detail=f"Can only retry FAILED or DUPLICATE runs, not {run.status}",
+            detail=f"Can only retry FAILED, DUPLICATE, or test runs, not {run.status}",
         )
 
     # Reset the existing run

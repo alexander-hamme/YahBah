@@ -253,6 +253,13 @@ async def browser_fill_and_submit_activity(input: BrowserFillInput) -> BrowserFi
     runtime = await get_runtime_settings()
     if runtime.get("testing_mode"):
         activity.logger.info("[fill] TESTING MODE — skipping submit")
+        # Mark as test run in DB
+        import uuid as _uuid
+        async with AsyncSessionLocal() as session:
+            run = await session.get(ApplicationRun, _uuid.UUID(input.run_id))
+            if run:
+                run.is_test_run = True
+                await session.commit()
         await registry.close_page(input.run_id)
         return BrowserFillOutput(
             confirmation_url=None,

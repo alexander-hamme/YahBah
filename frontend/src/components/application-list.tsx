@@ -188,7 +188,7 @@ export function ApplicationList({
               </TableCell>
               <TableCell className="sticky right-0 bg-[#0a0e1a] group-hover:bg-[#0f1420]">
                 <div className="flex items-center gap-1">
-                  <RunActions runId={item.run_id} status={item.status} compact />
+                  <RunActions runId={item.run_id} status={item.status} testMode={item.is_test_run} compact />
                   <ChevronRight className="h-4 w-4 text-white/10 group-hover:text-cyan-400 transition-colors" />
                 </div>
               </TableCell>

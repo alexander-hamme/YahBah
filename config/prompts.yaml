@@ -98,8 +98,11 @@ prompts:
       Return empty array if none found.
 
   match_score: |
-    You are evaluating how well a job applicant matches a job posting. Score the match
-    from 22 to 99 (never below 22 or above 99) as a percentage based on these factors:
+    You are evaluating how closely a job applicant matches a job posting. Do not be flattering or nice, it is imperative
+    that your score the match as accurately as possible, to help the applicant prioritize the best applications.
+    Score the match from 1 to 99 (never below 1 or above 99) as a percentage based on the below factors.
+
+    For each factor, come up with a score:
 
     1. Skills/tools overlap: How many of the required, preferred, and "nice-to-have" technologies, skills, & tools does
        the applicant have direct (or adjacent) experience with? Direct experience is weighted more heavily.
@@ -112,10 +115,40 @@ prompts:
        based on known answers / profile, or else is the role remote?
     5. Salary alignment: Does the applicant's salary expectation overlap with the
        posted range (if any)?
+    
+    Now, add up the scores for each factor, and divide by 5 to get the final score, which should be between 1 and 99. 
+    This is what you will return below.
 
-    Weight skills/specialty overlap most heavily (60%), then experience/seniority (25%),
-    then location and salary (15%).
+    Finally, Return valid JSON: {"match_score": <integer 1-99>, "match_rationale": "<1-2 sentence explanation>"}
 
-    Return valid JSON: {"match_score": <integer 1-99>, "match_rationale": "<1-2 sentence explanation>"}
+  email_status_classification: |
+    You are classifying a post-application job status email. Given the email subject, sender,
+    and body, determine whether this is a genuine application status update and classify it.
+
+    Status types:
+    - RECEIVED: Application confirmed received / "thank you for applying" / acknowledgment
+    - UNDER_REVIEW: Application is being reviewed / "your application is under consideration"
+    - ONLINE_ASSESSMENT: Online assessment, coding challenge, or take-home assignment sent
+    - INTERVIEW_REQUEST: Invitation to interview (phone screen, video call, on-site, etc.)
+    - INTERVIEW_SCHEDULED: Interview date/time confirmed or calendar invite
+    - OFFER: Job offer extended
+    - REJECTED: Application rejected at any stage / "we have decided to move forward with other candidates"
+    - WITHDRAWN: Application withdrawn by applicant (rare)
+    - OTHER: Status-related but doesn't fit above categories
+
+    NOT status updates (set is_status_update to false):
+    - Marketing emails, newsletters, company updates
+    - Verification/security code emails
+    - Password reset emails
+    - Job alert notifications
+    - Generic "thank you for your interest" without confirming receipt of a specific application
+
+    Return valid JSON:
+    {
+      "is_status_update": true/false,
+      "status_type": "<one of the types above, or OTHER>",
+      "confidence": <0.0-1.0>,
+      "summary": "<1-2 sentence summary of the email content>"
+    }
 
 # known_answers are in config/personal.yaml (contains personal info)

@@ -29,6 +29,7 @@ class ApplicationListItem(BaseModel):
     status: str
     current_state: str | None
     match_score: int | None
+    is_test_run: bool
     error_message: str | None
     created_at: str
     updated_at: str
@@ -121,6 +122,7 @@ async def list_applications(
                 status=r.status,
                 current_state=r.current_state,
                 match_score=r.match_score,
+                is_test_run=r.is_test_run,
                 error_message=r.error_message,
                 created_at=r.created_at.isoformat(),
                 updated_at=r.updated_at.isoformat(),

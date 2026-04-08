@@ -65,11 +65,12 @@ def _known_answers() -> dict[str, str]:
     return load_prompts_config()["known_answers"]
 
 
-def _education_answers(profile: "ApplicantProfile") -> dict[str, str]:
-    """Build education known-answer keys from the profile's most recent education entry."""
-    if not profile.education:
+def _education_answers() -> dict[str, str]:
+    """Build education known-answer keys from the YAML profile's most recent education entry."""
+    education = load_prompts_config().get("profile", {}).get("education", [])
+    if not education:
         return {}
-    edu = profile.education[0]
+    edu = education[0]
     answers: dict[str, str] = {}
     for key in ("school", "degree_type", "discipline",
                 "start_month", "start_year", "end_month", "end_year", "gpa"):
@@ -79,15 +80,15 @@ def _education_answers(profile: "ApplicantProfile") -> dict[str, str]:
     return answers
 
 
-def _all_known_answers(profile: "ApplicantProfile") -> dict[str, str]:
+def _all_known_answers() -> dict[str, str]:
     """Merge base known answers with education-derived keys."""
     answers = dict(_known_answers())
-    answers.update(_education_answers(profile))
+    answers.update(_education_answers())
     return answers
 
 
-def _build_system_prompt(profile: "ApplicantProfile") -> str:
-    known = _all_known_answers(profile)
+def _build_system_prompt() -> str:
+    known = _all_known_answers()
     known_keys_block = "\n".join(
         f'  - "{key}": use this for questions about {key.replace("_", " ")}'
         for key in known
@@ -175,10 +176,10 @@ education:
 
         user_prompt = f"FORM FIELDS:\n{fields_text}\n\nAPPLICANT PROFILE:\n{profile_text}"
 
-        all_known = _all_known_answers(profile)
+        all_known = _all_known_answers()
 
         response = await self._client.generate_structured(
-            system_prompt=_build_system_prompt(profile),
+            system_prompt=_build_system_prompt(),
             user_prompt=user_prompt,
             response_model=_FieldMappingResponse,
         )
@@ -238,10 +239,17 @@ education:
                 confidence=0.75,
             ))
 
-        # Deduplicate by form_label — keep the first (highest-intent) mapping
+        # Deduplicate by form_label — keep the first (highest-intent) mapping.
+        # File upload fields (resume, cover_letter) are keyed by mapped_to
+        # instead of label, since multiple "Attach" fields share the same label.
         seen: set[str] = set()
         deduped: list[FieldMapping] = []
         for m in mappings:
+            if m.mapped_to in ("resume", "cover_letter"):
+                if m.mapped_to not in seen:
+                    seen.add(m.mapped_to)
+                    deduped.append(m)
+                continue
             key = m.form_label.strip().lower()
             if key not in seen:
                 seen.add(key)

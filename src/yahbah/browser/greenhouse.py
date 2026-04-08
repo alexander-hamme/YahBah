@@ -362,12 +362,17 @@ class GreenhouseExtractor:
 
         # Deduplicate fields with identical labels — Greenhouse sometimes
         # renders accessibility/shadow duplicates that are both visible.
-        seen_labels: set[str] = set()
+        # For file inputs, include the element ID in the key since multiple
+        # file uploads (resume, cover letter) share the generic "Attach" label.
+        seen_keys: set[str] = set()
         unique_fields: list[FormField] = []
         for field in fields:
-            key = field.label.strip().lower()
-            if key not in seen_labels:
-                seen_labels.add(key)
+            if field.field_type == "file" and field.element_id:
+                key = f"{field.label.strip().lower()}::{field.element_id}"
+            else:
+                key = field.label.strip().lower()
+            if key not in seen_keys:
+                seen_keys.add(key)
                 unique_fields.append(field)
             else:
                 logger.debug(f"[extract] Skipping duplicate field: {field.label!r}")
