@@ -117,7 +117,18 @@ async def main() -> None:
         )
 
         logger.info(f"Worker starting — polling task queue '{settings.temporal_task_queue}'")
-        await worker.run()
+
+        # Start the Gmail status poller as a background task
+        poller_task = asyncio.create_task(run_status_poller())
+
+        try:
+            await worker.run()
+        finally:
+            poller_task.cancel()
+            try:
+                await poller_task
+            except asyncio.CancelledError:
+                pass
 
     finally:
         # Graceful shutdown: mark in-flight runs before exiting

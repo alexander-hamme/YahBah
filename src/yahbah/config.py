@@ -34,15 +34,23 @@ class Settings(BaseSettings):
     gmail_label_parsed: str = "YahBah/Parsed"
 
     # Gmail status polling
-    gmail_status_polling_interval_minutes: int = 15
+    gmail_status_polling_interval_minutes: int = 10
     gmail_folder_label: str = "YahBah"
     gmail_status_label: str = "YahBah/Status"
     gmail_status_resync_days: int = 7
-    # Status types to auto-archive (move from inbox to YahBah folder).
-    # Types NOT listed here stay in the inbox for immediate visibility.
-    gmail_auto_archive_statuses: list[str] = [
-        "RECEIVED", "UNDER_REVIEW", "REJECTED", "WITHDRAWN", "OTHER",
-    ]
+    # Per-status-type auto-archive toggles: True = move from inbox to
+    # YahBah folder, False = leave in inbox for immediate visibility.
+    gmail_auto_archive: dict[str, bool] = {
+        "RECEIVED": True,
+        "UNDER_REVIEW": True,
+        "ONLINE_ASSESSMENT": False,
+        "INTERVIEW_REQUEST": False,
+        "INTERVIEW_SCHEDULED": False,
+        "OFFER": False,
+        "REJECTED": True,
+        "WITHDRAWN": True,
+        "OTHER": True,
+    }
 
     # Artifacts (local filesystem)
     artifacts_dir: str = "./artifacts"

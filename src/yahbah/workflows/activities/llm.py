@@ -46,9 +46,9 @@ async def _load_profile() -> ApplicantProfile:
 
 
 @activity.defn
-async def map_fields_activity(input: MapFieldsInput) -> MapFieldsOutput:
+async def map_fields_activity(input_: MapFieldsInput) -> MapFieldsOutput:
     profile = await _load_profile()
-    raw = input.form_schema_dict
+    raw = input_.form_schema_dict
     form_schema = FormSchema(
         fields=[FormField(**f) for f in raw.get("fields", [])],
         page_url=raw.get("page_url", ""),
@@ -56,15 +56,22 @@ async def map_fields_activity(input: MapFieldsInput) -> MapFieldsOutput:
     )
 
     mapper = FieldMapper()
-    result = await mapper.map(form_schema, profile, job_description=input.job_description)
+    result = await mapper.map(form_schema, profile, job_description=input_.job_description)
+
+    # Override email field with the trackable alias so company replies
+    # can be matched back to this specific application run.
+    if input_.account_email:
+        for m in result.field_mappings:
+            if m.mapped_to == "email":
+                m.value = input_.account_email
 
     # Persist mappings as artifact
     registry = BrowserRegistry.instance()
-    mappings_path = registry.artifact_path(input.run_id, "field_mappings.json")
+    mappings_path = registry.artifact_path(input_.run_id, "field_mappings.json")
     with open(mappings_path, "w") as f:
         json.dump([asdict(m) for m in result.field_mappings], f, indent=2)
     await persist_artifact_activity(
-        input.run_id,
+        input_.run_id,
         "field_mappings",
         mappings_path,
     )
@@ -93,7 +100,7 @@ async def map_fields_activity(input: MapFieldsInput) -> MapFieldsOutput:
             profile_summary += "Work experience:\n" + "\n".join(exp_lines)
 
         match_score, match_rationale = await mapper.compute_match_score(
-            profile_summary, input.job_description
+            profile_summary, input_.job_description
         )
         activity.logger.info(
             f"[match] Score: {match_score}% — {match_rationale}"
@@ -104,7 +111,7 @@ async def map_fields_activity(input: MapFieldsInput) -> MapFieldsOutput:
         from yahbah.db.models import ApplicationRun
         import uuid as _uuid
         async with AsyncSessionLocal() as session:
-            run = await session.get(ApplicationRun, _uuid.UUID(input.run_id))
+            run = await session.get(ApplicationRun, _uuid.UUID(input_.run_id))
             if run:
                 run.match_score = match_score
                 run.match_rationale = match_rationale

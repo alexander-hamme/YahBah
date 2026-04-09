@@ -109,7 +109,7 @@ async def mark_run_failed_activity(run_id: str, error_message: str) -> None:
 
 @activity.defn
 async def store_credentials_activity(
-    run_id: str, account_email: str, account_password: str
+    run_id: str, account_email: str, account_password: str | None = None
 ) -> None:
     """Persists the generated account credentials onto the ApplicationRun row."""
     async with AsyncSessionLocal() as session:

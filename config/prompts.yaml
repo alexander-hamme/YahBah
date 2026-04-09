@@ -148,7 +148,8 @@ prompts:
       "is_status_update": true/false,
       "status_type": "<one of the types above, or OTHER>",
       "confidence": <0.0-1.0>,
-      "summary": "<1-2 sentence summary of the email content>"
+      "summary": "<1-2 sentence summary of the email content>",
+      "company_name": "<the company name mentioned in the email, or null if unclear>"
     }
 
 # known_answers are in config/personal.yaml (contains personal info)

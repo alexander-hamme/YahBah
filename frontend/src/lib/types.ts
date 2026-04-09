@@ -86,6 +86,17 @@ export interface Artifact {
   created_at: string;
 }
 
+export interface StatusUpdate {
+  id: string;
+  status_type: string;
+  subject: string | null;
+  sender: string | null;
+  summary: string | null;
+  email_date: string;
+  confidence: number;
+  created_at: string;
+}
+
 export interface EnqueueJobResponse {
   run_id: string;
   status: string;

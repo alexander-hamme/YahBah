@@ -1,12 +1,16 @@
 """
 Background Gmail poller for application status emails.
 
-Reads emails from a designated Gmail folder (label), classifies them
-via LLM, and stores status updates linked to the originating ApplicationRun.
+Reads new emails via the Gmail history API, filters to +alias recipients
+(i.e. emails related to submitted applications), classifies them via LLM,
+stores status updates linked to the originating ApplicationRun, and
+optionally archives them to a designated folder based on per-status-type
+settings.
 
 Runs as a background asyncio task in the worker process.
 """
 import asyncio
+import re
 from datetime import datetime, timezone
 
 from loguru import logger
@@ -16,17 +20,35 @@ from yahbah.config import settings, get_runtime_settings
 from yahbah.db.models import ApplicationRun, ApplicationStatusUpdate, GmailCheckpoint
 from yahbah.db.session import AsyncSessionLocal
 from yahbah.gmail.client import GmailClient, InvalidHistoryIdError
-from yahbah.gmail.parser import (
-    classify_status_email,
-    get_body_parts,
-)
+from yahbah.gmail.parser import classify_status_email, get_body_parts
+
+# Gmail's built-in INBOX label ID (not a user-created label).
+_INBOX_LABEL_ID = "INBOX"
+
+# Checkpoint key — we use a fixed string since there's one poller per worker.
+_CHECKPOINT_KEY = "status_poller"
+
+
+async def trigger_poll() -> tuple[int, int]:
+    """Run a single poll cycle on demand. Returns (processed, skipped)."""
+    rt = await get_runtime_settings()
+    return await poll_for_status_emails(rt)
 
 
 async def run_status_poller() -> None:
     """Background loop: poll Gmail for status emails every N minutes."""
-    # Brief startup delay so the worker can initialize first
     await asyncio.sleep(5)
     logger.info("[status-poller] Background poller started")
+
+    # Always run one poll on startup (regardless of enabled flag)
+    try:
+        rt = await get_runtime_settings()
+        processed, skipped = await poll_for_status_emails(rt)
+        logger.info(
+            f"[status-poller] Startup poll: {processed} update(s), {skipped} skipped"
+        )
+    except Exception as exc:
+        logger.error(f"[status-poller] Startup poll failed: {exc}")
 
     while True:
         try:
@@ -42,11 +64,10 @@ async def run_status_poller() -> None:
 
             try:
                 processed, skipped = await poll_for_status_emails(rt)
-                if processed or skipped:
-                    logger.info(
-                        f"[status-poller] Cycle complete: "
-                        f"{processed} status update(s), {skipped} skipped"
-                    )
+                logger.info(
+                    f"[status-poller] Poll complete: "
+                    f"{processed} status update(s), {skipped} skipped"
+                )
             except Exception as exc:
                 logger.error(f"[status-poller] Error during poll cycle: {exc}")
 
@@ -62,70 +83,59 @@ async def run_status_poller() -> None:
 
 async def poll_for_status_emails(rt: dict) -> tuple[int, int]:
     """
-    Single poll cycle: fetch new emails from the YahBah folder,
-    classify them, and store status updates.
-
-    Returns (processed_count, skipped_count).
+    Single poll cycle. Returns (processed_count, skipped_count).
     """
     gmail = GmailClient()
 
-    inbox_label = rt.get("gmail_inbox_label", settings.gmail_inbox_label)
+    folder_label = rt.get("gmail_folder_label", settings.gmail_folder_label)
     status_label = rt.get("gmail_status_label", settings.gmail_status_label)
+    auto_archive: dict[str, bool] = rt.get(
+        "gmail_auto_archive", settings.gmail_auto_archive
+    )
 
-    # Resolve Gmail label IDs
-    inbox_label_id = await gmail._get_or_create_label(inbox_label)
+    # Resolve label IDs we'll need
+    folder_label_id = await gmail._get_or_create_label(folder_label)
     status_label_id = await gmail._get_or_create_label(status_label)
 
-    # Load or create checkpoint
+    # Load or seed checkpoint
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(GmailCheckpoint).where(
-                GmailCheckpoint.email == inbox_label
+                GmailCheckpoint.email == _CHECKPOINT_KEY
             )
         )
         checkpoint = result.scalar_one_or_none()
 
         if checkpoint is None:
-            # First run: seed checkpoint with current historyId
             history_id = await gmail.get_current_history_id()
             checkpoint = GmailCheckpoint(
-                email=inbox_label,
+                email=_CHECKPOINT_KEY,
                 history_id=history_id,
             )
             session.add(checkpoint)
             await session.commit()
             logger.info(
-                f"[status-poller] Created checkpoint for '{inbox_label}' "
-                f"at historyId={history_id}"
+                f"[status-poller] Seeded checkpoint at historyId={history_id}"
             )
             return 0, 0
 
-    # Fetch new messages since last checkpoint
+    # Fetch new messages since checkpoint (no label filter — we read everything
+    # and filter by +alias recipient in code)
     try:
         messages, new_history_id = await gmail.get_history_since(
-            checkpoint.history_id, label_ids=[inbox_label_id]
+            checkpoint.history_id
         )
     except InvalidHistoryIdError:
         logger.warning(
             "[status-poller] History ID expired — falling back to search"
         )
-        messages = await _search_recent(gmail, inbox_label, parsed_label)
+        messages = await _search_alias_emails(gmail)
         new_history_id = await gmail.get_current_history_id()
 
     if not messages:
-        # Update checkpoint even if no messages
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(GmailCheckpoint).where(
-                    GmailCheckpoint.email == inbox_label
-                )
-            )
-            cp = result.scalar_one()
-            cp.history_id = new_history_id
-            await session.commit()
+        await _update_checkpoint(new_history_id)
         return 0, 0
 
-    # Process each message
     processed = 0
     skipped = 0
 
@@ -135,36 +145,47 @@ async def poll_for_status_emails(rt: dict) -> tuple[int, int]:
             continue
 
         try:
-            result = await _process_message(
-                gmail, msg_id, parsed_label_id, status_label_id
+            ok = await _process_message(
+                gmail, msg_id,
+                folder_label_id=folder_label_id,
+                status_label_id=status_label_id,
+                auto_archive=auto_archive,
             )
-            if result:
+            if ok:
                 processed += 1
             else:
                 skipped += 1
         except Exception as exc:
-            logger.warning(f"[status-poller] Failed to process message {msg_id}: {exc}")
+            logger.warning(
+                f"[status-poller] Failed to process message {msg_id}: {exc}"
+            )
             skipped += 1
 
-    # Update checkpoint
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(GmailCheckpoint).where(
-                GmailCheckpoint.email == inbox_label
-            )
-        )
-        cp = result.scalar_one()
-        cp.history_id = new_history_id
-        await session.commit()
-
+    await _update_checkpoint(new_history_id)
     return processed, skipped
 
 
-async def _search_recent(
-    gmail: GmailClient, inbox_label: str, parsed_label: str
-) -> list[dict]:
-    """Fallback: search for unprocessed emails in the inbox label."""
-    query = f"label:{inbox_label} -label:{parsed_label.replace('/', '-')}"
+async def _update_checkpoint(history_id: str) -> None:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(GmailCheckpoint).where(
+                GmailCheckpoint.email == _CHECKPOINT_KEY
+            )
+        )
+        cp = result.scalar_one()
+        cp.history_id = history_id
+        await session.commit()
+
+
+async def _search_alias_emails(gmail: GmailClient) -> list[dict]:
+    """Fallback when history ID expires: search for +alias emails."""
+    from yahbah.config import load_prompts_config
+
+    base_email = load_prompts_config().get("profile", {}).get("email", "")
+    if not base_email or "@" not in base_email:
+        return []
+    local, domain = base_email.split("@", 1)
+    query = f"to:{local}+*@{domain}"
     results = await gmail._search_messages(query, max_results=50)
     return [{"id": m["id"]} for m in results]
 
@@ -172,13 +193,14 @@ async def _search_recent(
 async def _process_message(
     gmail: GmailClient,
     message_id: str,
-    parsed_label_id: str,
+    folder_label_id: str,
     status_label_id: str,
+    auto_archive: dict[str, bool],
 ) -> bool:
     """
     Process a single Gmail message. Returns True if a status update was created.
     """
-    # Check if already processed (dedup by gmail_message_id)
+    # Dedup: skip if already processed
     async with AsyncSessionLocal() as session:
         existing = await session.execute(
             select(ApplicationStatusUpdate.id).where(
@@ -201,45 +223,42 @@ async def _process_message(
     msg_epoch = int(msg.get("internalDate", "0")) // 1000
     email_date = datetime.fromtimestamp(msg_epoch, tz=timezone.utc)
 
-    # Match to an ApplicationRun via the To: alias
-    run_id = await _match_to_run(to_addr)
-    if run_id is None:
-        logger.debug(
-            f"[status-poller] No matching run for to={to_addr!r}, "
-            f"subject={subject!r} — labeling as parsed and skipping"
-        )
-        await gmail._add_label(message_id, parsed_label_id)
-        return False
+    # Try matching by +alias first (fast, exact)
+    normalized_to = _extract_email(to_addr)
+    run_id: str | None = None
+    if "+" in normalized_to:
+        run_id = await _match_by_alias(normalized_to)
 
-    # Extract body
+    # Extract body text (needed for both classification and fallback matching)
     html, plain = get_body_parts(msg["payload"])
-    body_text = plain or html or ""
-    if not body_text:
-        logger.debug(f"[status-poller] Empty body for message {message_id}")
-        await gmail._add_label(message_id, parsed_label_id)
-        return False
-
-    # Strip HTML tags for plain text if we only have HTML
-    if not plain and html:
-        import re
+    body_text = plain or ""
+    if not body_text and html:
         body_text = re.sub(r"<[^>]+>", " ", html)
         body_text = re.sub(r"\s+", " ", body_text).strip()
+    if not body_text:
+        return False
 
-    # Classify via LLM
+    # Classify via LLM (also extracts company_name for fallback matching)
     classification = await classify_status_email(subject, sender, body_text)
-
-    # Label as parsed regardless
-    await gmail._add_label(message_id, parsed_label_id)
 
     if not classification.is_status_update:
         logger.debug(
-            f"[status-poller] Not a status update: subject={subject!r} "
-            f"(summary: {classification.summary})"
+            f"[status-poller] Not a status update: subject={subject!r}"
+        )
+        return False
+
+    # Fallback: match by company name from the LLM classification
+    if run_id is None and classification.company_name:
+        run_id = await _match_by_company(classification.company_name)
+
+    if run_id is None:
+        logger.debug(
+            f"[status-poller] No matching run for to={normalized_to!r}, "
+            f"company={classification.company_name!r}, subject={subject!r}"
         )
         return False
 
     # Store the status update
-    snippet = body_text[:500] if body_text else None
     async with AsyncSessionLocal() as session:
         update = ApplicationStatusUpdate(
             run_id=run_id,
@@ -248,42 +267,68 @@ async def _process_message(
             sender=sender,
             summary=classification.summary,
             gmail_message_id=message_id,
-            raw_snippet=snippet,
+            raw_snippet=body_text[:500],
             email_date=email_date,
             confidence=classification.confidence,
         )
         session.add(update)
         await session.commit()
 
-    # Also add the status label
-    await gmail._add_label(message_id, status_label_id)
+    # Apply labels: always add YahBah/Status
+    add_labels = [status_label_id]
+    remove_labels: list[str] = []
+
+    # Auto-archive: move to YahBah folder and out of inbox if configured
+    should_archive = auto_archive.get(classification.status_type, False)
+    if should_archive:
+        add_labels.append(folder_label_id)
+        remove_labels.append(_INBOX_LABEL_ID)
+
+    await gmail._modify_labels(message_id, add_labels, remove_labels or None)
 
     logger.info(
-        f"[status-poller] Status update: {classification.status_type} "
-        f"for run {run_id} — {classification.summary}"
+        f"[status-poller] {classification.status_type} for run {run_id}"
+        f"{' (archived)' if should_archive else ' (kept in inbox)'}"
+        f" — {classification.summary}"
     )
     return True
 
 
-async def _match_to_run(to_address: str) -> str | None:
-    """
-    Match a To: address to an ApplicationRun.account_email.
-    Returns the run_id (as string) or None.
-    """
-    # Normalize: extract just the email from "Name <email>" format
-    addr = to_address.strip()
+def _extract_email(addr: str) -> str:
+    """Extract bare email from 'Name <email>' format and lowercase."""
+    addr = addr.strip()
     if "<" in addr:
         addr = addr.split("<")[-1].rstrip(">").strip()
-    addr = addr.lower()
+    return addr.lower()
 
-    if "+" not in addr:
-        return None
 
+async def _match_by_alias(email: str) -> str | None:
+    """Match email alias to ApplicationRun.account_email. Returns run_id or None."""
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(ApplicationRun.id).where(
-                ApplicationRun.account_email == addr
+                ApplicationRun.account_email == email
             )
+        )
+        row = result.scalar_one_or_none()
+        return str(row) if row else None
+
+
+async def _match_by_company(company_name: str) -> str | None:
+    """
+    Fallback: match by company name from the email to JobPosting.company.
+    Returns the most recent completed run_id, or None.
+    """
+    from yahbah.db.models import JobPosting
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(ApplicationRun.id)
+            .join(JobPosting)
+            .where(JobPosting.company.ilike(f"%{company_name}%"))
+            .where(ApplicationRun.status.in_(["COMPLETED", "FAILED"]))
+            .order_by(ApplicationRun.created_at.desc())
+            .limit(1)
         )
         row = result.scalar_one_or_none()
         return str(row) if row else None

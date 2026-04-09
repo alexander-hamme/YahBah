@@ -4,6 +4,7 @@ import type {
   Artifact,
   EnqueueJobResponse,
   RunDetail,
+  StatusUpdate,
   Step,
 } from "./types";
 
@@ -81,9 +82,15 @@ export function getRuntimeSettings(): Promise<{ testing_mode: boolean }> {
 }
 
 export function setTestingMode(enabled: boolean): Promise<{ testing_mode: boolean }> {
-  return fetchJSON(`${BASE}/settings/testing_mode?value=${enabled}`, {
+  return fetchJSON(`${BASE}/settings/testing_mode`, {
     method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ value: enabled }),
   });
+}
+
+export function getRunStatusUpdates(id: string): Promise<StatusUpdate[]> {
+  return fetchJSON(`${BASE}/runs/${id}/status-updates`);
 }
 
 export function artifactDownloadUrl(

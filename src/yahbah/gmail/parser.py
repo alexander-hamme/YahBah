@@ -24,6 +24,7 @@ class EmailStatusClassification(BaseModel):
     status_type: str
     confidence: float
     summary: str
+    company_name: str | None = None
 
 
 class _H1Extractor(HTMLParser):

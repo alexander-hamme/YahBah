@@ -49,6 +49,23 @@ async def get_settings() -> dict:
     return await get_runtime_settings()
 
 
+from pydantic import BaseModel as _BaseModel
+from typing import Any as _Any
+
+class _SettingUpdate(_BaseModel):
+    value: _Any
+
 @app.put("/settings/{key}")
-async def update_setting(key: str, value: bool) -> dict:
-    return await set_runtime_setting(key, value)
+async def update_setting(key: str, body: _SettingUpdate) -> dict:
+    return await set_runtime_setting(key, body.value)
+
+
+@app.post("/gmail/poll")
+async def trigger_gmail_poll() -> dict:
+    """Manually trigger a Gmail status poll cycle."""
+    from yahbah.gmail.poller import trigger_poll
+    try:
+        processed, skipped = await trigger_poll()
+        return {"success": True, "processed": processed, "skipped": skipped}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}

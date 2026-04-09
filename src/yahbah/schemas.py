@@ -123,6 +123,7 @@ class MapFieldsInput:
     run_id: str
     form_schema_dict: dict   # FormSchema serialized to dict
     job_description: str = ""
+    account_email: str | None = None  # alias to use as form email
 
 
 @dataclass

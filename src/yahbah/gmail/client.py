@@ -271,6 +271,25 @@ class GmailClient:
             )
         )
 
+    async def _modify_labels(
+        self,
+        message_id: str,
+        add_label_ids: list[str] | None = None,
+        remove_label_ids: list[str] | None = None,
+    ) -> None:
+        """Add and/or remove labels from a message in a single API call."""
+        body: dict = {}
+        if add_label_ids:
+            body["addLabelIds"] = add_label_ids
+        if remove_label_ids:
+            body["removeLabelIds"] = remove_label_ids
+        if body:
+            await self._execute(
+                self._service.users().messages().modify(
+                    userId="me", id=message_id, body=body,
+                )
+            )
+
     async def _get_or_create_label(self, label_name: str) -> str:
         if label_name in self._label_id_cache:
             return self._label_id_cache[label_name]

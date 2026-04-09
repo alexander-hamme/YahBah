@@ -1,35 +1,88 @@
 """
 Credential generation for ATS account creation.
 
-- Email alias:  alexhamme96+greenhouse_acmecorp@gmail.com
+- Email alias:  user+job-a7f2@gmail.com  (4-char hash, extended on collision)
 - Password:     16-char, satisfies typical complexity requirements
 """
+import hashlib
 import re
 import secrets
 import string
 
+from sqlalchemy import select
 
-def company_slug_from_url(job_url: str) -> str:
+# Minimum hash length; extended by one char on each collision (like Git short SHAs).
+_MIN_HASH_LEN = 4
+_MAX_HASH_LEN = 8
+
+
+def _full_hash(ats: str, company: str, job_id: str) -> str:
+    """Full hex digest from ats + company + job_id."""
+    raw = f"{ats}:{company}:{job_id}".lower()
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _extract_job_parts(job_url: str) -> tuple[str, str, str]:
     """
-    Derive a short company slug from the job URL.
-    For Greenhouse: https://boards.greenhouse.io/acmecorp/jobs/123 → acmecorp
-    Fallback: clean the hostname.
+    Extract (ats, company, job_id) from a job URL.
+    Returns best-effort values for hashing.
     """
+    # Greenhouse: boards.greenhouse.io/<company>/jobs/<id>
+    match = re.search(r"greenhouse\.io/([^/?#]+)/jobs/(\d+)", job_url)
+    if match:
+        return "greenhouse", match.group(1).lower(), match.group(2)
+
+    # Greenhouse without job ID
     match = re.search(r"greenhouse\.io/([^/?#]+)", job_url)
     if match:
-        return re.sub(r"[^a-z0-9]", "", match.group(1).lower())
+        return "greenhouse", match.group(1).lower(), ""
 
-    match = re.search(r"https?://(?:www\.)?([^/]+)", job_url)
+    # Workday: <company>.wd<N>.myworkdayjobs.com/.../job/<id>
+    match = re.search(r"([^.]+)\.wd\d+\.myworkdayjobs\.com", job_url)
     if match:
-        return re.sub(r"[^a-z0-9]", "", match.group(1).lower())[:20]
+        company = match.group(1).lower()
+        id_match = re.search(r"/(\d+)", job_url)
+        job_id = id_match.group(1) if id_match else ""
+        return "workday", company, job_id
 
-    return "company"
+    # Generic fallback: hostname + full path for uniqueness
+    match = re.search(r"https?://(?:www\.)?([^/]+)(.*)", job_url)
+    if match:
+        host = re.sub(r"[^a-z0-9]", "", match.group(1).lower())[:20]
+        path = match.group(2)
+        return "other", host, path
+
+    return "other", "unknown", job_url
 
 
-def generate_email_alias(base_email: str, company_slug: str) -> str:
-    """alexhamme96@gmail.com → alexhamme96+greenhouse_acmecorp@gmail.com"""
+async def generate_email_alias(base_email: str, job_url: str) -> str:
+    """
+    user@gmail.com → user+job-a7f2@gmail.com
+
+    Starts with a 4-char hash; extends by one character on each collision
+    (like Git short SHAs) up to 8 chars max.
+    """
+    from yahbah.db.models import ApplicationRun
+    from yahbah.db.session import AsyncSessionLocal
+
+    ats, company, job_id = _extract_job_parts(job_url)
+    digest = _full_hash(ats, company, job_id)
     local, domain = base_email.split("@", 1)
-    return f"{local}+greenhouse_{company_slug}@{domain}"
+
+    async with AsyncSessionLocal() as session:
+        for length in range(_MIN_HASH_LEN, _MAX_HASH_LEN + 1):
+            tag = digest[:length]
+            candidate = f"{local}+job-{tag}@{domain}"
+            result = await session.execute(
+                select(ApplicationRun.id).where(
+                    ApplicationRun.account_email == candidate
+                )
+            )
+            if result.scalar_one_or_none() is None:
+                return candidate
+
+    # Extremely unlikely: all lengths collided. Use full 8-char hash.
+    return f"{local}+job-{digest[:_MAX_HASH_LEN]}@{domain}"
 
 
 def generate_password() -> str:

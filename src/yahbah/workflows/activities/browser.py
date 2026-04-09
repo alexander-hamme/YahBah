@@ -22,7 +22,6 @@ from yahbah.browser.greenhouse import (
     activate_and_resolve_embed,
 )
 from yahbah.credentials import (
-    company_slug_from_url,
     generate_email_alias,
     generate_password,
 )
@@ -59,7 +58,7 @@ async def _base_email() -> str:
 
 
 @activity.defn
-async def browser_open_and_auth_activity(input: AuthInput) -> AuthOutput:
+async def browser_open_and_auth_activity(input_: AuthInput) -> AuthOutput:
     """
     Opens the job page and handles auth walls if present.
 
@@ -69,30 +68,34 @@ async def browser_open_and_auth_activity(input: AuthInput) -> AuthOutput:
       - persists credentials to DB via store_credentials_activity
     """
     registry = BrowserRegistry.instance()
-    activity.logger.info(f"[open] Opening page for run {input.run_id}: {input.job_url}")
-    page = await registry.open_page(input.run_id, input.job_url)
+    activity.logger.info(f"[open] Opening page for run {input_.run_id}: {input_.job_url}")
+    page = await registry.open_page(input_.run_id, input_.job_url)
     activity.logger.info(f"[open] Page loaded — final URL: {page.url}")
+
+    # Always generate a trackable email alias for this application,
+    # regardless of whether auth is needed.  Company reply emails will
+    # be matched back to this run via the alias.
+    base_email = await _base_email()
+    email = await generate_email_alias(base_email, input_.job_url)
 
     handler = GreenhouseAuthHandler(page)
     activity.logger.info(f"[open] Checking for auth wall")
     if not await handler.needs_auth():
-        activity.logger.info(f"[open] No auth wall detected for run {input.run_id}")
-        return AuthOutput(auth_required=False, account_email=None, account_password=None)
+        activity.logger.info(f"[open] No auth wall detected for run {input_.run_id}")
+        # Store the alias even without auth so we can track email responses
+        await store_credentials_activity(input_.run_id, email, None)
+        return AuthOutput(auth_required=False, account_email=email, account_password=None)
 
-    activity.logger.info(f"Auth wall detected for run {input.run_id} — creating account")
+    activity.logger.info(f"Auth wall detected for run {input_.run_id} — creating account")
 
-    base_email = await _base_email()
-    company_slug = company_slug_from_url(input.job_url)
-    email = generate_email_alias(base_email, company_slug)
     password = generate_password()
-
     await handler.create_account(email, password)
 
     # Screenshot after auth
-    await registry.screenshot(input.run_id, "after_auth")
+    await registry.screenshot(input_.run_id, "after_auth")
 
     # Persist to DB
-    await store_credentials_activity(input.run_id, email, password)
+    await store_credentials_activity(input_.run_id, email, password)
 
     return AuthOutput(auth_required=True, account_email=email, account_password=password)
 

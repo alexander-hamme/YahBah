@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from yahbah.config import settings
-from yahbah.db.models import ApplicationRun, ApplicationStep, ApplicationArtifact, JobPosting
+from yahbah.db.models import ApplicationRun, ApplicationStep, ApplicationArtifact, ApplicationStatusUpdate, JobPosting
 from yahbah.db.session import get_session
 from yahbah.workflows.application import ApplicationWorkflow, ApplicationWorkflowInput
 
@@ -78,6 +78,17 @@ class ArtifactResponse(BaseModel):
     artifact_type: str
     path: str
     metadata: dict | None
+    created_at: str
+
+
+class StatusUpdateResponse(BaseModel):
+    id: str
+    status_type: str
+    subject: str | None
+    sender: str | None
+    summary: str | None
+    email_date: str
+    confidence: float
     created_at: str
 
 
@@ -200,6 +211,38 @@ async def get_artifacts(
             created_at=a.created_at.isoformat(),
         )
         for a in artifacts
+    ]
+
+
+@router.get("/{run_id}/status-updates", response_model=list[StatusUpdateResponse])
+async def get_status_updates(
+    run_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> list[StatusUpdateResponse]:
+    uid = _run_id(run_id)
+    run = await session.get(ApplicationRun, uid)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    result = await session.execute(
+        select(ApplicationStatusUpdate)
+        .where(ApplicationStatusUpdate.run_id == uid)
+        .order_by(ApplicationStatusUpdate.email_date)
+    )
+    updates = result.scalars().all()
+
+    return [
+        StatusUpdateResponse(
+            id=str(u.id),
+            status_type=u.status_type,
+            subject=u.subject,
+            sender=u.sender,
+            summary=u.summary,
+            email_date=u.email_date.isoformat(),
+            confidence=u.confidence,
+            created_at=u.created_at.isoformat(),
+        )
+        for u in updates
     ]
 
 

@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Bug } from "lucide-react";
 import { RunActions } from "@/components/run-actions";
-import { getRunDetail, getRunSteps, getRunArtifacts } from "@/lib/api";
+import { ApplicationStatusPipeline } from "@/components/application-status-pipeline";
+import { getRunDetail, getRunSteps, getRunArtifacts, getRunStatusUpdates } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { CompanyLogo } from "@/components/company-logo";
 import { useDevMode } from "@/components/dev-mode-context";
@@ -52,6 +53,12 @@ export default function ApplicationDetailPage({
     queryKey: ["run-artifacts", id],
     queryFn: () => getRunArtifacts(id),
     refetchInterval: 10_000,
+  });
+
+  const { data: statusUpdates } = useQuery({
+    queryKey: ["run-status-updates", id],
+    queryFn: () => getRunStatusUpdates(id),
+    refetchInterval: 30_000,
   });
 
   if (runLoading || !run) {
@@ -111,6 +118,13 @@ export default function ApplicationDetailPage({
         )}
         <RunInfoCard run={run} />
       </div>
+
+      {(run.status === "COMPLETED" || (statusUpdates && statusUpdates.length > 0)) && (
+        <ApplicationStatusPipeline
+          updates={statusUpdates ?? []}
+          runStatus={run.status}
+        />
+      )}
 
       {steps && steps.length > 0 && <StepTimeline steps={steps} />}
 

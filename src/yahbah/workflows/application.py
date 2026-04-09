@@ -175,6 +175,7 @@ class ApplicationWorkflow:
                     run_id=run_id,
                     form_schema_dict=extract_output.form_schema_dict,
                     job_description=extract_output.job_description,
+                    account_email=auth_output.account_email,
                 ),
                 start_to_close_timeout=medium,
                 retry_policy=retry,
