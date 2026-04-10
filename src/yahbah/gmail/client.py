@@ -177,8 +177,25 @@ class GmailClient:
                         )
                         continue
 
-                    # Label as processed so we don't re-read it.
-                    await self._add_label(msg_id, label_id)
+                    # Label as processed and optionally archive/delete.
+                    # "archive" = move to YahBah folder, "delete" = trash, "nothing" = label only
+                    from yahbah.config import get_runtime_settings
+                    rt = await get_runtime_settings()
+                    action = rt.get("gmail_verification_code_action", "nothing")
+                    if action == "archive":
+                        folder_label = rt.get("gmail_folder_label", settings.gmail_folder_label)
+                        folder_label_id = await self._get_or_create_label(folder_label)
+                        await self._modify_labels(
+                            msg_id,
+                            add_label_ids=[label_id, folder_label_id],
+                            remove_label_ids=["INBOX"],
+                        )
+                    elif action == "delete":
+                        await self._trash_message(msg_id)
+                    else:
+                        if action != "nothing":
+                            logger.warning(f"[gmail] Unknown verification code action: {action!r}, treating as 'nothing'")
+                        await self._add_label(msg_id, label_id)
                     logger.info(f"[gmail] Verification code extracted: {code} (from message {msg_id}, epoch={msg_epoch})")
                     return code
 
@@ -289,6 +306,12 @@ class GmailClient:
                     userId="me", id=message_id, body=body,
                 )
             )
+
+    async def _trash_message(self, message_id: str) -> None:
+        """Move a message to the trash."""
+        await self._execute(
+            self._service.users().messages().trash(userId="me", id=message_id)
+        )
 
     async def _get_or_create_label(self, label_name: str) -> str:
         if label_name in self._label_id_cache:

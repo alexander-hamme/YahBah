@@ -14,7 +14,9 @@ import {
   MessageSquareCheck,
 } from "lucide-react";
 import { StatusBadge } from "@/components/status-badge";
-import type { RunDetail } from "@/lib/types";
+import { ApplicationStatusPipeline } from "@/components/application-status-pipeline";
+import { useDevMode } from "@/components/dev-mode-context";
+import type { RunDetail, StatusUpdate } from "@/lib/types";
 
 function timeAgo(iso: string | null): string {
   if (!iso) return "-";
@@ -88,52 +90,114 @@ function Field({
   );
 }
 
-export function RunInfoCard({ run }: { run: RunDetail }) {
+export function RunInfoCard({
+  run,
+  statusUpdates,
+}: {
+  run: RunDetail;
+  statusUpdates: StatusUpdate[];
+}) {
+  const { devMode } = useDevMode();
+  const showPipeline =
+    run.status === "COMPLETED" || statusUpdates.length > 0;
+
+  const isInProgress = run.status === "RUNNING" || run.status === "PENDING";
+  const isDone = run.status === "COMPLETED" || run.status === "FAILED" || run.status === "DUPLICATE";
+
   return (
-    <div className="glass-panel rounded-xl overflow-hidden">
-      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+    <div className="glass-panel rounded-xl">
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent rounded-t-xl" />
       <div className="px-5 pt-4 pb-2">
-        <h3 className="text-sm font-semibold text-foreground" style={{ fontFamily: "var(--font-heading)" }}>
-          Run Info
+        <h3
+          className="text-sm font-semibold text-foreground"
+          style={{ fontFamily: "var(--font-heading)" }}
+        >
+          Application Info
         </h3>
       </div>
-      <div className="px-5 pb-5 space-y-4">
-        <div className="grid grid-cols-2 gap-x-6 gap-y-3">
+      <div className="px-5 pb-5 space-y-5">
+        {/* Single row: status fields + pipeline + track button */}
+        <div className="flex items-center gap-8 flex-wrap">
           <Field icon={<Activity className="h-3 w-3" />} label="Status">
             <StatusBadge status={run.status} />
           </Field>
-          <Field icon={<CheckCheck className="h-3 w-3" />} label="Current Step">
-            {formatStep(run.current_state)}
-          </Field>
-          <Field icon={<Calendar className="h-3 w-3" />} label="Created">
-            <span title={formatDateTime(run.created_at)}>
-              {timeAgo(run.created_at)}
-            </span>
-          </Field>
-          <Field icon={<Clock className="h-3 w-3" />} label="Updated">
-            <span title={formatDateTime(run.updated_at)}>
-              {timeAgo(run.updated_at)}
-            </span>
-          </Field>
-          <Field icon={<Clock className="h-3 w-3" />} label="Completed">
-            <span title={formatDateTime(run.completed_at)}>
-              {run.completed_at ? timeAgo(run.completed_at) : "-"}
-            </span>
-          </Field>
-          <Field icon={<Workflow className="h-3 w-3" />} label="Workflow ID">
-            {run.temporal_workflow_id ? (
-              <span className="inline-flex items-center gap-1.5">
-                <code className="font-mono text-xs text-muted-foreground truncate max-w-[140px]">
-                  {run.temporal_workflow_id}
-                </code>
-                <CopyButton text={run.temporal_workflow_id} />
+
+          {isInProgress && !devMode && (
+            <Field icon={<CheckCheck className="h-3 w-3" />} label="Current Step">
+              {formatStep(run.current_state)}
+            </Field>
+          )}
+
+          {isDone && !devMode && (
+            <Field icon={<Clock className="h-3 w-3" />} label={run.status === "COMPLETED" ? "Completed" : "Ended"}>
+              <span title={formatDateTime(run.completed_at)}>
+                {run.completed_at ? timeAgo(run.completed_at) : "-"}
               </span>
-            ) : (
-              "-"
-            )}
-          </Field>
+            </Field>
+          )}
+
+          {/* Pipeline stages */}
+          {showPipeline && (
+            <div className="flex-1 min-w-0">
+              <ApplicationStatusPipeline
+                updates={statusUpdates}
+                runStatus={run.status}
+                completedAt={run.completed_at}
+              />
+            </div>
+          )}
+
+          {/* Tracking URL */}
+          {run.tracking_url && (
+            <a
+              href={run.tracking_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 hover:bg-cyan-500/20 transition-all shrink-0"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              Track
+            </a>
+          )}
         </div>
 
+        {/* Dev mode details */}
+        {devMode && (
+          <div className="flex items-start gap-8 flex-wrap">
+            <Field icon={<CheckCheck className="h-3 w-3" />} label="Current Step">
+              {formatStep(run.current_state)}
+            </Field>
+            <Field icon={<Calendar className="h-3 w-3" />} label="Created">
+              <span title={formatDateTime(run.created_at)}>
+                {timeAgo(run.created_at)}
+              </span>
+            </Field>
+            <Field icon={<Clock className="h-3 w-3" />} label="Updated">
+              <span title={formatDateTime(run.updated_at)}>
+                {timeAgo(run.updated_at)}
+              </span>
+            </Field>
+            <Field icon={<Clock className="h-3 w-3" />} label="Completed">
+              <span title={formatDateTime(run.completed_at)}>
+                {run.completed_at ? timeAgo(run.completed_at) : "-"}
+              </span>
+            </Field>
+            <Field icon={<Workflow className="h-3 w-3" />} label="Workflow ID">
+              {run.temporal_workflow_id ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <code className="font-mono text-xs text-muted-foreground truncate max-w-[200px]">
+                    {run.temporal_workflow_id}
+                  </code>
+                  <CopyButton text={run.temporal_workflow_id} />
+                </span>
+              ) : (
+                "-"
+              )}
+            </Field>
+          </div>
+        )}
+
+        {/* Error message */}
         {run.error_message && (
           <div className="flex gap-3 p-3 rounded-lg bg-red-500/10 border border-red-500/20 shadow-[0_0_12px_rgba(239,68,68,0.08)]">
             <AlertTriangle className="h-4 w-4 text-red-400 shrink-0 mt-0.5" />
@@ -146,18 +210,7 @@ export function RunInfoCard({ run }: { run: RunDetail }) {
           </div>
         )}
 
-        {run.tracking_url && (
-          <a
-            href={run.tracking_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 hover:bg-cyan-500/20 hover:shadow-[0_0_16px_rgba(56,189,248,0.2)] transition-all"
-          >
-            <ExternalLink className="h-4 w-4" />
-            Track Application Status
-          </a>
-        )}
-
+        {/* Confirmation HTML */}
         {run.confirmation_html && (
           <div>
             <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">

@@ -49,7 +49,7 @@ Each step is a Temporal activity with independent retry policies and timeouts. I
 | **Browser** | Playwright (Chromium) | Headless form extraction, filling, file upload, submission |
 | **LLM** | Ollama (local) | Field mapping, cover letter generation, metadata extraction, dropdown selection |
 | **Database** | PostgreSQL + SQLAlchemy | System of record — runs, artifacts, job metadata, applicant profile |
-| **Email** | Gmail API | Verification code retrieval via incremental polling |
+| **Email** | Gmail API | Verification codes, post-submission status tracking, auto-archive |
 | **Deps** | uv | Fast Python package management |
 | **Migrations** | Alembic | Schema versioning |
 
@@ -65,11 +65,14 @@ Each step is a Temporal activity with independent retry policies and timeouts. I
 ## Capabilities
 
 - **Account creation**: detects Greenhouse auth walls, generates unique email aliases + strong passwords, creates accounts automatically
+- **Per-application email aliases**: every application gets a unique email alias (e.g. `user+job-a7f2@gmail.com`) derived from a short hash of the ATS, company, and job ID. Aliases are collision-resistant (auto-extends from 4 to 8 hex chars if needed, like Git short SHAs). Company reply emails are matched back to the specific application via this alias.
 - **Form extraction**: reads all inputs, selects, textareas, checkboxes from the DOM; resolves labels via `<label for>`, ancestors, placeholders
 - **Smart filling**: LLM maps form fields to profile columns; native `<select>` and custom React dropdowns are both handled (click → collect options → LLM picks best match)
 - **File upload**: resume and cover letter PDF upload via file-chooser interception (works with Greenhouse's React uploader)
 - **Cover letter generation**: LLM generates a tailored cover letter per job, rendered as PDF with custom typography
 - **Email verification**: when Greenhouse requires a security code, polls Gmail API for the code email, extracts the code (heuristic + LLM fallback), and types it into the verification inputs
+- **Application status tracking**: background poller monitors Gmail for post-submission emails (confirmations, rejections, interview requests, etc.), classifies them via LLM, and links them to the originating application. Displays as a visual pipeline on the frontend. See [Email Status Tracking](#email-status-tracking) below.
+- **Auto-archive**: per-status-type configurable email management. Routine emails (confirmations, rejections) are automatically moved to a designated Gmail folder, while actionable ones (interview requests, offers) stay in the inbox. All toggles are runtime-configurable via the API.
 - **Job metadata extraction**: LLM extracts title, company, location, salary range, technology stack, and a 40-word description summary; stored in Postgres for querying
 - **Duplicate detection**: blocks re-application to the same job by canonical URL or (title + company + location) within a configurable window
 - **Artifact capture**: screenshots at every stage, Playwright traces, form schemas, field mappings, cover letters, confirmation text
@@ -237,6 +240,59 @@ http://localhost:8233
 
 ---
 
+## Email Status Tracking
+
+After applications are submitted, companies send status emails (confirmations, rejections, interview requests). YahBah monitors Gmail for these and links them back to specific applications.
+
+### How it works
+
+1. **Email aliases**: each application uses a unique email alias (e.g. `user+job-a7f2@gmail.com`) in the form. The alias is a 4-char hex hash of the ATS type, company, and job ID — short enough to look natural, unique enough to avoid collisions (auto-extends to 8 chars if needed).
+
+2. **Background poller**: runs in the worker process every N minutes (configurable, default 10). Uses the Gmail history API for efficient incremental sync — only fetches messages that arrived since the last poll.
+
+3. **Checkpoint persistence**: the poller stores a Gmail `historyId` checkpoint in the database. On first startup, it backfills by searching for emails since the oldest submitted application. On subsequent starts, it resumes from the checkpoint — no redundant work across restarts.
+
+4. **LLM classification**: each email is classified into a status type (UNDER_REVIEW, ONLINE_ASSESSMENT, INTERVIEW_REQUEST, INTERVIEW_SCHEDULED, OFFER, REJECTED, WITHDRAWN) with a confidence score and summary.
+
+5. **Matching**: emails are matched to applications by alias (exact match on `To:` header). For older applications that used the base email, a company-name fallback extracts the company from the email body and matches against job posting records.
+
+6. **Auto-archive**: after classification, emails are optionally moved out of the inbox based on per-status-type toggles in `config/settings.yaml`. By default, routine emails (confirmations, rejections) are archived to a `YahBah` folder while actionable ones (interview requests, offers) stay in the inbox.
+
+### Configuration
+
+All settings are in `config/settings.yaml` and runtime-configurable via `PUT /settings/{key}`:
+
+```yaml
+gmail_status_polling_enabled: false
+gmail_status_polling_interval_minutes: 10
+gmail_folder_label: "YahBah"
+gmail_status_label: "YahBah/Status"
+
+# What to do with verification code emails: "archive", "delete", or "nothing"
+gmail_verification_code_action: "archive"
+
+# Per-status auto-archive toggles
+gmail_auto_archive:
+  UNDER_REVIEW: true
+  ONLINE_ASSESSMENT: false
+  INTERVIEW_REQUEST: false
+  INTERVIEW_SCHEDULED: false
+  OFFER: false
+  REJECTED: true
+  WITHDRAWN: true
+  OTHER: true
+```
+
+### Manual poll
+
+```bash
+curl -X POST http://localhost:8000/gmail/poll
+```
+
+Returns `{"success": true, "processed": 3, "skipped": 12}`.
+
+---
+
 ## API Reference
 
 | Method | Path | Description |
@@ -245,6 +301,10 @@ http://localhost:8233
 | `GET` | `/runs/{id}` | Run status + current state |
 | `GET` | `/runs/{id}/steps` | Step-by-step progress |
 | `GET` | `/runs/{id}/artifacts` | All stored artifacts |
+| `GET` | `/runs/{id}/status-updates` | Email-based status updates (received, rejected, interview, etc.) |
+| `POST` | `/gmail/poll` | Manually trigger a Gmail status poll cycle |
+| `GET` | `/settings` | Current runtime settings |
+| `PUT` | `/settings/{key}` | Update a runtime setting (body: `{"value": ...}`) |
 
 ---
 
@@ -263,7 +323,8 @@ src/yahbah/
 │   └── session.py          # AsyncSessionLocal
 ├── gmail/                  # Gmail API integration
 │   ├── client.py           # GmailClient (OAuth2, polling, labels)
-│   └── parser.py           # Verification code extraction
+│   ├── parser.py           # Verification code + status email classification
+│   └── poller.py           # Background status poller (backfill + incremental sync)
 ├── llm/                    # LLM integration
 │   ├── client.py           # OllamaClient (structured + text generation)
 │   ├── field_mapper.py     # Form field → profile mapping

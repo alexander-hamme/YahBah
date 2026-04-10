@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Bug } from "lucide-react";
 import { RunActions } from "@/components/run-actions";
-import { ApplicationStatusPipeline } from "@/components/application-status-pipeline";
 import { getRunDetail, getRunSteps, getRunArtifacts, getRunStatusUpdates } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { CompanyLogo } from "@/components/company-logo";
@@ -112,18 +111,10 @@ export default function ApplicationDetailPage({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {run.job_posting && (
-          <JobMetadataCard jobPosting={run.job_posting} jobUrl={run.job_url} matchScore={run.match_score} matchRationale={run.match_rationale} />
-        )}
-        <RunInfoCard run={run} />
-      </div>
+      <RunInfoCard run={run} statusUpdates={statusUpdates ?? []} />
 
-      {(run.status === "COMPLETED" || (statusUpdates && statusUpdates.length > 0)) && (
-        <ApplicationStatusPipeline
-          updates={statusUpdates ?? []}
-          runStatus={run.status}
-        />
+      {run.job_posting && (
+        <JobMetadataCard jobPosting={run.job_posting} jobUrl={run.job_url} matchScore={run.match_score} matchRationale={run.match_rationale} />
       )}
 
       {steps && steps.length > 0 && <StepTimeline steps={steps} />}

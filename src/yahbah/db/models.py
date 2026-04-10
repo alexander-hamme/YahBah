@@ -167,7 +167,7 @@ class ApplicationStatusUpdate(Base):
         PG_UUID(as_uuid=True), ForeignKey("application_run.id"), nullable=False
     )
     status_type: Mapped[str] = mapped_column(String, nullable=False)
-    # RECEIVED | UNDER_REVIEW | ONLINE_ASSESSMENT | INTERVIEW_REQUEST |
+    # UNDER_REVIEW | ONLINE_ASSESSMENT | INTERVIEW_REQUEST |
     # INTERVIEW_SCHEDULED | OFFER | REJECTED | WITHDRAWN | OTHER
     subject: Mapped[str | None] = mapped_column(String)
     sender: Mapped[str | None] = mapped_column(String)

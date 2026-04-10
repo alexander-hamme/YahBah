@@ -97,7 +97,7 @@ async def poll_for_status_emails(rt: dict) -> tuple[int, int]:
     folder_label_id = await gmail._get_or_create_label(folder_label)
     status_label_id = await gmail._get_or_create_label(status_label)
 
-    # Load or seed checkpoint
+    # Load checkpoint
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(GmailCheckpoint).where(
@@ -106,31 +106,32 @@ async def poll_for_status_emails(rt: dict) -> tuple[int, int]:
         )
         checkpoint = result.scalar_one_or_none()
 
-        if checkpoint is None:
-            history_id = await gmail.get_current_history_id()
-            checkpoint = GmailCheckpoint(
-                email=_CHECKPOINT_KEY,
-                history_id=history_id,
-            )
-            session.add(checkpoint)
-            await session.commit()
-            logger.info(
-                f"[status-poller] Seeded checkpoint at historyId={history_id}"
-            )
-            return 0, 0
-
-    # Fetch new messages since checkpoint (no label filter — we read everything
-    # and filter by +alias recipient in code)
-    try:
-        messages, new_history_id = await gmail.get_history_since(
-            checkpoint.history_id
-        )
-    except InvalidHistoryIdError:
-        logger.warning(
-            "[status-poller] History ID expired — falling back to search"
-        )
-        messages = await _search_alias_emails(gmail)
+    if checkpoint is None:
+        # First run: backfill by searching for emails since the oldest
+        # submitted application, then create the checkpoint at "now".
+        logger.info("[status-poller] First run — backfilling existing status emails")
+        messages = await _search_since_oldest_run(gmail)
         new_history_id = await gmail.get_current_history_id()
+
+        # Create checkpoint so subsequent polls use incremental history
+        async with AsyncSessionLocal() as session:
+            session.add(GmailCheckpoint(
+                email=_CHECKPOINT_KEY,
+                history_id=new_history_id,
+            ))
+            await session.commit()
+    else:
+        # Normal: incremental fetch since last checkpoint
+        try:
+            messages, new_history_id = await gmail.get_history_since(
+                checkpoint.history_id
+            )
+        except InvalidHistoryIdError:
+            logger.warning(
+                "[status-poller] History ID expired — falling back to search"
+            )
+            messages = await _search_since_oldest_run(gmail)
+            new_history_id = await gmail.get_current_history_id()
 
     if not messages:
         await _update_checkpoint(new_history_id)
@@ -177,17 +178,57 @@ async def _update_checkpoint(history_id: str) -> None:
         await session.commit()
 
 
-async def _search_alias_emails(gmail: GmailClient) -> list[dict]:
-    """Fallback when history ID expires: search for +alias emails."""
+async def _search_since_oldest_run(gmail: GmailClient) -> list[dict]:
+    """
+    Search for emails to the profile address (both base and +alias)
+    going back to the oldest submitted application's timestamp.
+    Used for first-run backfill and when the history checkpoint expires.
+    """
+    from sqlalchemy import func as sa_func
     from yahbah.config import load_prompts_config
 
     base_email = load_prompts_config().get("profile", {}).get("email", "")
     if not base_email or "@" not in base_email:
         return []
+
+    # Find the oldest application's created_at timestamp
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(sa_func.min(ApplicationRun.created_at))
+        )
+        oldest = result.scalar_one_or_none()
+
+    if oldest is None:
+        logger.info("[status-poller] No applications found — nothing to backfill")
+        return []
+
+    logger.info(
+        f"[status-poller] Searching for emails since oldest application: "
+        f"{oldest.strftime('%b %d, %Y %I:%M %p')}"
+    )
+    epoch = int(oldest.timestamp())
     local, domain = base_email.split("@", 1)
-    query = f"to:{local}+*@{domain}"
-    results = await gmail._search_messages(query, max_results=50)
-    return [{"id": m["id"]} for m in results]
+
+    # Search for emails to both the base address and any +alias variants
+    queries = [
+        f"to:{base_email} after:{epoch}",
+        f"to:{local}+*@{domain} after:{epoch}",
+    ]
+
+    seen_ids: set[str] = set()
+    messages: list[dict] = []
+    for query in queries:
+        results = await gmail._search_messages(query, max_results=100)
+        for m in results:
+            if m["id"] not in seen_ids:
+                seen_ids.add(m["id"])
+                messages.append({"id": m["id"]})
+
+    logger.info(
+        f"[status-poller] Search found {len(messages)} email(s) "
+        f"since {oldest.isoformat()}"
+    )
+    return messages
 
 
 async def _process_message(

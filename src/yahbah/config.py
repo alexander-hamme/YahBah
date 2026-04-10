@@ -41,7 +41,6 @@ class Settings(BaseSettings):
     # Per-status-type auto-archive toggles: True = move from inbox to
     # YahBah folder, False = leave in inbox for immediate visibility.
     gmail_auto_archive: dict[str, bool] = {
-        "RECEIVED": True,
         "UNDER_REVIEW": True,
         "ONLINE_ASSESSMENT": False,
         "INTERVIEW_REQUEST": False,
@@ -67,23 +66,22 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
-import json as _json
 import asyncio as _asyncio
 
-_SETTINGS_PATH = Path("config/settings.json")
+_SETTINGS_PATH = Path("config/settings.yaml")
 
 
 def _read_settings_sync() -> dict:
     try:
         with open(_SETTINGS_PATH) as f:
-            return _json.load(f)
-    except (FileNotFoundError, _json.JSONDecodeError):
+            return yaml.safe_load(f) or {}
+    except FileNotFoundError:
         return {"testing_mode": False}
 
 
 def _write_settings_sync(data: dict) -> None:
     with open(_SETTINGS_PATH, "w") as f:
-        _json.dump(data, f, indent=2)
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
 
 async def get_runtime_settings() -> dict:

@@ -126,8 +126,8 @@ prompts:
     and body, determine whether this is a genuine application status update and classify it.
 
     Status types:
-    - RECEIVED: Application confirmed received / "thank you for applying" / acknowledgment
-    - UNDER_REVIEW: Application is being reviewed / "your application is under consideration"
+    - UNDER_REVIEW: Application confirmed received and under review / "thank you for applying" /
+      "we will review your application". This is the default for all initial confirmation emails.
     - ONLINE_ASSESSMENT: Online assessment, coding challenge, or take-home assignment sent
     - INTERVIEW_REQUEST: Invitation to interview (phone screen, video call, on-site, etc.)
     - INTERVIEW_SCHEDULED: Interview date/time confirmed or calendar invite
