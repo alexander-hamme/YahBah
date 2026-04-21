@@ -251,8 +251,13 @@ async def _process_message(
         if existing.scalar_one_or_none() is not None:
             return False
 
-    # Fetch full message
-    msg = await gmail._get_message(message_id)
+    # Fetch full message (may 404 if deleted since history event)
+    try:
+        msg = await gmail._get_message(message_id)
+    except Exception as exc:
+        if "404" in str(exc) or "notFound" in str(exc):
+            return False
+        raise
     headers = {
         h["name"].lower(): h["value"]
         for h in msg.get("payload", {}).get("headers", [])

@@ -1,19 +1,11 @@
 """
 POST /jobs — enqueue a new application run.
 """
-import uuid
-from datetime import datetime, timezone
-
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from yahbah.config import settings
-from yahbah.db.models import ApplicationRun, JobPosting
-from yahbah.db.session import get_session
+from yahbah.jobs import submit_job_for_application
 from yahbah.url_utils import normalize_job_url
-from yahbah.workflows.application import ApplicationWorkflow, ApplicationWorkflowInput
 
 router = APIRouter()
 
@@ -32,60 +24,19 @@ class EnqueueJobResponse(BaseModel):
 async def enqueue_job(
     request: Request,
     body: EnqueueJobRequest,
-    session: AsyncSession = Depends(get_session),
 ) -> EnqueueJobResponse:
-    now = datetime.now(timezone.utc)
     job_url = await normalize_job_url(body.job_url)
 
-    # Upsert JobPosting (idempotent by normalized URL)
-    result = await session.execute(
-        select(JobPosting).where(JobPosting.url == job_url)
-    )
-    job_posting = result.scalar_one_or_none()
-    if job_posting is None:
-        job_posting = JobPosting(
-            id=uuid.uuid4(),
-            url=job_url,
-            ats_type="greenhouse",
-            created_at=now,
-        )
-        session.add(job_posting)
-        await session.flush()
-
-    # Create ApplicationRun
-    run_id = uuid.uuid4()
-    workflow_id = f"application-{run_id}"
-
-    run = ApplicationRun(
-        id=run_id,
-        job_posting_id=job_posting.id,
-        job_url=job_url,
-        status="PENDING",
-        temporal_workflow_id=workflow_id,
-        created_at=now,
-        updated_at=now,
-    )
-    session.add(run)
-    await session.commit()
-
-    # Kick off Temporal workflow using the shared client from app lifespan
     try:
         temporal = request.app.state.temporal
-        await temporal.start_workflow(
-            ApplicationWorkflow.run,
-            ApplicationWorkflowInput(run_id=str(run_id), job_url=job_url),
-            id=workflow_id,
-            task_queue=settings.temporal_task_queue,
-        )
+        run_id = await submit_job_for_application(job_url, temporal)
     except Exception as exc:
-        # Mark run failed if we can't reach Temporal
-        run.status = "FAILED"
-        run.error_message = f"Failed to start workflow: {exc}"
-        await session.commit()
-        raise HTTPException(status_code=503, detail=f"Temporal unavailable: {exc}") from exc
+        raise HTTPException(
+            status_code=503, detail=f"Failed to start workflow: {exc}"
+        ) from exc
 
     return EnqueueJobResponse(
-        run_id=str(run_id),
+        run_id=run_id,
         status="PENDING",
         job_url=job_url,
     )

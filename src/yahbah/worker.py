@@ -31,6 +31,7 @@ from yahbah.workflows.activities.llm import (
     generate_cover_letter_activity,
 )
 from yahbah.gmail.poller import run_status_poller
+from yahbah.gmail.alert_poller import run_alert_poller
 from yahbah.workflows.activities.db_ops import (
     update_run_state_activity,
     mark_run_completed_activity,
@@ -118,17 +119,22 @@ async def main() -> None:
 
         logger.info(f"Worker starting — polling task queue '{settings.temporal_task_queue}'")
 
-        # Start the Gmail status poller as a background task
-        poller_task = asyncio.create_task(run_status_poller())
+        # Start background pollers
+        status_poller_task = asyncio.create_task(run_status_poller())
+        alert_poller_task = asyncio.create_task(
+            run_alert_poller(temporal_client=temporal)
+        )
 
         try:
             await worker.run()
         finally:
-            poller_task.cancel()
-            try:
-                await poller_task
-            except asyncio.CancelledError:
-                pass
+            status_poller_task.cancel()
+            alert_poller_task.cancel()
+            for task in (status_poller_task, alert_poller_task):
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
     finally:
         # Graceful shutdown: mark in-flight runs before exiting

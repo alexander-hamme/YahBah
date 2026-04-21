@@ -4,6 +4,9 @@ import type {
   Artifact,
   EnqueueJobResponse,
   RunDetail,
+  ScheduledJobItem,
+  ScheduledJobListResponse,
+  ScheduledStats,
   StatusUpdate,
   Step,
 } from "./types";
@@ -98,4 +101,66 @@ export function artifactDownloadUrl(
   artifactId: string
 ): string {
   return `${BASE}/runs/${runId}/artifacts/${artifactId}/download`;
+}
+
+// ── Scheduled queue ──────────────────────────────────────────────────────
+
+export interface ScheduledParams {
+  page?: number;
+  per_page?: number;
+  status?: string;
+  search?: string;
+  sort?: string;
+}
+
+export function getScheduledJobs(
+  params: ScheduledParams = {}
+): Promise<ScheduledJobListResponse> {
+  const qs = new URLSearchParams();
+  if (params.page) qs.set("page", String(params.page));
+  if (params.per_page) qs.set("per_page", String(params.per_page));
+  if (params.status) qs.set("status", params.status);
+  if (params.search) qs.set("search", params.search);
+  if (params.sort) qs.set("sort", params.sort);
+  return fetchJSON(`${BASE}/scheduled?${qs}`);
+}
+
+export function getScheduledStats(): Promise<ScheduledStats> {
+  return fetchJSON(`${BASE}/scheduled/stats`);
+}
+
+export function addScheduledJob(jobUrl: string): Promise<ScheduledJobItem> {
+  return fetchJSON(`${BASE}/scheduled`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_url: jobUrl }),
+  });
+}
+
+export function approveScheduledJob(id: string): Promise<{ success: boolean; message: string }> {
+  return fetchJSON(`${BASE}/scheduled/${id}/approve`, { method: "POST" });
+}
+
+export function rejectScheduledJob(id: string): Promise<{ success: boolean; message: string }> {
+  return fetchJSON(`${BASE}/scheduled/${id}/reject`, { method: "POST" });
+}
+
+export function toggleHoldScheduledJob(id: string): Promise<{ success: boolean; message: string }> {
+  return fetchJSON(`${BASE}/scheduled/${id}/hold`, { method: "POST" });
+}
+
+export function promoteScheduledJob(id: string): Promise<{ success: boolean; message: string }> {
+  return fetchJSON(`${BASE}/scheduled/${id}/promote`, { method: "POST" });
+}
+
+export function deleteScheduledJob(id: string): Promise<{ success: boolean; message: string }> {
+  return fetchJSON(`${BASE}/scheduled/${id}`, { method: "DELETE" });
+}
+
+export function triggerAlertBackfill(since: string): Promise<{ success: boolean; processed: number; skipped: number }> {
+  return fetchJSON(`${BASE}/gmail/alert-backfill`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ since }),
+  });
 }

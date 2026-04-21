@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import (
-    DateTime, ForeignKey, JSON, String, Text, Boolean, Float,
+    DateTime, ForeignKey, Index, Integer, JSON, String, Text, Boolean, Float,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -184,8 +184,47 @@ class ApplicationStatusUpdate(Base):
 
 
 # ---------------------------------------------------------------------------
-# applicant_profile
+# scheduled_job — jobs parsed from alert emails, awaiting promotion
 # ---------------------------------------------------------------------------
+
+class ScheduledJob(Base):
+    __tablename__ = "scheduled_job"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    job_url: Mapped[str] = mapped_column(String, nullable=False)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    # "linkedin" | "indeed" | "glassdoor" | "greenhouse" | "other"
+    title: Mapped[str | None] = mapped_column(String)
+    company: Mapped[str | None] = mapped_column(String)
+    location: Mapped[str | None] = mapped_column(String)
+    description: Mapped[str | None] = mapped_column(Text)
+    snippet: Mapped[str | None] = mapped_column(Text)
+    match_score: Mapped[int | None] = mapped_column(Integer)
+    match_rationale: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String, default="SCHEDULED")
+    # SCHEDULED | APPROVED | SKIPPED | PROMOTED | EXPIRED
+    hold: Mapped[bool] = mapped_column(Boolean, default=False)
+    gmail_message_id: Mapped[str] = mapped_column(String, nullable=False)
+    promote_after: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    promoted_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("application_run.id")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    __table_args__ = (
+        Index("ix_scheduled_job_status", "status"),
+        Index("ix_scheduled_job_promote_after", "promote_after"),
+    )
+
 
 # ---------------------------------------------------------------------------
 # gmail_checkpoint — stores incremental sync state for Gmail ingestion

@@ -6,7 +6,7 @@ from loguru import logger
 from temporalio.client import Client as TemporalClient
 
 from yahbah.config import settings, get_runtime_settings, set_runtime_setting
-from yahbah.api.routes import applications, jobs, runs
+from yahbah.api.routes import applications, jobs, runs, scheduled
 
 
 @asynccontextmanager
@@ -37,6 +37,7 @@ app.add_middleware(
 app.include_router(applications.router, prefix="/applications", tags=["applications"])
 app.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
 app.include_router(runs.router, prefix="/runs", tags=["runs"])
+app.include_router(scheduled.router, prefix="/scheduled", tags=["scheduled"])
 
 
 @app.get("/health")
@@ -66,6 +67,31 @@ async def trigger_gmail_poll() -> dict:
     from yahbah.gmail.poller import trigger_poll
     try:
         processed, skipped = await trigger_poll()
+        return {"success": True, "processed": processed, "skipped": skipped}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+@app.post("/gmail/alert-poll")
+async def trigger_gmail_alert_poll() -> dict:
+    """Manually trigger a Gmail job alert poll cycle."""
+    from yahbah.gmail.alert_poller import trigger_alert_poll
+    try:
+        processed, skipped = await trigger_alert_poll()
+        return {"success": True, "processed": processed, "skipped": skipped}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+class _BackfillRequest(_BaseModel):
+    since: str  # ISO date, e.g. "2026-04-10"
+
+@app.post("/gmail/alert-backfill")
+async def trigger_alert_backfill(body: _BackfillRequest) -> dict:
+    """Delete the alert checkpoint and backfill from a given date."""
+    from yahbah.gmail.alert_poller import trigger_backfill
+    try:
+        processed, skipped = await trigger_backfill(body.since)
         return {"success": True, "processed": processed, "skipped": skipped}
     except Exception as exc:
         return {"success": False, "error": str(exc)}

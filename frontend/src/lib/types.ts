@@ -116,3 +116,43 @@ export interface FieldMapping {
   value: string;
   confidence: number;
 }
+
+export interface ScheduledJobItem {
+  id: string;
+  job_url: string;
+  source: string;
+  title: string | null;
+  company: string | null;
+  location: string | null;
+  snippet: string | null;
+  match_score: number | null;
+  match_rationale: string | null;
+  status: string;
+  hold: boolean;
+  promote_after: string;
+  created_at: string;
+  updated_at: string;
+  promoted_run_id: string | null;
+}
+
+export interface ScheduledJobListResponse {
+  items: ScheduledJobItem[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+export interface ScheduledStats {
+  scheduled: number;
+  approved: number;
+  skipped: number;
+  promoted: number;
+  total: number;
+}
+
+export type ScheduledJobStatus =
+  | "SCHEDULED"
+  | "APPROVED"
+  | "SKIPPED"
+  | "PROMOTED"
+  | "EXPIRED";

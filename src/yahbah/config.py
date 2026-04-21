@@ -51,6 +51,12 @@ class Settings(BaseSettings):
         "OTHER": True,
     }
 
+    # Job alert parsing
+    job_alert_polling_interval_minutes: int = 30
+    job_alert_label: str = "YahBah/Alerts"
+    job_alert_promotion_delay_hours: int = 24
+    job_alert_min_match_score: int = 0  # 0 = accept all, 1-99 = auto-reject below threshold
+
     # Artifacts (local filesystem)
     artifacts_dir: str = "./artifacts"
 

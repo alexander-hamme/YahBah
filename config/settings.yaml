@@ -1,19 +1,9 @@
-# Runtime settings — all values are hot-reloadable via PUT /settings/{key}
-
 testing_mode: false
-
-# Gmail status polling
 gmail_status_polling_enabled: false
 gmail_status_polling_interval_minutes: 10
-gmail_folder_label: "YahBah"
-gmail_status_label: "YahBah/Status"
-
-# What to do with verification code emails after extraction.
-# Options: "archive" (move to YahBah folder), "delete" (trash), "nothing" (leave in inbox)
-gmail_verification_code_action: "archive"
-
-# Per-status auto-archive: true = move from inbox to YahBah folder,
-# false = leave in inbox for immediate visibility.
+gmail_folder_label: YahBah
+gmail_status_label: YahBah/Status
+gmail_verification_code_action: archive
 gmail_auto_archive:
   UNDER_REVIEW: true
   ONLINE_ASSESSMENT: false
@@ -23,3 +13,18 @@ gmail_auto_archive:
   REJECTED: true
   WITHDRAWN: true
   OTHER: true
+job_alert_polling_enabled: false
+job_alert_polling_interval_minutes: 30
+job_alert_label: YahBah/Alerts
+job_alert_auto_archive: true
+job_alert_sender_patterns:
+- '*@linkedin.com'
+- '*@indeed.com'
+- '*@glassdoor.com'
+- '*@greenhouse.io'
+- '*@ziprecruiter.com'
+- '*@handshake.com'
+- '*@jobright.ai'
+job_alert_promotion_delay_hours: 24
+job_alert_min_match_score: 0
+job_alert_backfill_since: '2026-04-16'

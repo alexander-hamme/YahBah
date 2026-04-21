@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { DM_Sans, Sora, Bungee, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import { Providers } from "@/components/providers";
+import { NavLinks } from "@/components/nav-links";
 import { TestingToggle } from "@/components/testing-toggle";
 import "./globals.css";
 
@@ -54,14 +55,7 @@ export default function RootLayout({
                 <img src="/yahbah-logo.svg" alt="YahBah" width={32} height={32} className="rounded" />
                 YahBah
               </Link>
-              <nav className="flex gap-1">
-                <Link
-                  href="/applications"
-                  className="px-3 py-1.5 text-sm font-medium text-muted-foreground rounded-md hover:text-foreground hover:bg-white/5 transition-colors"
-                >
-                  Applications
-                </Link>
-              </nav>
+              <NavLinks />
               <div className="ml-auto">
                 <TestingToggle />
               </div>
