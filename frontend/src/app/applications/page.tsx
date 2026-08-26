@@ -1,13 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { getApplications } from "@/lib/api";
+import { useState, useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { getApplications, bulkDeleteRuns } from "@/lib/api";
 import { SummaryCards } from "@/components/summary-cards";
 import { SubmitJobForm } from "@/components/submit-job-form";
 import { SearchFilterBar } from "@/components/search-filter-bar";
 import { ApplicationList } from "@/components/application-list";
 import { Pagination } from "@/components/pagination";
+import { DeleteAllButton } from "@/components/delete-all-button";
 
 function LoadingSplash() {
   return (
@@ -30,8 +31,16 @@ function LoadingSplash() {
 export default function ApplicationsPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("all");
+  const [status, setStatus] = useState("hide_failed");
   const [sort, setSort] = useState("created_at_desc");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const s = params.get("status");
+    if (s) setStatus(s.toUpperCase());
+  }, []);
 
   const { data, isLoading } = useQuery({
     queryKey: ["applications", { page, search, status, sort }],
@@ -39,7 +48,8 @@ export default function ApplicationsPage() {
       getApplications({
         page,
         per_page: 25,
-        status: status === "all" ? undefined : status,
+        status: status === "all" || status === "hide_failed" ? undefined : status,
+        exclude_status: status === "hide_failed" ? "FAILED" : undefined,
         search: search || undefined,
         sort,
       }),
@@ -49,11 +59,36 @@ export default function ApplicationsPage() {
   function handleSearchChange(value: string) {
     setSearch(value);
     setPage(1);
+    setSelectedIds(new Set());
   }
 
   function handleStatusChange(value: string) {
     setStatus(value);
     setPage(1);
+    setSelectedIds(new Set());
+  }
+
+  function handleToggleSelect(id: string) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function handleToggleAll(ids: string[], selectAll: boolean) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      ids.forEach(id => selectAll ? next.add(id) : next.delete(id));
+      return next;
+    });
+  }
+
+  async function handleBulkDelete(params: { run_ids?: string[]; status?: string }) {
+    await bulkDeleteRuns(params);
+    setSelectedIds(new Set());
+    queryClient.invalidateQueries({ queryKey: ["applications"] });
+    queryClient.invalidateQueries({ queryKey: ["application-stats"] });
   }
 
   return (
@@ -95,16 +130,52 @@ export default function ApplicationsPage() {
         />
       </div>
 
+      {status === "FAILED" && data && data.total > 0 && (
+        <div className="flex items-center justify-between px-1">
+          <span className="text-xs text-muted-foreground">
+            {data.total} failed run{data.total !== 1 ? "s" : ""}
+          </span>
+          <DeleteAllButton
+            count={data.total}
+            onConfirm={() => handleBulkDelete({ status: "FAILED" })}
+          />
+        </div>
+      )}
+
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-white/[0.04] border border-white/10 text-sm">
+          <span className="text-muted-foreground">{selectedIds.size} selected</span>
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Clear
+          </button>
+          <DeleteAllButton
+            count={selectedIds.size}
+            label={`Delete (${selectedIds.size})`}
+            onConfirm={() => handleBulkDelete({ run_ids: [...selectedIds] })}
+          />
+        </div>
+      )}
+
       {isLoading ? (
         <LoadingSplash />
       ) : data ? (
         <div className="space-y-4">
-          <ApplicationList items={data.items} sort={sort} onSort={setSort} />
+          <ApplicationList
+            items={data.items}
+            sort={sort}
+            onSort={setSort}
+            selectedIds={selectedIds}
+            onToggleSelect={handleToggleSelect}
+            onToggleAll={handleToggleAll}
+          />
           <Pagination
             page={data.page}
             perPage={data.per_page}
             total={data.total}
-            onPageChange={setPage}
+            onPageChange={(p) => { setPage(p); setSelectedIds(new Set()); }}
           />
         </div>
       ) : null}

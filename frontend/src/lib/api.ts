@@ -26,6 +26,7 @@ export interface ApplicationsParams {
   page?: number;
   per_page?: number;
   status?: string;
+  exclude_status?: string;
   search?: string;
   sort?: string;
 }
@@ -37,6 +38,7 @@ export function getApplications(
   if (params.page) qs.set("page", String(params.page));
   if (params.per_page) qs.set("per_page", String(params.per_page));
   if (params.status) qs.set("status", params.status);
+  if (params.exclude_status) qs.set("exclude_status", params.exclude_status);
   if (params.search) qs.set("search", params.search);
   if (params.sort) qs.set("sort", params.sort);
   return fetchJSON(`${BASE}/applications?${qs}`);
@@ -44,6 +46,21 @@ export function getApplications(
 
 export function getApplicationStats(): Promise<ApplicationStats> {
   return fetchJSON(`${BASE}/applications/stats`);
+}
+
+export interface BulkDeleteParams {
+  run_ids?: string[];
+  status?: string;
+}
+
+export function bulkDeleteRuns(
+  params: BulkDeleteParams
+): Promise<{ deleted: number; success: boolean }> {
+  return fetchJSON(`${BASE}/runs/bulk-delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
 }
 
 export function getRunDetail(id: string): Promise<RunDetail> {

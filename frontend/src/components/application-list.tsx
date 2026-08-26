@@ -80,10 +80,16 @@ export function ApplicationList({
   items,
   sort,
   onSort,
+  selectedIds,
+  onToggleSelect,
+  onToggleAll,
 }: {
   items: ApplicationListItem[];
   sort: string;
   onSort: (sort: string) => void;
+  selectedIds?: Set<string>;
+  onToggleSelect?: (id: string) => void;
+  onToggleAll?: (ids: string[], selectAll: boolean) => void;
 }) {
   if (items.length === 0) {
     return (
@@ -102,11 +108,26 @@ export function ApplicationList({
     );
   }
 
+  const selectable = !!selectedIds && !!onToggleSelect && !!onToggleAll;
+  const allSelected = selectable && items.length > 0 && items.every(i => selectedIds!.has(i.run_id));
+  const someSelected = selectable && items.some(i => selectedIds!.has(i.run_id));
+
   return (
     <div className="glass-panel rounded-xl overflow-hidden">
       <Table>
         <TableHeader>
           <TableRow className="border-b border-white/5 bg-white/[0.02]">
+            {selectable && (
+              <TableHead className="w-10 pl-3">
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  ref={el => { if (el) el.indeterminate = someSelected && !allSelected; }}
+                  onChange={() => onToggleAll!(items.map(i => i.run_id), !allSelected)}
+                  className="h-4 w-4 rounded border-white/20 bg-white/5 accent-red-500 cursor-pointer"
+                />
+              </TableHead>
+            )}
             <SortableColumn label="Company" sortKey="company" currentSort={sort} onSort={onSort} />
             <SortableColumn label="Role" sortKey="title" currentSort={sort} onSort={onSort} />
             <SortableColumn label="Status" sortKey="status" currentSort={sort} onSort={onSort} />
@@ -118,11 +139,27 @@ export function ApplicationList({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {items.map((item) => (
+          {items.map((item) => {
+            const isSelected = selectable && selectedIds!.has(item.run_id);
+            return (
             <TableRow
               key={item.run_id}
-              className="group cursor-pointer border-b border-white/[0.03] hover:bg-white/[0.04] transition-all border-l-2 border-l-transparent hover:border-l-cyan-400 hover:shadow-[inset_0_0_20px_rgba(56,189,248,0.03)]"
+              className={`group cursor-pointer border-b border-white/[0.03] transition-all border-l-2 ${
+                isSelected
+                  ? "bg-red-500/[0.06] border-l-red-500/50"
+                  : "hover:bg-white/[0.04] border-l-transparent hover:border-l-cyan-400 hover:shadow-[inset_0_0_20px_rgba(56,189,248,0.03)]"
+              }`}
             >
+              {selectable && (
+                <TableCell className="pl-3 w-10" onClick={e => { e.stopPropagation(); e.preventDefault(); onToggleSelect!(item.run_id); }}>
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => onToggleSelect!(item.run_id)}
+                    className="h-4 w-4 rounded border-white/20 bg-white/5 accent-red-500 cursor-pointer"
+                  />
+                </TableCell>
+              )}
               <TableCell>
                 <Link
                   href={`/applications/${item.run_id}`}
@@ -193,7 +230,8 @@ export function ApplicationList({
                 </div>
               </TableCell>
             </TableRow>
-          ))}
+            );
+          })}
         </TableBody>
       </Table>
     </div>

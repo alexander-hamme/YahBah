@@ -27,6 +27,7 @@ function handleSelect(fn: (v: string) => void) {
 }
 
 const STATUSES = [
+  { value: "hide_failed", label: "All (hide failed)" },
   { value: "all", label: "All Statuses" },
   { value: "PENDING", label: "Pending" },
   { value: "RUNNING", label: "Running" },
@@ -49,7 +50,7 @@ export function SearchFilterBar({
   sort,
   onSortChange,
 }: SearchFilterBarProps) {
-  const hasActiveFilters = search || status !== "all";
+  const hasActiveFilters = search || (status !== "all" && status !== "hide_failed");
 
   return (
     <div className="flex flex-col sm:flex-row gap-2">
@@ -100,7 +101,7 @@ export function SearchFilterBar({
             size="icon"
             onClick={() => {
               onSearchChange("");
-              onStatusChange("all");
+              onStatusChange("hide_failed");
             }}
             className="text-muted-foreground hover:text-foreground hover:bg-white/5"
             title="Clear filters"
