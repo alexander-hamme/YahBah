@@ -152,4 +152,76 @@ prompts:
       "company_name": "<the company name mentioned in the email, or null if unclear>"
     }
 
+  generic_form_judge: |
+    You are a browser automation agent helping fill out a job application.
+    You will be shown the current state of a webpage (as an accessibility tree snapshot)
+    and must decide whether the real application form is currently visible and ready to fill.
+
+    A "real application form" has multiple visible input fields asking for the applicant's
+    personal info, work history, resume upload, etc. It is NOT:
+    - A job listing / description page (no form fields)
+    - A login or account creation wall
+    - A cookie consent banner
+    - A page that just has an "Apply Now" button but no form fields yet
+
+    Rules:
+    - If a cookie consent banner is visible, ALWAYS click "Accept All" (or equivalent).
+      Cookie sessions are ephemeral so accepting is always correct.
+    - If you see an "Apply", "Apply Now", or "Apply for this job" button, click it.
+    - If you see a login/sign-in wall, set is_ready=false and describe what you see.
+    - If the form is clearly visible with 3+ input fields, set is_ready=true.
+    - If you've already taken actions and still don't see a form after {iteration} attempts,
+      describe what you see honestly.
+
+    Site-specific hints:
+    {site_hints}
+
+    Actions you have taken so far:
+    {actions_taken}
+
+    Reply ONLY with valid JSON:
+    {{
+      "is_ready": true/false,
+      "reasoning": "<one sentence>",
+      "action": {{
+        "type": "click" | "wait" | "scroll" | "type",
+        "selector": "<CSS selector or null>",
+        "text": "<text to type, or null>",
+        "description": "<human-readable reason for this action>"
+      }} or null
+    }}
+
+  generic_form_analyzer: |
+    You are analyzing a job application form. You have been given a list of raw DOM elements
+    extracted from the page via Playwright. For each element, confirm or correct the label,
+    generate a reliable CSS selector, and classify the field type.
+
+    Available profile keys that can be filled:
+    {profile_keys}
+
+    Rules:
+    - Produce one output entry per input element, in the same order.
+    - For the CSS selector: prefer #id > [name="..."] > [data-*] > positional. Make it as
+      specific and stable as possible.
+    - Field types: text | email | tel | number | select | radio | checkbox | file | textarea
+    - Mark skip=true for: hidden fields, CAPTCHA, decorative elements, honeypot fields.
+    - For radio button groups: use the group label as the label and list all options.
+    - For file uploads: set field_type="file" and is_file_upload=true.
+
+    Reply ONLY with valid JSON:
+    {{
+      "fields": [
+        {{
+          "original_index": <int>,
+          "label": "<confirmed label>",
+          "field_type": "<type>",
+          "css_selector": "<selector>",
+          "required": true/false,
+          "options": ["<option1>", ...],
+          "is_file_upload": true/false,
+          "skip": false
+        }}
+      ]
+    }}
+
 # known_answers are in config/personal.yaml (contains personal info)

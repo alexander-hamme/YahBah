@@ -21,6 +21,8 @@ from yahbah.browser.greenhouse import (
     GreenhouseFiller,
     activate_and_resolve_embed,
 )
+from yahbah.browser.generic import GenericFormAgent
+from yahbah.llm.client import OllamaClient
 from yahbah.credentials import (
     generate_email_alias,
     generate_password,
@@ -46,6 +48,25 @@ from yahbah.url_utils import ats_normalize, strip_tracking
 from yahbah.db.session import AsyncSessionLocal
 from yahbah.db.models import ApplicationRun
 from sqlalchemy import select
+
+
+async def _run_generic_agent(page, ats_type: str, run_id: str):
+    """Run the LangGraph generic form agent on the given page."""
+    from yahbah.config import load_prompts_config
+    from yahbah.db.models import ApplicantProfile
+    from sqlalchemy import select as _select
+
+    # Load profile keys so the LLM knows what values are available to fill
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(_select(ApplicantProfile).limit(1))
+        profile = result.scalar_one_or_none()
+    profile_keys: list[str] = []
+    if profile:
+        from sqlalchemy import inspect as _inspect
+        profile_keys = [c.key for c in _inspect(ApplicantProfile).mapper.column_attrs]
+
+    agent = GenericFormAgent(ats_type=ats_type, profile_keys=profile_keys)
+    return await agent.run(page)
 
 
 async def _base_email() -> str:
@@ -77,6 +98,15 @@ async def browser_open_and_auth_activity(input_: AuthInput) -> AuthOutput:
     # be matched back to this run via the alias.
     base_email = await _base_email()
     email = await generate_email_alias(base_email, input_.job_url)
+
+    # Generic sites: skip auth handling — the agent loop handles any auth walls
+    # it encounters during the extraction phase. Just store the alias.
+    if input_.ats_type != "greenhouse":
+        activity.logger.info(
+            f"[open] ats_type={input_.ats_type!r} — skipping auth check (agent handles it)"
+        )
+        await store_credentials_activity(input_.run_id, email, None)
+        return AuthOutput(auth_required=False, account_email=email, account_password=None)
 
     handler = GreenhouseAuthHandler(page)
     activity.logger.info(f"[open] Checking for auth wall")
@@ -116,21 +146,38 @@ async def browser_extract_activity(input: BrowserExtractInput) -> BrowserExtract
         )
         page = await registry.open_page(input.run_id, input.job_url)
 
-    activity.logger.info(f"[extract] Starting extraction — page URL: {page.url}")
-    extractor = GreenhouseExtractor(page)
-    try:
-        form_schema, job_description = await extractor.extract()
-    except ValueError as exc:
-        # Job no longer available or page is not an application form —
-        # no point retrying, fail immediately.
-        raise ApplicationError(str(exc), non_retryable=True) from exc
+    activity.logger.info(
+        f"[extract] Starting extraction — ats_type={input.ats_type!r} page URL: {page.url}"
+    )
+
+    job_title = job_company = job_location = posted_date = None
+    canonical_url = ""
+
+    if input.ats_type == "greenhouse":
+        # Try Greenhouse-specific extractor first
+        extractor = GreenhouseExtractor(page)
+        try:
+            form_schema, job_description = await extractor.extract()
+            job_title, job_company, job_location, raw_canonical = await extractor.extract_job_metadata()
+            canonical_url = ats_normalize(strip_tracking(raw_canonical))
+            posted_date = await extractor.extract_posted_date()
+        except ValueError as exc:
+            # Page validation failed — fall back to generic agent
+            activity.logger.warning(
+                f"[extract] Greenhouse validation failed ({exc}) — falling back to generic agent"
+            )
+            form_schema, job_description = await _run_generic_agent(
+                page, ats_type="greenhouse", run_id=input.run_id
+            )
+    else:
+        form_schema, job_description = await _run_generic_agent(
+            page, ats_type=input.ats_type, run_id=input.run_id
+        )
+
     activity.logger.info(
         f"[extract] Extracted {len(form_schema.fields)} fields: "
         + ", ".join(f"{f.label!r}({f.field_type})" for f in form_schema.fields)
     )
-    job_title, job_company, job_location, raw_canonical = await extractor.extract_job_metadata()
-    canonical_url = ats_normalize(strip_tracking(raw_canonical))
-    posted_date = await extractor.extract_posted_date()
     activity.logger.info(
         f"[extract] Job metadata — title={job_title!r} company={job_company!r} "
         f"location={job_location!r} canonical={canonical_url} posted={posted_date}"

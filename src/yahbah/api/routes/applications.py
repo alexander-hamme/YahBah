@@ -59,6 +59,7 @@ async def list_applications(
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=1, le=100),
     status: str | None = Query(None),
+    exclude_status: str | None = Query(None),
     search: str | None = Query(None),
     sort: str = Query("created_at_desc"),
     session: AsyncSession = Depends(get_session),
@@ -70,6 +71,8 @@ async def list_applications(
     # Filters
     if status:
         base = base.where(ApplicationRun.status == status.upper())
+    if exclude_status:
+        base = base.where(ApplicationRun.status != exclude_status.upper())
     if search:
         term = f"%{search}%"
         base = base.where(

@@ -254,6 +254,48 @@ class ActionResponse(BaseModel):
     run_id: str | None = None
 
 
+class BulkDeleteRequest(BaseModel):
+    run_ids: list[str] | None = None
+    status: str | None = None
+
+
+class BulkDeleteResponse(BaseModel):
+    deleted: int
+    success: bool
+
+
+@router.post("/bulk-delete", response_model=BulkDeleteResponse)
+async def bulk_delete_runs(
+    body: BulkDeleteRequest,
+    session: AsyncSession = Depends(get_session),
+) -> BulkDeleteResponse:
+    if body.run_ids:
+        uids = [uuid.UUID(rid) for rid in body.run_ids]
+        runs = (await session.execute(
+            select(ApplicationRun).where(ApplicationRun.id.in_(uids))
+        )).scalars().all()
+    elif body.status:
+        runs = (await session.execute(
+            select(ApplicationRun).where(ApplicationRun.status == body.status.upper())
+        )).scalars().all()
+    else:
+        raise HTTPException(status_code=400, detail="Provide run_ids or status")
+
+    for run in runs:
+        for step in (await session.execute(
+            select(ApplicationStep).where(ApplicationStep.run_id == run.id)
+        )).scalars().all():
+            await session.delete(step)
+        for artifact in (await session.execute(
+            select(ApplicationArtifact).where(ApplicationArtifact.run_id == run.id)
+        )).scalars().all():
+            await session.delete(artifact)
+        await session.delete(run)
+
+    await session.commit()
+    return BulkDeleteResponse(deleted=len(runs), success=True)
+
+
 @router.post("/{run_id}/cancel", response_model=ActionResponse)
 async def cancel_run(
     run_id: str,

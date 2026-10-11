@@ -46,6 +46,7 @@ with workflow.unsafe.imports_passed_through():
 class ApplicationWorkflowInput:
     run_id: str
     job_url: str
+    ats_type: str = "greenhouse"
 
 
 @workflow.defn
@@ -54,11 +55,14 @@ class ApplicationWorkflow:
     async def run(self, input: ApplicationWorkflowInput) -> None:
         run_id = input.run_id
         job_url = input.job_url
+        ats_type = input.ats_type
 
         # Shared timeout and retry config
         short = timedelta(minutes=2)
         medium = timedelta(minutes=5)
         long = timedelta(minutes=10)
+        # Generic agentic extraction may take longer (LangGraph loop + LLM calls)
+        extract_long = timedelta(minutes=30) if ats_type == "generic" else long
         retry = RetryPolicy(maximum_attempts=2)
 
         # TODO more retries for initial stage, less for final stage?
@@ -73,7 +77,7 @@ class ApplicationWorkflow:
             )
             auth_output = await workflow.execute_activity(
                 browser_open_and_auth_activity,
-                AuthInput(run_id=run_id, job_url=job_url),
+                AuthInput(run_id=run_id, job_url=job_url, ats_type=ats_type),
                 start_to_close_timeout=long,
                 retry_policy=retry,
             )
@@ -87,8 +91,8 @@ class ApplicationWorkflow:
             )
             extract_output = await workflow.execute_activity(
                 browser_extract_activity,
-                BrowserExtractInput(run_id=run_id, job_url=job_url),
-                start_to_close_timeout=long,
+                BrowserExtractInput(run_id=run_id, job_url=job_url, ats_type=ats_type),
+                start_to_close_timeout=extract_long,
                 retry_policy=retry,
             )
 

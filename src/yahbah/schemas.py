@@ -12,12 +12,13 @@ from dataclasses import dataclass, field
 @dataclass
 class FormField:
     label: str
-    field_type: str          # text | email | tel | select | file | textarea | checkbox
+    field_type: str          # text | email | tel | select | file | textarea | checkbox | radio
     name: str | None = None  # HTML name attribute
     element_id: str | None = None
     placeholder: str | None = None
     required: bool = False
-    options: list[str] = field(default_factory=list)  # for select fields
+    options: list[str] = field(default_factory=list)  # for select/radio fields
+    css_selector: str | None = None  # LLM-confirmed selector (generic extractor)
 
 
 @dataclass
@@ -52,6 +53,7 @@ class FieldMappingResult:
 class BrowserExtractInput:
     run_id: str
     job_url: str
+    ats_type: str = "greenhouse"
 
 
 @dataclass
@@ -172,6 +174,7 @@ class BrowserFillOutput:
 class AuthInput:
     run_id: str
     job_url: str
+    ats_type: str = "greenhouse"
 
 
 @dataclass
