@@ -1,0 +1,28 @@
+ats_type: generic
+display_name: Generic (unknown ATS)
+
+agent_hints: |
+  This is an unknown job application site. Approach methodically:
+  1. First check if an "Apply" or "Apply Now" button needs to be clicked to reveal the form.
+  2. Watch for cookie consent banners or modals that may be blocking the form — always accept all
+     cookies (click "Accept All" or equivalent). The browser session is ephemeral so this has no
+     lasting effect.
+  3. The application form may require login; look for sign-in prompts.
+  4. Scroll down to ensure all form fields are visible before extracting.
+  5. Radio button groups and custom dropdowns are common on non-standard ATSs.
+
+known_patterns:
+  form_location: unknown
+  auth_wall: unknown
+  submit_button_selectors:
+    - "button[type=submit]"
+    - "input[type=submit]"
+    - "button:has-text('Submit')"
+    - "button:has-text('Apply')"
+    - "button:has-text('Send Application')"
+
+# Human-approved updates accumulate here over time.
+confirmed_patterns: []
+
+# Pending updates proposed by the agent after successful runs — awaiting human approval.
+pending_updates: []
