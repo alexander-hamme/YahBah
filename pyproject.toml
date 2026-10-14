@@ -23,9 +23,7 @@ dependencies = [
     "google-auth-oauthlib>=1.2.0",
     "uvicorn[standard]>=0.34.0",
     "pyyaml>=6.0.3",
-    "langgraph>=1.2.11",
-    "langchain-ollama>=1.1.0",
-    "langchain-core>=1.6.0",
+    "browser-use==0.13.11",
 ]
 
 [build-system]

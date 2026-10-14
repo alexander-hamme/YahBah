@@ -1,0 +1,21 @@
+.idea/
+__pycache__
+.env
+.DS_Store
+test/yahbah/browser/artifacts/
+uv.lock
+notes
+initial_prompt
+artifacts
+credentials
+files
+config/personal.yaml
+config/personal.*.yaml
+!config/personal.example.yaml
+backups/
+.next/
+Next Steps.rtf
+frontend/node_modules
+frontend/.next
+.idea/vcs.xml
+.idea/
