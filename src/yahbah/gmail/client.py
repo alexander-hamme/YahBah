@@ -7,8 +7,9 @@ All blocking API calls are wrapped with asyncio.to_thread() for async compat.
 Two modes of operation:
   1. Verification code polling — searches recent messages matching criteria,
      extracts the code, and labels the message as processed.
-  2. (Future) Incremental sync — uses history.list with a stored historyId
-     checkpoint for efficient new-message detection.
+  2. Incremental sync — history.list from a stored GmailCheckpoint.history_id
+     (used by poller.py and alert_poller.py), falling back to search when the
+     checkpoint has expired (InvalidHistoryIdError).
 
 Authentication:
   Requires a credentials.json (OAuth2 client secret) from Google Cloud Console
@@ -99,16 +100,22 @@ class GmailClient:
     async def fetch_verification_code(
         self,
         recipient_email: str,
+        since_epoch: int | None = None,
+        subject_hint: str | None = None,
         timeout_seconds: int | None = None,
         poll_interval: int | None = None,
     ) -> str:
         """
-        Polls Gmail for a verification code email sent to *recipient_email*.
+        Polls Gmail for a verification code email sent to *recipient_email*
+        (a per-application alias, so anything sent to it after the submit is
+        about this application).
 
-        Searches for recent emails from Greenhouse containing "security code"
-        in the subject, extracts the code, labels the message as processed,
-        and returns the code string.
+        since_epoch: when the challenge was triggered (default: now).
+        subject_hint: optional Gmail subject filter from the job board's profile
+            (e.g. Greenhouse: "security code"); without it every new email to the
+            alias is checked, and emails without a code are skipped.
 
+        Extracts the code, labels the message as processed, and returns it.
         Raises RuntimeError if no code is found within the timeout.
         """
         timeout = timeout_seconds or settings.gmail_poll_timeout_seconds
@@ -118,16 +125,16 @@ class GmailClient:
         # Pre-resolve the "Parsed" label ID so we can exclude it in queries.
         label_id = await self._get_or_create_label(label)
 
-        # Snapshot the current time as the cutoff — only accept emails that
-        # arrived after the verification challenge was triggered.  We subtract
-        # a buffer (90s) to account for clock skew and email transit.
-        trigger_epoch = int(time.time()) - 90
-        query = (
-            f"to:{recipient_email} "
-            f"subject:(security code) "
-            f"after:{trigger_epoch} "
-            f"-label:{label.replace('/', '-')}"
-        )
+        # Only accept emails that arrived after the challenge was triggered, minus
+        # a buffer (90s) for clock skew and email transit.
+        trigger_epoch = (since_epoch or int(time.time())) - 90
+        query = " ".join(filter(None, [
+            f"to:{recipient_email}",
+            f"subject:({subject_hint})" if subject_hint else None,
+            f"after:{trigger_epoch}",
+            f"-label:{label.replace('/', '-')}",
+        ]))
+        no_code: set[str] = set()  # messages already checked that hold no code (e.g. confirmations)
 
         logger.info(
             f"[gmail] Polling for verification code — query={query!r}, "
@@ -166,6 +173,8 @@ class GmailClient:
                     if msg_epoch < trigger_epoch:
                         logger.debug(f"[gmail] Skipping {msg_id} — older than trigger ({msg_epoch} < {trigger_epoch})")
                         continue
+                    if msg_id in no_code:
+                        continue
 
                     html, plain = get_body_parts(msg["payload"])
                     try:
@@ -175,6 +184,10 @@ class GmailClient:
                             f"[gmail] Failed to extract code from message "
                             f"{msg_id}: {exc}"
                         )
+                        continue
+                    if not code:
+                        # Leave it unlabelled: the status poller still needs to see it.
+                        no_code.add(msg_id)
                         continue
 
                     # Label as processed and optionally archive/delete.
@@ -212,7 +225,7 @@ class GmailClient:
         )
 
     # ------------------------------------------------------------------
-    # Incremental sync (future use — job-alert ingestion)
+    # Incremental sync (status + alert pollers)
     # ------------------------------------------------------------------
 
     async def get_history_since(
@@ -232,20 +245,29 @@ class GmailClient:
         if label_ids:
             kwargs["labelIds"] = label_ids
 
-        try:
-            resp = await self._execute(
-                self._service.users().history().list(**kwargs)
-            )
-        except Exception as exc:
-            if "404" in str(exc) or "historyId" in str(exc).lower():
-                raise InvalidHistoryIdError(start_history_id) from exc
-            raise
-
-        history_id = resp.get("historyId", start_history_id)
+        history_id = start_history_id
         messages: list[dict] = []
-        for record in resp.get("history", []):
-            for added in record.get("messagesAdded", []):
-                messages.append(added["message"])
+        while True:
+            try:
+                resp = await self._execute(
+                    self._service.users().history().list(**kwargs)
+                )
+            except Exception as exc:
+                if "404" in str(exc) or "historyId" in str(exc).lower():
+                    raise InvalidHistoryIdError(start_history_id) from exc
+                raise
+
+            history_id = resp.get("historyId", history_id)
+            for record in resp.get("history", []):
+                for added in record.get("messagesAdded", []):
+                    messages.append(added["message"])
+
+            # Follow every page; otherwise a backlog is dropped while the
+            # checkpoint still advances past it.
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+            kwargs["pageToken"] = page_token
 
         return messages, history_id
 

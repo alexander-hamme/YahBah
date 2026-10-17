@@ -11,6 +11,7 @@ import {
   LogOut,
   HelpCircle,
   Send,
+  MailCheck,
 } from "lucide-react";
 import type { StatusUpdate } from "@/lib/types";
 
@@ -163,11 +164,13 @@ function StageNode({
   date,
   updates,
   isLatest,
+  note,
 }: {
   stage: string;
   date: string | null;
   updates: StatusUpdate[];
   isLatest: boolean;
+  note?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -212,6 +215,8 @@ function StageNode({
         </span>
       )}
 
+      {note}
+
       {hasUpdates && open && (
         <div
           className={`
@@ -245,10 +250,12 @@ export function ApplicationStatusPipeline({
   updates,
   runStatus,
   completedAt,
+  emailConfirmedAt = null,
 }: {
   updates: StatusUpdate[];
   runStatus: string;
   completedAt: string | null;
+  emailConfirmedAt?: string | null;
 }) {
   // Group updates by status_type
   const byType: Record<string, StatusUpdate[]> = {};
@@ -301,6 +308,17 @@ export function ApplicationStatusPipeline({
               date={stageDate(stage)}
               updates={byType[stage] ?? []}
               isLatest={overallLatest === stage}
+              note={
+                stage === "SUBMITTED" && emailConfirmedAt ? (
+                  <span
+                    className="inline-flex items-center gap-1 text-[10px] text-emerald-400"
+                    title={`Confirmation email received ${formatFullDate(emailConfirmedAt)}`}
+                  >
+                    <MailCheck className="h-3 w-3" />
+                    Email verified
+                  </span>
+                ) : undefined
+              }
             />
             {i < visibleStages.length - 1 && (
               <div className="flex items-center pt-4 px-1">

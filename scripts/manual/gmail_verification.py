@@ -5,7 +5,7 @@ Exercises the GmailClient + parser pipeline against a live Gmail inbox.
 Searches for a recent Greenhouse verification code email and extracts the code.
 
 Usage:
-    uv run python test/yahbah/browser/test_gmail_verification.py
+    uv run python scripts/manual/gmail_verification.py <email>
 
 Requires:
   - OAuth2 credentials at ~/.config/yahbah/gmail/credentials.json
@@ -14,10 +14,6 @@ Requires:
 """
 import asyncio
 import sys
-from pathlib import Path
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from yahbah.gmail.client import GmailClient
 from yahbah.gmail.parser import (
@@ -130,7 +126,7 @@ async def test_poll_verification_code() -> None:
         recipient = sys.argv[1]
     else:
         print("  No recipient email provided as CLI arg — skipping poll test")
-        print("  Usage: uv run python test/yahbah/browser/test_gmail_verification.py <email>")
+        print("  Usage: uv run python scripts/manual/gmail_verification.py <email>")
         return
 
     print(f"  Polling for verification code sent to: {recipient}")

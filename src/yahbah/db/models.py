@@ -73,7 +73,8 @@ class ApplicationRun(Base):
     status: Mapped[str] = mapped_column(String, default="PENDING")
     # PENDING | RUNNING | COMPLETED | FAILED
     current_state: Mapped[str | None] = mapped_column(String)
-    # mirrors workflow step names: OPEN_PAGE | EXTRACT_FORM | MAP_FIELDS | etc
+    # workflow stage: QUEUED | DISCOVER | MAP_FORM | EXTRACT_METADATA | CHECK_DUPLICATE
+    # | MAP_ANSWERS | GENERATE_COVER_LETTER | FILL | SUBMIT | DONE (workflows/application.py)
     temporal_workflow_id: Mapped[str | None] = mapped_column(String)
     account_email: Mapped[str | None] = mapped_column(String)
     account_password: Mapped[str | None] = mapped_column(String)
@@ -83,6 +84,11 @@ class ApplicationRun(Base):
     is_test_run: Mapped[bool] = mapped_column(default=False)
     tracking_url: Mapped[str | None] = mapped_column(String)
     confirmation_html: Mapped[str | None] = mapped_column(Text)
+    # Set right BEFORE the first submit click: a retry that finds it set only verifies, never re-submits.
+    submit_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # A confirmation email ("thank you for applying") arrived at this run's alias.
+    email_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    email_confirmed_message_id: Mapped[str | None] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
     )
@@ -238,6 +244,30 @@ class GmailCheckpoint(Base):
     )
     email: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     history_id: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+# ---------------------------------------------------------------------------
+# answer_cache
+# ---------------------------------------------------------------------------
+
+class AnswerCache(Base):
+    """Answers to custom form questions that don't depend on the specific job
+    (e.g. "Are you willing to relocate?"), so the prose model answers each only once."""
+
+    __tablename__ = "answer_cache"
+
+    # sha256 of the normalized question + sorted normalized options (first 32 hex chars)
+    question_key: Mapped[str] = mapped_column(String, primary_key=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    options: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    hits: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )

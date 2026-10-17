@@ -143,6 +143,7 @@ export function RunInfoCard({
                 updates={statusUpdates}
                 runStatus={run.status}
                 completedAt={run.completed_at}
+                emailConfirmedAt={run.email_confirmed_at}
               />
             </div>
           )}

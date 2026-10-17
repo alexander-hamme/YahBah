@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronRight, ArrowUp, ArrowDown } from "lucide-react";
+import { ChevronRight, ArrowUp, ArrowDown, MailCheck } from "lucide-react";
 import { CompanyLogo } from "@/components/company-logo";
 import { RunActions } from "@/components/run-actions";
 import {
@@ -183,8 +183,16 @@ export function ApplicationList({
                 </Link>
               </TableCell>
               <TableCell>
-                <Link href={`/applications/${item.run_id}`}>
+                <Link href={`/applications/${item.run_id}`} className="inline-flex items-center gap-1.5">
                   <StatusBadge status={item.status} />
+                  {item.email_confirmed_at && (
+                    <span
+                      title={`Email verified: confirmation received ${new Date(item.email_confirmed_at).toLocaleString()}`}
+                      aria-label="Email verified"
+                    >
+                      <MailCheck className="h-4 w-4 text-emerald-400" />
+                    </span>
+                  )}
                 </Link>
               </TableCell>
               <TableCell className="text-sm text-muted-foreground">

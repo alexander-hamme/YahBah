@@ -11,6 +11,7 @@ export interface ApplicationListItem {
   match_score: number | null;
   is_test_run: boolean;
   error_message: string | null;
+  email_confirmed_at: string | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
@@ -63,6 +64,8 @@ export interface RunDetail {
   is_test_run: boolean;
   tracking_url: string | null;
   confirmation_html: string | null;
+  submit_attempted_at: string | null;
+  email_confirmed_at: string | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;

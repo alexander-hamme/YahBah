@@ -11,6 +11,7 @@ Runs as a background asyncio task in the worker process.
 """
 import asyncio
 import re
+import uuid
 from datetime import datetime, timezone
 
 from loguru import logger
@@ -274,6 +275,7 @@ async def _process_message(
     run_id: str | None = None
     if "+" in normalized_to:
         run_id = await _match_by_alias(normalized_to)
+    matched_by_alias = run_id is not None
 
     # Extract body text (needed for both classification and fallback matching)
     html, plain = get_body_parts(msg["payload"])
@@ -318,6 +320,13 @@ async def _process_message(
             confidence=classification.confidence,
         )
         session.add(update)
+        # "Email verified": a confirmation sent to this run's own alias proves the submission
+        # reached the company. A company-name fallback match is too loose to count.
+        if matched_by_alias and classification.status_type == "UNDER_REVIEW":
+            run = await session.get(ApplicationRun, uuid.UUID(str(run_id)))
+            if run is not None and run.email_confirmed_at is None:
+                run.email_confirmed_at = email_date
+                run.email_confirmed_message_id = message_id
         await session.commit()
 
     # Apply labels: always add YahBah/Status

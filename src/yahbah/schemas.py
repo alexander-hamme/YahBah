@@ -6,43 +6,40 @@ from dataclasses import dataclass, field
 
 
 # ---------------------------------------------------------------------------
-# Browser / Form extraction
+# Form schema (from yahbah.agent.discover.map_form)
 # ---------------------------------------------------------------------------
 
 @dataclass
 class FormField:
+    key: str                 # data-ja-field key stamped on the element: how fill finds it again
     label: str
-    field_type: str          # text | email | tel | select | file | textarea | checkbox | radio
-    name: str | None = None  # HTML name attribute
-    element_id: str | None = None
-    placeholder: str | None = None
+    field_type: str          # text | email | tel | number | url | date | textarea | select | combobox | radio | checkbox | file
     required: bool = False
-    options: list[str] = field(default_factory=list)  # for select/radio fields
-    css_selector: str | None = None  # LLM-confirmed selector (generic extractor)
+    options: list[str] = field(default_factory=list)  # select/combobox/radio/checkbox group (≤15 shown)
+    options_total: int | None = None                   # when there are more options than shown
+    empty_value: str | None = None  # what a custom widget shows before anything is chosen (e.g. "Select...")
+    autocomplete: str | None = None  # HTML autofill token, e.g. "given-name", "email"
 
 
 @dataclass
 class FormSchema:
     fields: list[FormField]
     page_url: str
-    page_title: str
+    board: str = "generic"
 
 
 # ---------------------------------------------------------------------------
-# LLM field mapping
+# Answer mapping
 # ---------------------------------------------------------------------------
 
 @dataclass
 class FieldMapping:
-    form_label: str
-    mapped_to: str   # full_name | email | phone | location | linkedin | cover_letter | resume | other
-    value: str
+    key: str
+    label: str
+    field_type: str
+    source: str      # profile key | known-answer key | resume | cover_letter | custom | skip
+    value: str       # resolved value ("" for resume/cover_letter: filled from files at fill time)
     confidence: float
-
-
-@dataclass
-class FieldMappingResult:
-    field_mappings: list[FieldMapping]
 
 
 # ---------------------------------------------------------------------------
@@ -50,21 +47,33 @@ class FieldMappingResult:
 # ---------------------------------------------------------------------------
 
 @dataclass
-class BrowserExtractInput:
+class DiscoverInput:
     run_id: str
     job_url: str
-    ats_type: str = "greenhouse"
 
 
 @dataclass
-class BrowserExtractOutput:
-    form_schema_dict: dict   # FormSchema serialized to dict
+class DiscoverOutput:
+    page_url: str
+    board: str
+    account_email: str
     job_description: str
     canonical_url: str = ""
     job_title: str | None = None
     job_company: str | None = None
     job_location: str | None = None
     posted_date: str | None = None
+
+
+@dataclass
+class MapFormInput:
+    run_id: str
+    job_url: str
+
+
+@dataclass
+class MapFormOutput:
+    form_schema_dict: dict   # FormSchema serialized to dict
 
 
 @dataclass
@@ -111,6 +120,7 @@ class DuplicateCheckInput:
     posted_date: str | None = None
     technologies: list[str] | None = None
     specialties: list[str] | None = None
+    ats_type: str | None = None
 
 
 @dataclass
@@ -121,15 +131,15 @@ class DuplicateCheckOutput:
 
 
 @dataclass
-class MapFieldsInput:
+class MapAnswersInput:
     run_id: str
     form_schema_dict: dict   # FormSchema serialized to dict
     job_description: str = ""
-    account_email: str | None = None  # alias to use as form email
+    account_email: str | None = None  # alias to use as the form's email
 
 
 @dataclass
-class MapFieldsOutput:
+class MapAnswersOutput:
     field_mappings: list[dict]  # list[FieldMapping] serialized
     match_score: int | None = None
     match_rationale: str | None = None
@@ -148,37 +158,39 @@ class CoverLetterOutput:
 
 
 @dataclass
-class BrowserFillInput:
+class FillInput:
     run_id: str
     job_url: str
+    form_schema_dict: dict
     field_mappings: list[dict]
-    form_schema_dict: dict        # passed so the filler can use element_id/name/placeholder
-    cover_letter_path: str | None  # path to generated PDF
-    cover_letter_text: str | None = None  # raw text for textarea cover letter fields
-    account_email: str | None = None      # email used for Greenhouse account (needed for verification)
+    job_description: str
+    cover_letter_path: str | None
+    cover_letter_text: str | None = None
+    account_email: str | None = None
 
 
 @dataclass
-class BrowserFillOutput:
+class FillOutput:
+    testing_mode: bool          # True: filled but not submitted; the run ends here
+    form_schema_dict: dict      # including fields that appeared while filling
+    field_mappings: list[dict]
+    written: dict[str, str]     # key -> what was written/chosen (the submit gate checks the page against it)
+
+
+@dataclass
+class SubmitInput:
+    run_id: str
+    job_url: str
+    form_schema_dict: dict
+    field_mappings: list[dict]
+    written: dict[str, str]
+    job_description: str
+    cover_letter_path: str | None
+    cover_letter_text: str | None
+    account_email: str
+
+
+@dataclass
+class SubmitOutput:
     confirmation_url: str | None
     confirmation_text: str | None
-    confirmation_html: str | None
-    tracking_url: str | None
-
-
-# ---------------------------------------------------------------------------
-# Auth / account creation
-# ---------------------------------------------------------------------------
-
-@dataclass
-class AuthInput:
-    run_id: str
-    job_url: str
-    ats_type: str = "greenhouse"
-
-
-@dataclass
-class AuthOutput:
-    auth_required: bool
-    account_email: str | None
-    account_password: str | None

@@ -2,6 +2,7 @@
 DB-only activities — thin wrappers that persist state/artifacts.
 These are fast and don't do any I/O beyond the database.
 """
+import asyncio
 import re
 import socket
 import uuid
@@ -9,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from temporalio import activity
 
 from yahbah.config import settings
@@ -65,6 +66,50 @@ def _derive_company_website(url: str) -> str | None:
                     continue
         logger.debug(f"[derive_website] {url[:60]} -> {domain} (DNS failed)")
         return None
+
+
+_RUN_SLOT_LOCK = 0x5961_6842  # pg advisory lock id guarding the slot check ("YahB")
+
+
+@activity.defn
+async def acquire_run_slot_activity(run_id: str) -> None:
+    """Wait until fewer than settings.max_concurrent_runs runs are RUNNING, then mark this one RUNNING.
+
+    Slots are derived from run status, so a run that completes/fails/is cancelled frees its slot
+    without an explicit release. Local models are the bottleneck: concurrent runs would queue
+    behind each other in Ollama (and swap models), so the default is one run at a time.
+    """
+    while True:
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": _RUN_SLOT_LOCK})
+            running = (await session.execute(
+                select(func.count()).select_from(ApplicationRun).where(
+                    ApplicationRun.status == "RUNNING", ApplicationRun.id != uuid.UUID(run_id))
+            )).scalar_one()
+            run = await session.get(ApplicationRun, uuid.UUID(run_id))
+            if run is None:
+                raise ValueError(f"ApplicationRun {run_id} not found")
+            if running < settings.max_concurrent_runs:
+                run.status = "RUNNING"
+                run.current_state = "STARTING"
+                run.updated_at = datetime.now(timezone.utc)
+                await session.commit()
+                return
+            if run.current_state != "QUEUED":
+                run.current_state = "QUEUED"
+                run.updated_at = datetime.now(timezone.utc)
+            await session.commit()
+        activity.heartbeat(f"queued behind {running} running run(s)")
+        await asyncio.sleep(5)
+
+
+async def mark_submit_attempted(run_id: str) -> None:
+    """Record that submit is about to be clicked (called right before the click)."""
+    async with AsyncSessionLocal() as session:
+        run = await session.get(ApplicationRun, uuid.UUID(run_id))
+        if run is not None:
+            run.submit_attempted_at = datetime.now(timezone.utc)
+            await session.commit()
 
 
 @activity.defn
@@ -157,6 +202,10 @@ async def check_duplicate_activity(input_: DuplicateCheckInput) -> DuplicateChec
         posting = await session.get(JobPosting, run.job_posting_id)
         if posting is None:
             raise ValueError(f"JobPosting {run.job_posting_id} not found")
+
+        # The job board detected while discovering the form (always the latest detection)
+        if input_.ats_type:
+            posting.ats_type = input_.ats_type
 
         # Fill in metadata blanks (don't overwrite values set by a previous run)
         if input_.canonical_url and not posting.canonical_url:

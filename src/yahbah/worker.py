@@ -11,28 +11,31 @@ import asyncio
 from datetime import datetime, timezone
 
 from loguru import logger
-from sqlalchemy import select, or_
+from sqlalchemy import select
 from temporalio.client import Client as TemporalClient
 from temporalio.worker import Worker
 
+from yahbah.agent.session import SessionRegistry  # first: sets browser-use env vars before it is imported
 from yahbah.config import settings
-from yahbah.browser.manager import BrowserRegistry
 from yahbah.db.models import ApplicationRun
 from yahbah.db.session import AsyncSessionLocal
 from yahbah.workflows.application import ApplicationWorkflow
 from yahbah.workflows.activities.browser import (
-    browser_open_and_auth_activity,
-    browser_extract_activity,
-    browser_fill_and_submit_activity,
+    close_session_activity,
+    discover_activity,
+    fill_activity,
+    map_form_activity,
+    submit_activity,
 )
 from yahbah.workflows.activities.llm import (
     extract_job_metadata_activity,
-    map_fields_activity,
+    map_answers_activity,
     generate_cover_letter_activity,
 )
 from yahbah.gmail.poller import run_status_poller
 from yahbah.gmail.alert_poller import run_alert_poller
 from yahbah.workflows.activities.db_ops import (
+    acquire_run_slot_activity,
     update_run_state_activity,
     mark_run_completed_activity,
     mark_run_duplicate_activity,
@@ -44,15 +47,11 @@ from yahbah.workflows.activities.db_ops import (
 
 
 async def fail_incomplete_runs(reason: str) -> None:
-    """Mark any PENDING/RUNNING runs as FAILED."""
+    """Mark RUNNING runs as FAILED (their browser state is gone). PENDING runs are queued for a
+    run slot; Temporal resumes their workflows, so they're left alone."""
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            select(ApplicationRun).where(
-                or_(
-                    ApplicationRun.status == "PENDING",
-                    ApplicationRun.status == "RUNNING",
-                )
-            )
+            select(ApplicationRun).where(ApplicationRun.status == "RUNNING")
         )
         stale = result.scalars().all()
         if not stale:
@@ -78,9 +77,8 @@ async def main() -> None:
     # Safety net: clean up runs orphaned by a previous hard kill
     await fail_incomplete_runs("Worker restarted")
 
-    # Start Playwright browser (shared across activities in this worker)
-    registry = BrowserRegistry.instance()
-    await registry.start()
+    # One browser-use session per run, shared across that run's browser activities
+    registry = SessionRegistry.instance()
 
     try:
         temporal = await TemporalClient.connect(
@@ -99,6 +97,7 @@ async def main() -> None:
             workflows=[ApplicationWorkflow],
             activities=[
                 # DB ops
+                acquire_run_slot_activity,
                 update_run_state_activity,
                 mark_run_completed_activity,
                 mark_run_duplicate_activity,
@@ -107,12 +106,14 @@ async def main() -> None:
                 persist_artifact_activity,
                 store_credentials_activity,
                 # Browser
-                browser_open_and_auth_activity,
-                browser_extract_activity,
-                browser_fill_and_submit_activity,
+                discover_activity,
+                map_form_activity,
+                fill_activity,
+                submit_activity,
+                close_session_activity,
                 # LLM
                 extract_job_metadata_activity,
-                map_fields_activity,
+                map_answers_activity,
                 generate_cover_letter_activity,
             ],
         )
@@ -139,7 +140,7 @@ async def main() -> None:
     finally:
         # Graceful shutdown: mark in-flight runs before exiting
         await fail_incomplete_runs("Worker shutting down")
-        await registry.stop()
+        await registry.close_all()
 
 if __name__ == "__main__":
     asyncio.run(main())

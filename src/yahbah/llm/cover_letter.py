@@ -9,7 +9,7 @@ from yahbah.llm.client import OllamaClient
 
 class CoverLetterGenerator:
     def __init__(self) -> None:
-        self._client = OllamaClient()
+        self._client = OllamaClient("prose")
 
     async def generate(self, job_description: str, profile: ApplicantProfile) -> str:
         profile_text = (

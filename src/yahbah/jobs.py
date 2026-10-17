@@ -11,7 +11,6 @@ function (via ``normalize_job_url()``).
 """
 import uuid
 from datetime import datetime, timezone
-from urllib.parse import urlparse
 
 from sqlalchemy import select
 
@@ -19,14 +18,6 @@ from yahbah.config import settings
 from yahbah.db.models import ApplicationRun, JobPosting
 from yahbah.db.session import AsyncSessionLocal
 from yahbah.workflows.application import ApplicationWorkflow, ApplicationWorkflowInput
-
-
-def detect_ats_type(url: str) -> str:
-    """Detect ATS type from URL patterns. Returns 'greenhouse' or 'generic'."""
-    host = urlparse(url).hostname or ""
-    if "greenhouse.io" in host or "grnh.se" in host:
-        return "greenhouse"
-    return "generic"
 
 
 async def submit_job_for_application(
@@ -50,7 +41,7 @@ async def submit_job_for_application(
             job_posting = JobPosting(
                 id=uuid.uuid4(),
                 url=job_url,
-                ats_type=detect_ats_type(job_url),
+                ats_type="unknown",  # set to the detected job board once the form is found
                 created_at=now,
             )
             session.add(job_posting)
@@ -75,11 +66,7 @@ async def submit_job_for_application(
     # Start Temporal workflow
     await temporal_client.start_workflow(
         ApplicationWorkflow.run,
-        ApplicationWorkflowInput(
-            run_id=str(run_id),
-            job_url=job_url,
-            ats_type=job_posting.ats_type,
-        ),
+        ApplicationWorkflowInput(run_id=str(run_id), job_url=job_url),
         id=workflow_id,
         task_queue=settings.temporal_task_queue,
     )

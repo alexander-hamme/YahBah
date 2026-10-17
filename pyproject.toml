@@ -10,12 +10,11 @@ dependencies = [
     "fastapi>=0.115.0",
     "httpx>=0.28.0",
     "loguru>=0.7.3",
-    "playwright>=1.49.0",
     "psycopg[asyncio]>=3.2.0",
     "pydantic-ai>=1.0.0",
     "pydantic-settings>=2.7.0",
     "python-multipart>=0.0.20",
-    "sqlalchemy>=2.0.36",
+    "sqlalchemy[asyncio]>=2.0.36",
     "temporalio>=1.8.0",
     "fpdf2>=2.7.9",
     "google-api-python-client>=2.100.0",
@@ -32,3 +31,19 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/yahbah"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+addopts = "--import-mode=importlib"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "module"
+asyncio_default_test_loop_scope = "module"
+markers = [
+    "browser: launches a headless Chrome via browser-use (offline fixture pages, no network)",
+]

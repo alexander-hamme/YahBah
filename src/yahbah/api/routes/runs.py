@@ -58,6 +58,8 @@ class RunResponse(BaseModel):
     is_test_run: bool
     tracking_url: str | None
     confirmation_html: str | None
+    submit_attempted_at: str | None
+    email_confirmed_at: str | None
     created_at: str
     updated_at: str
     completed_at: str | None
@@ -132,6 +134,8 @@ async def get_run(
         is_test_run=run.is_test_run,
         tracking_url=run.tracking_url,
         confirmation_html=run.confirmation_html,
+        submit_attempted_at=run.submit_attempted_at.isoformat() if run.submit_attempted_at else None,
+        email_confirmed_at=run.email_confirmed_at.isoformat() if run.email_confirmed_at else None,
         created_at=run.created_at.isoformat(),
         updated_at=run.updated_at.isoformat(),
         completed_at=run.completed_at.isoformat() if run.completed_at else None,

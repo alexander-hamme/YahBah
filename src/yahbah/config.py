@@ -16,10 +16,23 @@ class Settings(BaseSettings):
     temporal_namespace: str = "default"
     temporal_task_queue: str = "job-applications"
 
-    # Ollama
+    # Ollama — two models stay loaded together (~71 GB). Each model must always be
+    # requested with the same num_ctx, or Ollama reloads it (25-30 s).
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "llama3:70b"
-    ollama_timeout: int = 300  # seconds — read timeout for LLM generation
+    ollama_timeout: int = 900  # seconds — local models need long read timeouts
+    ollama_keep_alive: str = "30m"
+    # Driver: agent loops, DOM/HTML work, mapping JSON, page judging (text only, fast MoE)
+    model_driver: str = "qwen3-coder-next:latest"
+    ctx_driver: int = 40960
+    # Prose + vision + escalation: cover letters, free-text answers, screenshots, thinking
+    model_prose_vision: str = "qwen3.8:27b"
+    ctx_prose_vision: int = 32768
+
+    # Browser agent
+    max_concurrent_runs: int = 1
+    agent_max_steps: int = 15
+    submit_max_attempts: int = 4
+    browser_headless: bool = True
 
     # Safety
     min_field_confidence: float = 0.7

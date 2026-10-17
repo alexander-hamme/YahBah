@@ -1,0 +1,26 @@
+[
+  {
+    "name": "greenhouse_konux",
+    "board": "greenhouse",
+    "file": "greenhouse_konux.html",
+    "url": "https://job-boards.greenhouse.io/konux/jobs/8010410003",
+    "notes": "Form inline below the description. React-select comboboxes. Phone has an intl-tel-input country picker with 244 hidden options that must not be read as the Country dropdown. File inputs labelled via role=group aria-labelledby. Verified by hand 2026-10-12.",
+    "fields": [
+      {"label": "First Name", "type": "text", "required": true},
+      {"label": "Last Name", "type": "text", "required": true},
+      {"label": "Email", "type": "text", "required": true},
+      {"label": "Country", "type": "combobox", "required": true},
+      {"label": "Phone", "type": "tel", "required": true},
+      {"label": "Resume/CV", "type": "file", "required": true},
+      {"label": "Cover Letter", "type": "file", "required": false},
+      {"label": "Available from", "type": "text", "required": true},
+      {"label": "If you are not living in or around Munich, are you willing to relocate?", "type": "text", "required": true},
+      {"label": "Expected annual salary", "type": "text", "required": true},
+      {"label": "Data privacy statement", "type": "combobox", "required": true}
+    ],
+    "dropdowns": {
+      "Country": {"total": 244, "first": ["United States +1", "Afghanistan +93"]},
+      "Data privacy statement": {"total": 1, "first": ["Yes"]}
+    }
+  }
+]

@@ -2,28 +2,33 @@
 LLM activities — stateless, retryable.
 """
 import json
+import uuid
 from dataclasses import asdict
 from pathlib import Path
 from fpdf import FPDF
 
+from pydantic import BaseModel
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
-from yahbah.llm.field_mapper import FieldMapper
+from yahbah.agent.session import artifact_path
+from yahbah.config import load_prompts_config
+from yahbah.llm.client import OllamaClient
+from yahbah.llm.field_mapper import FieldMapper, NeedsAnswer
 from yahbah.llm.cover_letter import CoverLetterGenerator
+from yahbah.llm.logs import use_run_log_dir
 from yahbah.schemas import (
     CoverLetterInput,
     CoverLetterOutput,
     FormField,
-    FormSchema,
     JobMetadataInput,
     JobMetadataOutput,
-    MapFieldsInput,
-    MapFieldsOutput,
+    MapAnswersInput,
+    MapAnswersOutput,
 )
 from yahbah.workflows.activities.db_ops import persist_artifact_activity
-from yahbah.browser.manager import BrowserRegistry
 from yahbah.db.session import AsyncSessionLocal
-from yahbah.db.models import ApplicantProfile
+from yahbah.db.models import ApplicantProfile, ApplicationRun
 from sqlalchemy import select
 
 
@@ -46,30 +51,29 @@ async def _load_profile() -> ApplicantProfile:
 
 
 @activity.defn
-async def map_fields_activity(input_: MapFieldsInput) -> MapFieldsOutput:
+async def map_answers_activity(input_: MapAnswersInput) -> MapAnswersOutput:
+    use_run_log_dir(input_.run_id)
     profile = await _load_profile()
-    raw = input_.form_schema_dict
-    form_schema = FormSchema(
-        fields=[FormField(**f) for f in raw.get("fields", [])],
-        page_url=raw.get("page_url", ""),
-        page_title=raw.get("page_title", ""),
-    )
+    fields = [FormField(**f) for f in input_.form_schema_dict.get("fields", [])]
 
     mapper = FieldMapper()
-    result = await mapper.map(form_schema, profile, job_description=input_.job_description)
+    try:
+        mappings = await mapper.map(fields, profile, job_description=input_.job_description)
+    except NeedsAnswer as exc:
+        raise ApplicationError(str(exc), type="needs_answer", non_retryable=True) from exc
 
-    # Override email field with the trackable alias so company replies
+    # Override the email field with the trackable alias so company replies
     # can be matched back to this specific application run.
     if input_.account_email:
-        for m in result.field_mappings:
-            if m.mapped_to == "email":
+        for m in mappings:
+            if m.source == "email":
                 m.value = input_.account_email
 
-    # Persist mappings as artifact
-    registry = BrowserRegistry.instance()
-    mappings_path = registry.artifact_path(input_.run_id, "field_mappings.json")
+    activity.logger.info(
+        "[map_answers] " + ", ".join(f"[{m.key}] {m.label[:30]!r}<-{m.source}" for m in mappings))
+    mappings_path = artifact_path(input_.run_id, "field_mappings.json")
     with open(mappings_path, "w") as f:
-        json.dump([asdict(m) for m in result.field_mappings], f, indent=2)
+        json.dump([asdict(m) for m in mappings], f, indent=2, ensure_ascii=False)
     await persist_artifact_activity(
         input_.run_id,
         "field_mappings",
@@ -107,11 +111,8 @@ async def map_fields_activity(input_: MapFieldsInput) -> MapFieldsOutput:
         )
 
         # Persist to DB
-        from yahbah.db.session import AsyncSessionLocal
-        from yahbah.db.models import ApplicationRun
-        import uuid as _uuid
         async with AsyncSessionLocal() as session:
-            run = await session.get(ApplicationRun, _uuid.UUID(input_.run_id))
+            run = await session.get(ApplicationRun, uuid.UUID(input_.run_id))
             if run:
                 run.match_score = match_score
                 run.match_rationale = match_rationale
@@ -119,8 +120,8 @@ async def map_fields_activity(input_: MapFieldsInput) -> MapFieldsOutput:
     except Exception as exc:
         activity.logger.warning(f"[match] Failed to compute match score: {exc}")
 
-    return MapFieldsOutput(
-        field_mappings=[asdict(m) for m in result.field_mappings],
+    return MapAnswersOutput(
+        field_mappings=[asdict(m) for m in mappings],
         match_score=match_score,
         match_rationale=match_rationale,
     )
@@ -141,13 +142,13 @@ def _text_to_pdf(text: str, path: str) -> None:
 
 @activity.defn
 async def generate_cover_letter_activity(input: CoverLetterInput) -> CoverLetterOutput:
+    use_run_log_dir(input.run_id)
     profile = await _load_profile()
     generator = CoverLetterGenerator()
     cover_letter_text = await generator.generate(input.job_description, profile)
 
-    registry = BrowserRegistry.instance()
     cl_filename = load_prompts_config().get("profile", {}).get("cover_letter_filename", "cover_letter.pdf")
-    cover_letter_path = registry.artifact_path(input.run_id, cl_filename)
+    cover_letter_path = artifact_path(input.run_id, cl_filename)
     _text_to_pdf(cover_letter_text, cover_letter_path)
 
     await persist_artifact_activity(
@@ -160,12 +161,6 @@ async def generate_cover_letter_activity(input: CoverLetterInput) -> CoverLetter
         cover_letter_path=cover_letter_path,
         cover_letter_text=cover_letter_text,
     )
-
-
-from pydantic import BaseModel
-
-from yahbah.config import load_prompts_config
-from yahbah.llm.client import OllamaClient
 
 
 class _JobMetadata(BaseModel):
@@ -219,11 +214,12 @@ async def extract_job_metadata_activity(input: JobMetadataInput) -> JobMetadataO
     To run in parallel later, convert to asyncio.gather() or split into
     separate Temporal activities.
     """
+    use_run_log_dir(input.run_id)
     if not input.job_description or len(input.job_description.strip()) < 50:
         activity.logger.warning("[metadata] Job description too short — skipping LLM extraction")
         return JobMetadataOutput()
 
-    llm = OllamaClient()
+    llm = OllamaClient("driver")
 
     # Call 1: metadata
     metadata = await _extract_metadata(llm, input.job_description)
