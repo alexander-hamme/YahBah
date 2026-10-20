@@ -1,0 +1,6 @@
+<!doctype html>
+<!-- Confirmation page that mock_ats.html?success=navigate lands on (harness fixture). -->
+<html lang="en"><head><meta charset="utf-8"><title>Application received</title></head>
+<body><main><h1 id="confirmation">Thank you for applying</h1><p>Your application has been received.</p></main>
+<script>fetch('/__event?name=confirmed', { keepalive: true }).catch(() => {});</script>
+</body></html>

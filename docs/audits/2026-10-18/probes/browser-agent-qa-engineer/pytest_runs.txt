@@ -1,0 +1,40 @@
+........................................                                 [100%]
+============================= slowest 5 durations ==============================
+1.60s call     test/yahbah/agent/test_fixtures.py::test_fill_plumbing[greenhouse_konux]
+0.81s setup    test/yahbah/agent/test_fixtures.py::test_board_and_fields[greenhouse_konux]
+0.58s call     test/yahbah/agent/test_fixtures.py::test_submit_guard_blocks_and_releases
+0.58s call     test/yahbah/agent/test_fixtures.py::test_board_and_fields[greenhouse_konux]
+0.11s teardown test/yahbah/agent/test_fixtures.py::test_submit_guard_blocks_and_releases
+40 passed in 4.54s
+........................................                                 [100%]
+============================= slowest 5 durations ==============================
+1.59s call     test/yahbah/agent/test_fixtures.py::test_fill_plumbing[greenhouse_konux]
+0.58s call     test/yahbah/agent/test_fixtures.py::test_submit_guard_blocks_and_releases
+0.58s call     test/yahbah/agent/test_fixtures.py::test_board_and_fields[greenhouse_konux]
+0.52s setup    test/yahbah/agent/test_fixtures.py::test_board_and_fields[greenhouse_konux]
+0.11s teardown test/yahbah/agent/test_fixtures.py::test_submit_guard_blocks_and_releases
+40 passed in 4.23s
+........................................                                 [100%]
+============================= slowest 5 durations ==============================
+1.59s call     test/yahbah/agent/test_fixtures.py::test_fill_plumbing[greenhouse_konux]
+0.58s call     test/yahbah/agent/test_fixtures.py::test_board_and_fields[greenhouse_konux]
+0.58s call     test/yahbah/agent/test_fixtures.py::test_submit_guard_blocks_and_releases
+0.56s setup    test/yahbah/agent/test_fixtures.py::test_board_and_fields[greenhouse_konux]
+0.11s teardown test/yahbah/agent/test_fixtures.py::test_submit_guard_blocks_and_releases
+40 passed in 4.24s
+........................................                                 [100%]
+============================= slowest 5 durations ==============================
+1.59s call     test/yahbah/agent/test_fixtures.py::test_fill_plumbing[greenhouse_konux]
+0.59s setup    test/yahbah/agent/test_fixtures.py::test_board_and_fields[greenhouse_konux]
+0.58s call     test/yahbah/agent/test_fixtures.py::test_submit_guard_blocks_and_releases
+0.58s call     test/yahbah/agent/test_fixtures.py::test_board_and_fields[greenhouse_konux]
+0.11s teardown test/yahbah/agent/test_fixtures.py::test_submit_guard_blocks_and_releases
+40 passed in 4.25s
+........................................                                 [100%]
+============================= slowest 5 durations ==============================
+1.60s call     test/yahbah/agent/test_fixtures.py::test_fill_plumbing[greenhouse_konux]
+0.60s setup    test/yahbah/agent/test_fixtures.py::test_board_and_fields[greenhouse_konux]
+0.58s call     test/yahbah/agent/test_fixtures.py::test_submit_guard_blocks_and_releases
+0.58s call     test/yahbah/agent/test_fixtures.py::test_board_and_fields[greenhouse_konux]
+0.11s teardown test/yahbah/agent/test_fixtures.py::test_submit_guard_blocks_and_releases
+40 passed in 4.25s

@@ -1,0 +1,18 @@
+<!doctype html><html><body><main><h1>Apply</h1>
+<form id="f" novalidate>
+  <label for="n">Full name</label><input id="n" name="n" data-ja-field="t1" value="Test Person">
+  <p><button type="submit" data-ja-field="c1">Submit application</button></p>
+  <p><button data-ja-field="c2">Send application</button></p>
+  <p><button type="button" data-ja-field="c3" onclick="window.__sent.push('c3 button[type=button] onclick (fetch-style)')">Submit</button></p>
+  <p><div role="button" tabindex="0" data-ja-field="c4" onclick="window.__sent.push('c4 div[role=button] onclick')">Submit application</div></p>
+  <p><a href="#" data-ja-field="c5" onclick="window.__sent.push('c5 <a> onclick'); return false;">Apply now</a></p>
+</form>
+<div class="spa-form">
+  <label for="m">Email</label><input id="m" data-ja-field="t2">
+  <p><button data-ja-field="c6" onclick="window.__sent.push('c6 <button> outside any <form>')">Submit</button></p>
+</div>
+<script>
+window.__sent = [];
+document.getElementById('f').addEventListener('submit', (e) => { e.preventDefault(); window.__sent.push('native form submit event'); });
+</script>
+</main></body></html>

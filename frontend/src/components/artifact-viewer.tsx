@@ -256,6 +256,10 @@ export function ArtifactViewer({
 }) {
   const { devMode } = useDevMode();
   const [lightboxIndex, setLightboxIndex] = useState(-1);
+  const openLightbox = useCallback(
+    (index: number) => setLightboxIndex(index),
+    []
+  );
 
   if (artifacts.length === 0) return null;
 
@@ -270,11 +274,6 @@ export function ArtifactViewer({
   const lightboxSlides = lightboxSources.map((a) => ({
     src: artifactDownloadUrl(runId, a.id),
   }));
-
-  const openLightbox = useCallback(
-    (index: number) => setLightboxIndex(index),
-    []
-  );
 
   // Inline content artifacts
   const coverLetter = artifacts.find((a) => a.artifact_type === "cover_letter");

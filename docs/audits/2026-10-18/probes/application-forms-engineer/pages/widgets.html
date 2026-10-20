@@ -1,0 +1,19 @@
+<!doctype html><html><body>
+<form id="f">
+ <label for="t1">Plain text *</label><input id="t1" required>
+ <label for="d1">Start date *</label><input id="d1" type="date" required>
+ <label for="s1">Native select *</label><select id="s1" required><option value="">Select</option><option>Yes</option><option>No</option></select>
+ <div id="rg" role="radiogroup" aria-labelledby="rgl"><span id="rgl">Authorized to work? *</span>
+   <div role="radio" aria-checked="false" tabindex="0" id="rg1">Yes</div><div role="radio" aria-checked="false" tabindex="0" id="rg2">No</div></div>
+ <div role="checkbox" aria-checked="false" tabindex="0" id="cb1" aria-label="I certify the above is true *">I certify the above is true *</div>
+ <span id="ll">Referral source *</span><button type="button" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="ll" id="lb1">Select...</button>
+ <label for="ce">Cover letter *</label><div id="ce" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Cover letter *" style="border:1px solid #000;min-height:40px"></div>
+ <div id="host"></div>
+ <iframe id="ifr" srcdoc="<form><label for=z>Iframe field *</label><input id=z required></form>"></iframe>
+ <button type="submit">Submit</button>
+</form>
+<script>
+ const sr = document.getElementById('host').attachShadow({mode:'open'});
+ sr.innerHTML = '<label for="sh">Shadow field *</label><input id="sh" required>';
+</script>
+</body></html>

@@ -17,7 +17,7 @@ from html.parser import HTMLParser
 import httpx
 from loguru import logger
 
-from yahbah.url_utils import normalize_job_url
+from yahbah.url_utils import Resolver, UnsafeURLError, fetch_public, normalize_job_url
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +134,11 @@ def _is_job_url(url: str) -> str | None:
 
 
 async def extract_job_urls(html_body: str, source: str) -> list[ExtractedJob]:
-    """Parse <a href> tags from alert email HTML, filter to job URLs, normalize."""
+    """Parse <a href> tags from alert email HTML, filter to job URLs, normalize.
+
+    Links that break the URL intake policy (non-http(s), or a non-public host, directly or after
+    a redirect) are skipped.
+    """
     parser = _LinkExtractor()
     try:
         parser.feed(html_body)
@@ -160,6 +164,9 @@ async def extract_job_urls(html_body: str, source: str) -> list[ExtractedJob]:
         async with sem:
             try:
                 return await normalize_job_url(url)
+            except UnsafeURLError as exc:
+                logger.info(f"[alert-parser] Skipped link: {exc}")
+                return None
             except Exception as exc:
                 logger.debug(f"[alert-parser] Failed to normalize {url}: {exc}")
                 return None
@@ -245,24 +252,31 @@ def _extract_meta_description(html: str) -> str | None:
     return None
 
 
-async def fetch_job_description(url: str) -> str | None:
+def _is_text_page(content_type: str) -> bool:
+    return not content_type or content_type.startswith("text/") or content_type.endswith("+xml")
+
+
+async def fetch_job_description(
+    url: str,
+    *,
+    resolver: Resolver | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> str | None:
     """Fetch a job page via HTTP and extract the description text.
 
-    Tries JSON-LD structured data first, then meta tags, then raw page text.
-    Returns None on failure.
+    The request goes through url_utils.fetch_public: the URL policy is checked on every redirect
+    hop and the body is size-capped. Tries JSON-LD structured data first, then meta tags, then raw
+    page text. Returns None on failure, a non-2xx status or a non-text response.
     """
     try:
-        async with httpx.AsyncClient(
-            follow_redirects=True,
-            timeout=15.0,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; bot)"},
-        ) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            html = resp.text
+        page = await fetch_public("GET", url, resolver=resolver, transport=transport)
     except Exception as exc:
         logger.debug(f"[alert-parser] Failed to fetch {url}: {exc}")
         return None
+    if not 200 <= page.status_code < 300 or not _is_text_page(page.content_type):
+        logger.debug(f"[alert-parser] Not a usable page ({page.status_code}, {page.content_type!r}): {url}")
+        return None
+    html = page.text
 
     # Try extraction strategies in order of quality
     desc = _extract_json_ld_description(html)
@@ -291,21 +305,14 @@ async def fetch_job_description(url: str) -> str | None:
 async def score_job(
     profile_text: str,
     job_description: str,
-) -> tuple[int | None, str | None]:
+) -> tuple[int, str]:
     """Score a job using the existing match scoring system.
 
-    Returns (score, rationale) or (None, None) on failure.
+    Returns (score, rationale). Raises on failure: the caller decides what an unscored job means
+    (alert_poller never admits one).
     """
     from yahbah.llm.field_mapper import FieldMapper
-    try:
-        mapper = FieldMapper()
-        score, rationale = await mapper.compute_match_score(
-            profile_text, job_description
-        )
-        return score, rationale
-    except Exception as exc:
-        logger.warning(f"[alert-parser] Failed to score job: {exc}")
-        return None, None
+    return await FieldMapper().compute_match_score(profile_text, job_description)
 
 
 def build_profile_summary() -> str:

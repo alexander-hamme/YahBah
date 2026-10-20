@@ -21,7 +21,7 @@ from yahbah.config import settings, get_runtime_settings
 from yahbah.db.models import ApplicationRun, JobPosting, ScheduledJob
 from yahbah.db.session import get_session
 from yahbah.jobs import submit_job_for_application
-from yahbah.url_utils import normalize_job_url
+from yahbah.url_utils import UnsafeURLError, normalize_job_url
 
 router = APIRouter()
 
@@ -107,7 +107,10 @@ async def add_scheduled(
     session: AsyncSession = Depends(get_session),
 ) -> ScheduledJobItem:
     """Manually add a job URL to the scheduled queue."""
-    job_url = await normalize_job_url(body.job_url)
+    try:
+        job_url = await normalize_job_url(body.job_url)
+    except UnsafeURLError as exc:
+        raise HTTPException(status_code=422, detail=f"URL not allowed: {exc}") from exc
 
     # Dedup: already in scheduled queue?
     existing = await session.execute(
@@ -305,6 +308,8 @@ async def promote_scheduled(
     try:
         temporal = request.app.state.temporal
         run_id = await submit_job_for_application(sj.job_url, temporal)
+    except UnsafeURLError as exc:
+        raise HTTPException(status_code=422, detail=f"URL not allowed: {exc}") from exc
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Failed to start workflow: {exc}") from exc
 

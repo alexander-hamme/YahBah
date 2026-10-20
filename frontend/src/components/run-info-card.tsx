@@ -16,6 +16,7 @@ import {
 import { StatusBadge } from "@/components/status-badge";
 import { ApplicationStatusPipeline } from "@/components/application-status-pipeline";
 import { useDevMode } from "@/components/dev-mode-context";
+import { UntrustedHtmlFrame } from "@/components/untrusted-html-frame";
 import type { RunDetail, StatusUpdate } from "@/lib/types";
 
 function timeAgo(iso: string | null): string {
@@ -211,16 +212,22 @@ export function RunInfoCard({
           </div>
         )}
 
-        {/* Confirmation HTML */}
+        {/* Confirmation page excerpt: third-party HTML, sandboxed */}
         {run.confirmation_html && (
           <div>
-            <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
-              <MessageSquareCheck className="h-3 w-3" />
-              Confirmation
+            <div className="flex items-baseline justify-between gap-3 mb-2">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                <MessageSquareCheck className="h-3 w-3" />
+                Confirmation
+              </div>
+              <span className="text-xs text-muted-foreground">
+                Captured from the job site · scripts and remote content blocked
+              </span>
             </div>
-            <div
-              className="text-sm text-foreground/80 bg-white/[0.02] border border-white/5 rounded-lg p-3 max-h-48 overflow-y-auto [&_a]:text-cyan-400 [&_a]:underline [&_h1]:text-lg [&_h1]:font-bold [&_h2]:text-base [&_h2]:font-semibold [&_p]:my-1 [&_ul]:list-disc [&_ul]:pl-4 [&_img]:hidden"
-              dangerouslySetInnerHTML={{ __html: run.confirmation_html }}
+            <UntrustedHtmlFrame
+              html={run.confirmation_html}
+              title="Confirmation page captured from the job site"
+              className="block w-full h-48 rounded-lg border border-white/10"
             />
           </div>
         )}

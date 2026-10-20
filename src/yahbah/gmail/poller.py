@@ -37,24 +37,18 @@ async def trigger_poll() -> tuple[int, int]:
 
 
 async def run_status_poller() -> None:
-    """Background loop: poll Gmail for status emails every N minutes."""
+    """Background loop: poll Gmail for status emails every N minutes.
+
+    Each cycle, the first one right after startup included, runs only while
+    ``gmail_status_polling_enabled`` is true; disabled, it makes no Gmail calls.
+    """
     await asyncio.sleep(5)
     logger.info("[status-poller] Background poller started")
-
-    # Always run one poll on startup (regardless of enabled flag)
-    try:
-        rt = await get_runtime_settings()
-        processed, skipped = await poll_for_status_emails(rt)
-        logger.info(
-            f"[status-poller] Startup poll: {processed} update(s), {skipped} skipped"
-        )
-    except Exception as exc:
-        logger.error(f"[status-poller] Startup poll failed: {exc}")
 
     while True:
         try:
             rt = await get_runtime_settings()
-            if not rt.get("gmail_status_polling_enabled", False):
+            if rt.get("gmail_status_polling_enabled") is not True:
                 await asyncio.sleep(60)
                 continue
 

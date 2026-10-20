@@ -2,7 +2,7 @@
 
 Give it a job URL; it fills out the application form, optionally submits it, and records artifacts, job metadata, and logs. It also watches Gmail for verification codes and post-submission status emails (confirmations, rejections, interview requests) and links them back to the application.
 
-Everything runs locally: local Ollama models, a local Chrome driven by [browser-use](https://github.com/browser-use/browser-use) (pinned in `pyproject.toml`), Postgres, and Temporal. The branch `browser-use` is mid-way through an "agentic revamp"; see the wiki for what is in flux.
+Everything runs locally: local Ollama models, a local Chrome driven by [browser-use](https://github.com/browser-use/browser-use) (pinned in `pyproject.toml`), Postgres, and Temporal. The agentic revamp is in place on branch `browser-use`; safety hardening from the 2026-10-18 audit is in progress. The wiki's [changelog](docs/wiki/changelog.md) records what changed and why.
 
 ## Architecture
 
@@ -117,15 +117,18 @@ Requires a Google Cloud project with the Gmail API enabled and an OAuth consent 
 Four processes (the frontend is optional):
 
 ```bash
-temporal server start-dev                                    # Temporal (UI: http://localhost:8233)
+mkdir -p ~/.temporal                                         # once; the CLI does not create the directory
+temporal server start-dev --db-filename ~/.temporal/yahbah.db   # Temporal (UI: http://localhost:8233)
 uv run uvicorn yahbah.api.main:app --reload --port 8000      # API
 uv run python -m yahbah.worker                               # worker + Gmail pollers
-(cd frontend && npm run dev)                                 # frontend: http://localhost:3000
+(cd frontend && npm run dev)                                 # dashboard: http://localhost:3000 (bound to 127.0.0.1)
 ```
 
-The API only allows CORS from `http://localhost:3000`. Read `frontend/AGENTS.md` before changing frontend code; this Next.js version has breaking changes.
+`--db-filename` keeps workflow state across Temporal restarts; without it the dev server is in-memory and queued or running workflows are lost when it stops.
 
-There is no separate poller process: the status and job-alert pollers run inside the worker. A worker restart marks runs that were RUNNING as FAILED, because browser sessions are in-process.
+**Local only, no authentication.** The API (uvicorn's default `127.0.0.1`) and the dashboard both bind loopback, and the API rejects any `Host` or `X-Forwarded-Host` other than `localhost` / `127.0.0.1`. Add authentication before exposing either beyond this machine. Read `frontend/AGENTS.md` before changing frontend code; this Next.js version has breaking changes.
+
+There is no separate poller process: the status and job-alert pollers run inside the worker, and each does nothing (no Gmail calls) unless its flag is enabled (see Email status tracking). On worker start and stop, rows that were RUNNING are marked FAILED because browser sessions are in-process, but the Temporal workflow is not stopped: it retries the interrupted activity on the next worker, so a run shown as FAILED can still continue. The audit's resume-on-restart policy replaces this ([run-lifecycle contract](docs/wiki/contracts/run-lifecycle.md)).
 
 ### Debug one URL without Temporal
 
@@ -138,11 +141,23 @@ Runs discover → map → answers → fill without Temporal or a run record. It 
 ## Tests
 
 ```bash
-uv run pytest                    # everything
+uv run pytest                    # everything, offline (about a minute)
 uv run pytest -m "not browser"   # skip tests that launch headless Chrome
+uv run pytest -m "not db"        # skip tests that need the test Postgres (also "not temporal")
+
+cd frontend
+npm test                         # Vitest + Testing Library
+npm run lint                     # ESLint (reports some older findings)
+npx tsc --noEmit                 # type check
 ```
 
-Tests live in `test/`. The `browser` marker covers tests that drive Chrome against offline HTML fixtures (`test/yahbah/fixtures/`); they need no network. `scripts/save_fixture.py <url> <name>` saves a live page as a new fixture. `scripts/manual/` holds hand-run live checks (Gmail, metadata extraction), not part of pytest.
+Tests live in `test/`; the shared harness is `test/harness/` and the safety-invariant suite `test/invariants/` (mostly strict `xfail` until the batch-1 work lands). Markers:
+- `browser`: headless Chrome against local fixture pages (`test/yahbah/fixtures/`), no network.
+- `db`: a disposable Postgres database created and dropped per session through `TEST_DATABASE_URL` (default `postgresql+psycopg://yahbah_test@localhost/postgres`). Create that role once, with passwordless local access: `CREATE ROLE yahbah_test WITH LOGIN CREATEDB;`. The tests skip if Postgres is unreachable.
+- `temporal`: workflows on a local Temporal dev server (the `temporal` binary on PATH).
+- `live_llm`: the real local models; skipped unless selected with `-m live_llm` or `YAHBAH_LIVE_LLM=1`.
+
+Tests cannot reach the real database, the network beyond localhost, or Ollama (outside `live_llm`). `scripts/save_fixture.py <url> <name>` saves a live page as a new fixture. `scripts/manual/` holds hand-run live checks (Gmail, metadata extraction), not part of pytest. Details: [docs/wiki/development.md](docs/wiki/development.md).
 
 ## Usage
 
@@ -156,9 +171,11 @@ curl http://localhost:8000/runs/<run_id>             # status
 curl http://localhost:8000/runs/<run_id>/artifacts   # artifacts
 ```
 
+Job URLs must be public `http(s)` URLs. `POST /jobs` and `POST /scheduled` answer 422 for other schemes, `localhost`, private or link-local addresses, and hosts that do not resolve, so submitting a job needs working DNS. To exercise a local page, use `scripts/run_pipeline.py`, which skips this check.
+
 Greenhouse has a dedicated board profile; other sites go through the generic profile (`src/yahbah/agent/boards.py`). Success on arbitrary sites varies.
 
-Artifacts for each run are stored under `ARTIFACTS_DIR/<run_id>/` (screenshots, form schema, submitted values, cover letter, `trace.jsonl`, LLM logs). The exact set depends on the run; list them via the artifacts endpoint. LLM call logs are described in [docs/wiki/modules/llm.md](docs/wiki/modules/llm.md).
+Files for each run are stored under `ARTIFACTS_DIR/<run_id>/`: screenshots, form schema, field mappings, submitted values, cover letter, confirmation text and HTML, `trace.jsonl` and the `llm/` call logs. The artifacts endpoint lists only files recorded in the database; `trace.jsonl` and the `llm/` logs are not recorded, so they exist only on disk. The exact set depends on the run. LLM call logs are described in [docs/wiki/modules/llm.md](docs/wiki/modules/llm.md).
 
 Job metadata is queryable in Postgres:
 
@@ -174,8 +191,8 @@ WHERE technologies @> '["PyTorch"]'::jsonb;
 
 - Each application uses a unique email alias (`user+job-<hash>@gmail.com`); the hash comes from the ATS, company, and job ID and extends in length if a collision occurs.
 - The status poller (in the worker) reads Gmail history incrementally, keeps messages sent to a `+alias`, classifies them with the LLM (UNDER_REVIEW, ONLINE_ASSESSMENT, INTERVIEW_REQUEST, INTERVIEW_SCHEDULED, OFFER, REJECTED, WITHDRAWN, OTHER), links them to the run, and optionally archives them into a Gmail folder per status. A history checkpoint is kept in the database.
-- The job-alert poller reads alert emails (LinkedIn, Indeed, etc., by sender pattern), scores jobs, queues them in `scheduled_job`, and promotes them to runs after a delay.
-- Polling loops are off by default and toggled at runtime in `config/settings.yaml` (`gmail_status_polling_enabled`, `job_alert_polling_enabled`, auto-archive toggles, `testing_mode`), via `PUT /settings/{key}`. Static defaults are in `config.py`.
+- The job-alert poller reads alert emails (LinkedIn, Indeed, etc., by sender pattern), scores jobs, queues them in `scheduled_job`, and promotes them to runs after a delay. Only a job that was actually scored, at or above `job_alert_min_match_score`, is queued; one that could not be scored is skipped. At most `job_alert_max_promotions_per_cycle` (default 5) jobs are promoted per cycle, alerts older than `job_alert_max_age_days` (default 14) are ignored, and queued jobs older than that expire. Alert links and job pages are fetched only from public hosts (the same URL policy as above).
+- Polling loops are off by default and toggled at runtime in `config/settings.yaml` (`gmail_status_polling_enabled`, `job_alert_polling_enabled`, auto-archive toggles, `testing_mode`), via `PUT /settings/{key}`. A poller does nothing when its flag is not exactly `true`, including the first cycle at worker startup (it makes no Gmail calls, label changes or promotions). The alert limits above default from `config.py` and can be overridden in `config/settings.yaml`.
 - Trigger a cycle manually: `POST /gmail/poll` (status) or `POST /gmail/alert-poll` (alerts).
 
 ## API overview
@@ -208,5 +225,5 @@ src/yahbah/
 └── worker.py     # worker entrypoint + pollers
 alembic/          # migrations      config/   # prompts, settings, personal (gitignored)
 frontend/         # Next.js UI      scripts/  # run_pipeline, seed_profile, save_fixture, manual/
-test/             # pytest suite    docs/wiki/ # architecture and module docs
+test/             # pytest suite (harness/, invariants/)   docs/wiki/ # architecture, module docs, changelog
 ```

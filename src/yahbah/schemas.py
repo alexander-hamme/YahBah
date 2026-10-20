@@ -40,6 +40,8 @@ class FieldMapping:
     source: str      # profile key | known-answer key | resume | cover_letter | custom | skip
     value: str       # resolved value ("" for resume/cover_letter: filled from files at fill time)
     confidence: float
+    basis: list[str] = field(default_factory=list)  # stored keys / profile fields backing a factual answer
+    generated: bool = False  # model-written prose (open-ended / personality questions), shown in review
 
 
 # ---------------------------------------------------------------------------

@@ -45,5 +45,8 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "module"
 asyncio_default_test_loop_scope = "module"
 markers = [
-    "browser: launches a headless Chrome via browser-use (offline fixture pages, no network)",
+    "browser: launches a headless Chrome via browser-use (local fixture pages, no network)",
+    "db: uses the disposable Postgres test database (TEST_DATABASE_URL); skipped if Postgres is down",
+    "temporal: runs workflows on a local Temporal dev server (the `temporal` binary on PATH)",
+    "live_llm: calls the real local models; opt-in only (-m live_llm or YAHBAH_LIVE_LLM=1)",
 ]

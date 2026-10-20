@@ -7,7 +7,9 @@ workflow.  Used by both the API route (POST /jobs) and the alert
 poller's promotion step.
 
 The caller is responsible for normalizing the URL before calling this
-function (via ``normalize_job_url()``).
+function (via ``normalize_job_url()``). The URL intake policy is checked
+again here, so a stored URL (e.g. a scheduled row) can't reach a workflow
+unchecked.
 """
 import uuid
 from datetime import datetime, timezone
@@ -17,6 +19,7 @@ from sqlalchemy import select
 from yahbah.config import settings
 from yahbah.db.models import ApplicationRun, JobPosting
 from yahbah.db.session import AsyncSessionLocal
+from yahbah.url_utils import validate_job_url
 from yahbah.workflows.application import ApplicationWorkflow, ApplicationWorkflowInput
 
 
@@ -27,8 +30,10 @@ async def submit_job_for_application(
     """Upsert JobPosting, create ApplicationRun, start Temporal workflow.
 
     *job_url* must already be normalized.  Returns the run_id (str).
-    Raises on Temporal failure.
+    Raises UnsafeURLError (before writing anything) if the URL breaks the
+    intake policy, and raises on Temporal failure.
     """
+    await validate_job_url(job_url)
     now = datetime.now(timezone.utc)
 
     async with AsyncSessionLocal() as session:

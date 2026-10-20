@@ -56,6 +56,8 @@ class BoardProfile:
     code_inputs_js: str | None = None
     # Gmail subject filter for this board's verification-code emails (None: any email to the alias).
     email_code_subject: str | None = None
+    # Regex the whole emailed code must match. Needed to accept codes without digits (gmail/parser.py).
+    email_code_pattern: str | None = None
 
     # ── Models ───────────────────────────────────────────────────────────────
     model_notes: str = ""
@@ -79,6 +81,7 @@ GREENHOUSE = BoardProfile(
 })()
 """,
     email_code_subject="security code",
+    email_code_pattern=r"[A-Za-z0-9]{8}",
     model_notes="""This is a Greenhouse job board. Known behaviour (verified on job-boards.greenhouse.io):
 - The application form is on the same page as the job description, below it. The "Apply" button only scrolls to it.
 - Dropdowns are React-select comboboxes. Their options are NOT in the page until the dropdown is open. The text

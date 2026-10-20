@@ -1,0 +1,11 @@
+<!doctype html><html><body>
+<form id="f1" onsubmit="event.preventDefault(); window.sent_form=(window.sent_form||0)+1;">
+  <input name="a" value="x"><button id="b_form_submit" type="submit">Submit application</button>
+  <button id="b_form_untyped">Send</button>
+</form>
+<div id="spa">
+  <input name="b" value="y">
+  <button id="b_onclick" type="button" onclick="window.sent_spa=(window.sent_spa||0)+1">Submit application</button>
+  <div id="b_div" role="button" tabindex="0" onclick="window.sent_div=(window.sent_div||0)+1">Apply now</div>
+</div>
+</body></html>

@@ -277,7 +277,8 @@ async def submit_and_verify(
             beat("submit: waiting for the email code")
             try:
                 code = await GmailClient().fetch_verification_code(
-                    email, since_epoch=submit_epoch, subject_hint=board.email_code_subject)
+                    email, since_epoch=submit_epoch, subject_hint=board.email_code_subject,
+                    code_pattern=board.email_code_pattern)
             except RuntimeError as exc:
                 raise StageFailed("email_code_timeout", str(exc)) from exc
             await enter_code(session, code, s.code_inputs)

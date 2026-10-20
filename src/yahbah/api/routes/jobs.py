@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from yahbah.jobs import submit_job_for_application
-from yahbah.url_utils import normalize_job_url
+from yahbah.url_utils import UnsafeURLError, normalize_job_url
 
 router = APIRouter()
 
@@ -25,7 +25,10 @@ async def enqueue_job(
     request: Request,
     body: EnqueueJobRequest,
 ) -> EnqueueJobResponse:
-    job_url = await normalize_job_url(body.job_url)
+    try:
+        job_url = await normalize_job_url(body.job_url)
+    except UnsafeURLError as exc:
+        raise HTTPException(status_code=422, detail=f"URL not allowed: {exc}") from exc
 
     try:
         temporal = request.app.state.temporal

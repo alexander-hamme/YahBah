@@ -1,0 +1,24 @@
+<!doctype html>
+<!--
+  Form with an innocuous-looking link that leaves the page (harness fixture). "Phone *" is required
+  and left empty, so filling reaches the fix agent; an agent click on "Back to job description"
+  navigates to job.html and the form is gone: the agent tripwire must report possibly_submitted.
+-->
+<html lang="en"><head><meta charset="utf-8"><title>Apply</title></head>
+<body>
+<main>
+  <h1>Apply: Software Engineer</h1>
+  <form id="application" novalidate>
+    <div><label for="full-name">Full name *</label> <input id="full-name" name="name" required></div>
+    <div><label for="phone">Phone *</label> <input id="phone" name="phone" type="tel" required></div>
+    <p><button type="submit" id="submit">Submit application</button></p>
+  </form>
+  <p><a href="job.html" id="back">Back to job description</a></p>
+</main>
+<script>
+document.getElementById('application').addEventListener('submit', (e) => {
+  e.preventDefault();
+  fetch('/__event?name=submit', { keepalive: true }).catch(() => {});
+});
+</script>
+</body></html>

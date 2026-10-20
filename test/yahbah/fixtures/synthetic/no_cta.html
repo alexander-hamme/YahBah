@@ -1,0 +1,22 @@
+<!doctype html>
+<!--
+  Wizard step with no submit control (harness fixture): only type=button "Save for later" and "Next".
+  A submit step must fail as submit_button_not_found without recording a submission claim.
+  Any click on a button reports GET /__event?name=click&id=<id>.
+-->
+<html lang="en"><head><meta charset="utf-8"><title>Application - Step 1 of 3</title></head>
+<body>
+<main>
+  <h1>Application - Step 1 of 3</h1>
+  <form id="step1" novalidate>
+    <div><label for="first">First name *</label> <input id="first" name="first" required></div>
+    <div><label for="email">Email *</label> <input id="email" name="email" type="email" required></div>
+    <p><button type="button" id="save">Save for later</button> <button type="button" id="next">Next</button></p>
+  </form>
+</main>
+<script>
+for (const b of document.querySelectorAll('button')) {
+  b.addEventListener('click', () => fetch(`/__event?name=click&id=${b.id}`, { keepalive: true }).catch(() => {}));
+}
+</script>
+</body></html>

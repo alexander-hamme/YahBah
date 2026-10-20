@@ -1,0 +1,65 @@
+<!doctype html>
+<!--
+  Mock ATS application form with scripted post-submit behaviour (harness fixture; no external resources).
+
+  Query parameters:
+    success=instant      the first submit replaces the form with a confirmation (#confirmation)   [default]
+    success=never        submits do nothing visible (a no-op click)
+    success=delay:<ms>   the first submit starts a timer; the confirmation appears <ms> later
+                         (the button stays enabled meanwhile, like many SPAs)
+    success=nth:<n>      the n-th submit succeeds
+    success=navigate     the first submit navigates to thanks.html
+    errors=first         the first submit marks Email invalid (aria-invalid + role=alert), cleared on input
+    banner=thanks        a stale "Thank you! Your application has been received" line shows from load
+
+  Counters: window.__clicks (submit events); every submit also reports GET /__event?name=submit&n=<i>,
+  and the confirmation reports name=confirmed.
+-->
+<html lang="en"><head><meta charset="utf-8"><title>Apply: Software Engineer at Acme</title></head>
+<body>
+<main id="app">
+  <h1>Apply: Software Engineer</h1>
+  <p id="banner" hidden>Thank you! Your application has been received and our team will review it shortly.</p>
+  <form id="application" novalidate>
+    <div><label for="first">First name *</label> <input id="first" name="first" required></div>
+    <div><label for="last">Last name *</label> <input id="last" name="last" required></div>
+    <div><label for="email">Email *</label> <input id="email" name="email" type="email" required aria-describedby="email-error">
+      <span id="email-error" role="alert" hidden></span></div>
+    <p><button type="submit" id="submit">Submit application</button></p>
+  </form>
+</main>
+<script>
+const q = new URLSearchParams(location.search);
+const success = q.get('success') || 'instant';
+const errors = q.get('errors');
+if (q.get('banner') === 'thanks') document.getElementById('banner').hidden = false;
+window.__clicks = 0;
+const report = (name) => fetch(`/__event?name=${name}&n=${window.__clicks}`, { keepalive: true }).catch(() => {});
+function confirmation() {
+  document.getElementById('app').innerHTML =
+    '<h1 id="confirmation">Thank you for applying</h1><p>Your application has been received.</p>';
+  report('confirmed');
+}
+const email = document.getElementById('email');
+const emailError = document.getElementById('email-error');
+email.addEventListener('input', () => {
+  email.removeAttribute('aria-invalid'); emailError.hidden = true; emailError.textContent = '';
+});
+document.getElementById('application').addEventListener('submit', (e) => {
+  e.preventDefault();
+  window.__clicks += 1;
+  report('submit');
+  if (errors === 'first' && window.__clicks === 1) {
+    email.setAttribute('aria-invalid', 'true');
+    emailError.textContent = 'Please re-enter your email address';
+    emailError.hidden = false;
+    return;
+  }
+  const [kind, arg] = success.split(':');
+  if (kind === 'instant') confirmation();
+  else if (kind === 'navigate') location.href = 'thanks.html';
+  else if (kind === 'delay') { if (!window.__pending) window.__pending = setTimeout(confirmation, Number(arg)); }
+  else if (kind === 'nth') { if (window.__clicks >= Number(arg)) confirmation(); }
+});
+</script>
+</body></html>

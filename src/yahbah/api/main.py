@@ -2,7 +2,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from loguru import logger
+from starlette.datastructures import Headers
+from starlette.responses import PlainTextResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 from temporalio.client import Client as TemporalClient
 
 from yahbah.config import settings, get_runtime_settings, set_runtime_setting
@@ -33,6 +37,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Local-only API: reject any Host other than loopback names (blunts DNS
+# rebinding). Starlette's parser splits on the first ":", so IPv6 literals
+# like [::1] cannot match; uvicorn binds 127.0.0.1 only, so none arrive.
+_LOCAL_HOSTS = ["localhost", "127.0.0.1"]
+
+
+def _reject_foreign_forwarded_host(app: ASGIApp) -> ASGIApp:
+    """The Next /api rewrite sets Host to the target (localhost:8000) and puts
+    the browser's Host in X-Forwarded-Host, so check that one too."""
+    async def middleware(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] in ("http", "websocket"):
+            forwarded = Headers(scope=scope).get("x-forwarded-host")
+            if forwarded is not None and any(
+                h.strip().split(":")[0] not in _LOCAL_HOSTS for h in forwarded.split(",")
+            ):
+                await PlainTextResponse("Invalid host header", status_code=400)(scope, receive, send)
+                return
+        await app(scope, receive, send)
+    return middleware
+
+
+# Added last = outermost: host checks run before CORS and routing.
+app.add_middleware(_reject_foreign_forwarded_host)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=_LOCAL_HOSTS)
 
 app.include_router(applications.router, prefix="/applications", tags=["applications"])
 app.include_router(jobs.router, prefix="/jobs", tags=["jobs"])

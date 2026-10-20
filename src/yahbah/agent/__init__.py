@@ -32,3 +32,4 @@ import os
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
 os.environ.setdefault("BROWSER_USE_CLOUD_SYNC", "false")
 os.environ.setdefault("BROWSER_USE_LOGGING_LEVEL", "warning")
+os.environ.setdefault("BROWSER_USE_VERSION_CHECK", "false")  # else every Agent start queries PyPI

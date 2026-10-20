@@ -6,16 +6,24 @@ URLs, fetches each page for a description, scores relevance via LLM,
 and inserts qualifying jobs into the scheduled_job table.  After each
 poll cycle, promotes scheduled jobs whose delay has elapsed.
 
+Admission: only a job that was actually scored, at or above
+``job_alert_min_match_score``, becomes SCHEDULED; a job that could not be
+scored is SKIPPED ("not scored: ..."). Alerts older than
+``job_alert_max_age_days`` are left alone (not fetched, queued or labelled).
+Promotion expires SCHEDULED rows older than that and promotes at most
+``job_alert_max_promotions_per_cycle`` per cycle.
+
 Runs as a background asyncio task in the worker process (alongside the
 status poller).  Uses its own GmailCheckpoint (key ``alert_poller``).
+Nothing runs, at startup or later, unless ``job_alert_polling_enabled``.
 """
 import asyncio
-import re
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from loguru import logger
-from sqlalchemy import select, func as sa_func
+from sqlalchemy import select, update
 
 from yahbah.config import settings, get_runtime_settings
 from yahbah.db.models import (
@@ -26,6 +34,7 @@ from yahbah.db.models import (
 )
 from yahbah.db.session import AsyncSessionLocal
 from yahbah.gmail.alert_parser import (
+    ExtractedJob,
     build_profile_summary,
     extract_job_urls,
     fetch_job_description,
@@ -52,30 +61,20 @@ async def trigger_alert_poll() -> tuple[int, int]:
 async def run_alert_poller(temporal_client=None) -> None:
     """Background loop: poll Gmail for job alert emails every N minutes.
 
+    Each cycle (the first one right after startup) ingests alerts and then
+    promotes ready jobs, only while ``job_alert_polling_enabled`` is true.
+    Disabled, the poller makes no Gmail calls, label changes or promotions.
+
     *temporal_client* is the connected Temporal client from the worker,
     passed through for the promotion step.
     """
     await asyncio.sleep(8)  # stagger vs status poller (which sleeps 5s)
     logger.info("[alert-poller] Background poller started")
 
-    # Startup poll
-    try:
-        rt = await get_runtime_settings()
-        processed, skipped = await poll_for_alert_emails(rt)
-        logger.info(
-            f"[alert-poller] Startup poll: {processed} job(s) queued, "
-            f"{skipped} skipped"
-        )
-        promoted = await _promote_ready_jobs(temporal_client)
-        if promoted:
-            logger.info(f"[alert-poller] Promoted {promoted} job(s)")
-    except Exception as exc:
-        logger.error(f"[alert-poller] Startup poll failed: {exc}")
-
     while True:
         try:
             rt = await get_runtime_settings()
-            if not rt.get("job_alert_polling_enabled", False):
+            if rt.get("job_alert_polling_enabled") is not True:
                 await asyncio.sleep(60)
                 continue
 
@@ -90,7 +89,7 @@ async def run_alert_poller(temporal_client=None) -> None:
                     f"[alert-poller] Poll complete: "
                     f"{processed} job(s) queued, {skipped} skipped"
                 )
-                promoted = await _promote_ready_jobs(temporal_client)
+                promoted = await _promote_ready_jobs(temporal_client, rt)
                 if promoted:
                     logger.info(f"[alert-poller] Promoted {promoted} job(s)")
             except Exception as exc:
@@ -122,6 +121,7 @@ async def poll_for_alert_emails(rt: dict) -> tuple[int, int]:
         "job_alert_promotion_delay_hours",
         settings.job_alert_promotion_delay_hours,
     )
+    max_age_days = int(rt.get("job_alert_max_age_days", settings.job_alert_max_age_days))
 
     if not sender_patterns:
         logger.debug("[alert-poller] No sender patterns configured — skipping")
@@ -204,6 +204,7 @@ async def poll_for_alert_emails(rt: dict) -> tuple[int, int]:
                 auto_archive=auto_archive,
                 min_score=min_score,
                 delay_hours=delay_hours,
+                max_age_days=max_age_days,
             )
             queued += count
             if count == 0:
@@ -232,6 +233,7 @@ async def _process_message(
     auto_archive: bool,
     min_score: int,
     delay_hours: int,
+    max_age_days: int,
 ) -> int:
     """Process a single Gmail message. Returns number of jobs queued."""
     try:
@@ -254,6 +256,16 @@ async def _process_message(
     if source is None:
         return 0
 
+    # A stale alert (e.g. from a backfill) is left alone: no fetches, no rows, no label changes
+    now = datetime.now(timezone.utc)
+    received = datetime.fromtimestamp(int(msg.get("internalDate", "0")) // 1000, tz=timezone.utc)
+    if now - received > timedelta(days=max_age_days):
+        logger.info(
+            f"[alert-poller] Alert {message_id} is {(now - received).days} days old "
+            f"(max {max_age_days}): not processed"
+        )
+        return 0
+
     # Extract HTML body
     html, _plain = get_body_parts(msg["payload"])
     if not html:
@@ -270,7 +282,6 @@ async def _process_message(
         f"{sender} — {subject!r}"
     )
 
-    now = datetime.now(timezone.utc)
     promote_after = now + timedelta(hours=delay_hours)
     queued = 0
 
@@ -302,24 +313,7 @@ async def _process_message(
                 logger.debug(f"[alert-poller] Already applied: {job.url}")
                 continue
 
-        # Fetch page and extract description for scoring
-        description = await fetch_job_description(job.url)
-        score_text = description or job.snippet
-        match_score, match_rationale = None, None
-
-        if score_text:
-            match_score, match_rationale = await score_job(
-                profile_text, score_text
-            )
-
-        # Determine status
-        status = "SCHEDULED"
-        if min_score > 0 and match_score is not None and match_score < min_score:
-            status = "SKIPPED"
-            logger.debug(
-                f"[alert-poller] Auto-skipped {job.url} "
-                f"(score {match_score} < {min_score})"
-            )
+        admission = await _evaluate_job(job, profile_text=profile_text, min_score=min_score)
 
         # Insert scheduled job
         async with AsyncSessionLocal() as session:
@@ -330,22 +324,29 @@ async def _process_message(
                 title=None,  # populated later by metadata extraction
                 company=None,
                 location=None,
-                description=description,
+                description=admission.description,
                 snippet=job.snippet,
-                match_score=match_score,
-                match_rationale=match_rationale,
-                status=status,
+                match_score=admission.match_score,
+                match_rationale=admission.match_rationale,
+                status=admission.status,
                 gmail_message_id=message_id,
                 promote_after=promote_after,
             )
             session.add(sj)
             await session.commit()
 
-        if status == "SCHEDULED":
+        if admission.status == "SCHEDULED":
             queued += 1
             logger.info(
                 f"[alert-poller] Queued: {job.url} "
-                f"(score={match_score}, promotes {promote_after.isoformat()})"
+                f"(score={admission.match_score}, promotes {promote_after.isoformat()})"
+            )
+        elif admission.match_score is None:
+            logger.info(f"[alert-poller] Skipped {job.url} ({admission.match_rationale})")
+        else:
+            logger.debug(
+                f"[alert-poller] Auto-skipped {job.url} "
+                f"(score {admission.match_score} < {min_score})"
             )
 
     # Label the alert email
@@ -359,11 +360,65 @@ async def _process_message(
 
 
 # ---------------------------------------------------------------------------
+# Admission
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Admission:
+    status: str  # "SCHEDULED" (promotable) or "SKIPPED"
+    match_score: int | None
+    match_rationale: str | None
+    description: str | None
+
+
+async def _evaluate_job(job: ExtractedJob, *, profile_text: str, min_score: int) -> Admission:
+    """Fetch and score one extracted job, and decide whether it may be promoted.
+
+    Only a job that was actually scored, at or above *min_score* (0 = any score), is SCHEDULED.
+    A job that could not be scored (nothing to score, the scorer raised or returned no score) is
+    SKIPPED with match_rationale "not scored: <reason>"; it is re-evaluated if it shows up in a
+    later alert.
+    """
+    description = await fetch_job_description(job.url)
+    score_text = description or job.snippet
+    if not score_text:
+        return Admission("SKIPPED", None, "not scored: no description or snippet", description)
+    try:
+        score, rationale = await score_job(profile_text, score_text)
+    except Exception as exc:
+        logger.warning(f"[alert-poller] Failed to score {job.url}: {type(exc).__name__}")
+        return Admission("SKIPPED", None, f"not scored: {type(exc).__name__}", description)
+    if score is None:
+        return Admission("SKIPPED", None, "not scored: no score returned", description)
+    if min_score > 0 and score < min_score:
+        return Admission("SKIPPED", score, rationale, description)
+    return Admission("SCHEDULED", score, rationale, description)
+
+
+# ---------------------------------------------------------------------------
 # Promotion
 # ---------------------------------------------------------------------------
 
-async def _promote_ready_jobs(temporal_client=None) -> int:
-    """Promote SCHEDULED jobs whose promote_after has passed.
+def plan_promotions(rows, *, now: datetime, max_age_days: int, cap: int) -> tuple[list, list]:
+    """Split scheduled rows into (to_expire, to_promote).
+
+    Only SCHEDULED rows that aren't on hold count. Rows created more than *max_age_days* ago
+    expire instead of being promoted. Of the rest, rows whose promote_after has passed are
+    promoted oldest first, at most *cap* of them (0 or less: none).
+    """
+    cutoff = now - timedelta(days=max_age_days)
+    eligible = [r for r in rows if r.status == "SCHEDULED" and not r.hold]
+    expire = [r for r in eligible if r.created_at < cutoff]
+    ready = sorted(
+        (r for r in eligible if r.created_at >= cutoff and r.promote_after <= now),
+        key=lambda r: r.promote_after,
+    )
+    return expire, ready[:max(cap, 0)]
+
+
+async def _promote_ready_jobs(temporal_client, rt: dict) -> int:
+    """Expire stale SCHEDULED jobs, then promote the ready ones, at most
+    ``job_alert_max_promotions_per_cycle`` per call (see plan_promotions).
 
     Uses the extracted submit_job_for_application() to create real
     ApplicationRuns and kick off Temporal workflows.
@@ -372,16 +427,37 @@ async def _promote_ready_jobs(temporal_client=None) -> int:
         return 0
 
     now = datetime.now(timezone.utc)
+    max_age_days = int(rt.get("job_alert_max_age_days", settings.job_alert_max_age_days))
+    cap = int(rt.get(
+        "job_alert_max_promotions_per_cycle",
+        settings.job_alert_max_promotions_per_cycle,
+    ))
 
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(ScheduledJob).where(
                 ScheduledJob.status == "SCHEDULED",
-                ScheduledJob.promote_after <= now,
                 ScheduledJob.hold == False,  # noqa: E712
             )
         )
-        ready = result.scalars().all()
+        rows = result.scalars().all()
+
+    expire, ready = plan_promotions(rows, now=now, max_age_days=max_age_days, cap=cap)
+
+    if expire:
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                update(ScheduledJob)
+                .where(
+                    ScheduledJob.id.in_([r.id for r in expire]),
+                    ScheduledJob.status == "SCHEDULED",
+                )
+                .values(status="EXPIRED")
+            )
+            await session.commit()
+        logger.info(
+            f"[alert-poller] Expired {len(expire)} scheduled job(s) older than {max_age_days} days"
+        )
 
     if not ready:
         return 0

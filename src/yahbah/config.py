@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     job_alert_label: str = "YahBah/Alerts"
     job_alert_promotion_delay_hours: int = 24
     job_alert_min_match_score: int = 0  # 0 = accept all, 1-99 = auto-reject below threshold
+    # Promotion bounds: at most this many scheduled jobs start runs per poll cycle (0 = none) ...
+    job_alert_max_promotions_per_cycle: int = 5
+    # ... and alerts older than this aren't processed; SCHEDULED rows older than this expire.
+    job_alert_max_age_days: int = 14
 
     # Artifacts (local filesystem)
     artifacts_dir: str = "./artifacts"

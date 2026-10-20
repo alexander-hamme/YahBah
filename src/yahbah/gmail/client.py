@@ -5,8 +5,9 @@ Uses the official Google Python client library with OAuth2 credentials.
 All blocking API calls are wrapped with asyncio.to_thread() for async compat.
 
 Two modes of operation:
-  1. Verification code polling — searches recent messages matching criteria,
-     extracts the code, and labels the message as processed.
+  1. Verification code polling — searches recent messages matching criteria and
+     extracts the code (wait_for_verification_code); the caller marks the message
+     processed once the page accepted the code (finalize_code_message).
   2. Incremental sync — history.list from a stored GmailCheckpoint.history_id
      (used by poller.py and alert_poller.py), falling back to search when the
      checkpoint has expired (InvalidHistoryIdError).
@@ -19,12 +20,14 @@ Authentication:
 import asyncio
 import os
 import time
+from collections.abc import Collection
+from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
 
 from yahbah.config import settings
-from yahbah.gmail.parser import extract_verification_code, get_body_parts
+from yahbah.gmail.parser import pick_verification_code
 
 # Scopes: gmail.modify allows read + label management without full access.
 _SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
@@ -86,7 +89,9 @@ class GmailClient:
     Usage::
 
         client = GmailClient()
-        code = await client.fetch_verification_code("alias@gmail.com")
+        found = await client.wait_for_verification_code("alias@gmail.com")
+        ...  # enter found.code; once the page accepts it:
+        await client.finalize_code_message(found.message_id)
     """
 
     def __init__(self) -> None:
@@ -97,33 +102,38 @@ class GmailClient:
     # Public API
     # ------------------------------------------------------------------
 
-    async def fetch_verification_code(
+    async def wait_for_verification_code(
         self,
         recipient_email: str,
         since_epoch: int | None = None,
         subject_hint: str | None = None,
         timeout_seconds: int | None = None,
         poll_interval: int | None = None,
-    ) -> str:
+        *,
+        code_pattern: str | None = None,
+        exclude_message_ids: Collection[str] = (),
+    ) -> "VerificationCode":
         """
         Polls Gmail for a verification code email sent to *recipient_email*
         (a per-application alias, so anything sent to it after the submit is
-        about this application).
+        about this application). Changes nothing in the mailbox.
 
         since_epoch: when the challenge was triggered (default: now).
         subject_hint: optional Gmail subject filter from the job board's profile
             (e.g. Greenhouse: "security code"); without it every new email to the
-            alias is checked, and emails without a code are skipped.
+            alias is checked, and the LLM fallback only reads emails that mention a
+            code keyword (code, verification, verify, security, one-time, OTP, passcode).
+        code_pattern: the board's code shape, a regex the whole code must match
+            (needed to accept codes without digits).
+        exclude_message_ids: messages not to consider, e.g. one whose code the
+            page rejected.
 
-        Extracts the code, labels the message as processed, and returns it.
-        Raises RuntimeError if no code is found within the timeout.
+        Returns the code and the message it came from; see parser.py for what counts
+        as a code. Raises RuntimeError if no code is found within the timeout.
         """
         timeout = timeout_seconds or settings.gmail_poll_timeout_seconds
         interval = poll_interval or settings.gmail_poll_interval_seconds
         label = settings.gmail_label_parsed
-
-        # Pre-resolve the "Parsed" label ID so we can exclude it in queries.
-        label_id = await self._get_or_create_label(label)
 
         # Only accept emails that arrived after the challenge was triggered, minus
         # a buffer (90s) for clock skew and email transit.
@@ -134,7 +144,9 @@ class GmailClient:
             f"after:{trigger_epoch}",
             f"-label:{label.replace('/', '-')}",
         ]))
-        no_code: set[str] = set()  # messages already checked that hold no code (e.g. confirmations)
+        # Messages already checked that hold no code (e.g. confirmations) are left
+        # unlabelled: the status poller still needs to see them.
+        checked: set[str] = set(exclude_message_ids)
 
         logger.info(
             f"[gmail] Polling for verification code — query={query!r}, "
@@ -143,77 +155,31 @@ class GmailClient:
 
         elapsed = 0
         while elapsed < timeout:
-            messages = await self._search_messages(query, max_results=5)
+            fresh = []
+            for msg_meta in await self._search_messages(query, max_results=5):
+                if msg_meta["id"] in checked:
+                    continue
+                msg = await self._get_message(msg_meta["id"])
+                msg_epoch = int(msg.get("internalDate", "0")) // 1000
+                # Extra guard: skip messages older than our trigger time
+                if msg_epoch < trigger_epoch:
+                    logger.debug(f"[gmail] Skipping {msg['id']} — older than trigger ({msg_epoch} < {trigger_epoch})")
+                    checked.add(msg["id"])
+                    continue
+                fresh.append(msg)
 
-            if messages:
-                # Fetch full messages and sort by internalDate (newest first)
-                full_messages = []
-                for msg_meta in messages:
-                    msg = await self._get_message(msg_meta["id"])
-                    full_messages.append(msg)
-                full_messages.sort(
-                    key=lambda m: int(m.get("internalDate", "0")),
-                    reverse=True,
+            if fresh:
+                found = await pick_verification_code(
+                    fresh, code_pattern=code_pattern, require_keyword=subject_hint is None,
                 )
-
-                for msg in full_messages:
-                    msg_epoch = int(msg.get("internalDate", "0")) // 1000
-                    msg_id = msg["id"]
-                    headers = {
-                        h["name"]: h["value"]
-                        for h in msg.get("payload", {}).get("headers", [])
-                    }
-                    logger.debug(
-                        f"[gmail] Candidate message {msg_id}: "
-                        f"date={headers.get('Date', '?')}, "
-                        f"epoch={msg_epoch}, subject={headers.get('Subject', '?')}"
-                    )
-
-                    # Extra guard: skip messages older than our trigger time
-                    if msg_epoch < trigger_epoch:
-                        logger.debug(f"[gmail] Skipping {msg_id} — older than trigger ({msg_epoch} < {trigger_epoch})")
-                        continue
-                    if msg_id in no_code:
-                        continue
-
-                    html, plain = get_body_parts(msg["payload"])
-                    try:
-                        code = await extract_verification_code(html, plain)
-                    except Exception as exc:
-                        logger.warning(
-                            f"[gmail] Failed to extract code from message "
-                            f"{msg_id}: {exc}"
-                        )
-                        continue
-                    if not code:
-                        # Leave it unlabelled: the status poller still needs to see it.
-                        no_code.add(msg_id)
-                        continue
-
-                    # Label as processed and optionally archive/delete.
-                    # "archive" = move to YahBah folder, "delete" = trash, "nothing" = label only
-                    from yahbah.config import get_runtime_settings
-                    rt = await get_runtime_settings()
-                    action = rt.get("gmail_verification_code_action", "nothing")
-                    if action == "archive":
-                        folder_label = rt.get("gmail_folder_label", settings.gmail_folder_label)
-                        folder_label_id = await self._get_or_create_label(folder_label)
-                        await self._modify_labels(
-                            msg_id,
-                            add_label_ids=[label_id, folder_label_id],
-                            remove_label_ids=["INBOX"],
-                        )
-                    elif action == "delete":
-                        await self._trash_message(msg_id)
-                    else:
-                        if action != "nothing":
-                            logger.warning(f"[gmail] Unknown verification code action: {action!r}, treating as 'nothing'")
-                        await self._add_label(msg_id, label_id)
-                    logger.info(f"[gmail] Verification code extracted: {code} (from message {msg_id}, epoch={msg_epoch})")
-                    return code
+                if found:
+                    code, msg_id = found
+                    logger.info(f"[gmail] Verification code found in message {msg_id} ({len(code)} characters)")
+                    return VerificationCode(code=code, message_id=msg_id)
+                checked.update(m["id"] for m in fresh)
 
             logger.debug(
-                f"[gmail] No matching messages yet — waiting {interval}s "
+                f"[gmail] No code email yet — waiting {interval}s "
                 f"({elapsed}/{timeout}s elapsed)"
             )
             await asyncio.sleep(interval)
@@ -223,6 +189,56 @@ class GmailClient:
             f"No verification code email found for {recipient_email} "
             f"after {timeout}s of polling"
         )
+
+    async def finalize_code_message(self, message_id: str) -> None:
+        """
+        Marks a verification-code email as processed, per the runtime setting
+        ``gmail_verification_code_action``: "archive" = label Parsed and move to the
+        YahBah folder, "delete" = trash, "nothing" = label Parsed only. Call it once
+        the page has accepted the code. Safe to repeat.
+        """
+        from yahbah.config import get_runtime_settings
+        rt = await get_runtime_settings()
+        action = rt.get("gmail_verification_code_action", "nothing")
+        if action == "delete":
+            await self._trash_message(message_id)
+            return
+        label_id = await self._get_or_create_label(settings.gmail_label_parsed)
+        if action == "archive":
+            folder_label = rt.get("gmail_folder_label", settings.gmail_folder_label)
+            folder_label_id = await self._get_or_create_label(folder_label)
+            await self._modify_labels(
+                message_id,
+                add_label_ids=[label_id, folder_label_id],
+                remove_label_ids=["INBOX"],
+            )
+        else:
+            if action != "nothing":
+                logger.warning(f"[gmail] Unknown verification code action: {action!r}, treating as 'nothing'")
+            await self._add_label(message_id, label_id)
+
+    async def fetch_verification_code(
+        self,
+        recipient_email: str,
+        since_epoch: int | None = None,
+        subject_hint: str | None = None,
+        timeout_seconds: int | None = None,
+        poll_interval: int | None = None,
+        *,
+        code_pattern: str | None = None,
+    ) -> str:
+        """
+        wait_for_verification_code(), then finalize_code_message() straight away,
+        before the page has seen the code. Returns the code.
+
+        Superseded by the two-step form; remove once agent/submit.py uses it.
+        """
+        found = await self.wait_for_verification_code(
+            recipient_email, since_epoch, subject_hint, timeout_seconds, poll_interval,
+            code_pattern=code_pattern,
+        )
+        await self.finalize_code_message(found.message_id)
+        return found.code
 
     # ------------------------------------------------------------------
     # Incremental sync (status + alert pollers)
@@ -363,6 +379,12 @@ class GmailClient:
         self._label_id_cache[label_name] = label_id
         logger.info(f"[gmail] Created label '{label_name}' (id={label_id})")
         return label_id
+
+
+@dataclass(frozen=True)
+class VerificationCode:
+    code: str
+    message_id: str  # pass to finalize_code_message() once the page accepted the code
 
 
 class InvalidHistoryIdError(Exception):

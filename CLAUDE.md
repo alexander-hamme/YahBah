@@ -21,8 +21,9 @@ Yahbah is an Autonomous job-application system: job URL in, form filled and subm
 
 
 ## Commands
-- Deps: `uv sync`. Tests: `uv run pytest` (`-m "not browser"` skips headless-Chrome fixture tests).
-- For full app, Ask the user to Run: `temporal server start-dev`; `uv run uvicorn yahbah.api.main:app --reload --port 8000`; `uv run python -m yahbah.worker`.
+- Deps: `uv sync`. Tests: `uv run pytest` (offline, about a minute). Markers `browser` (headless Chrome), `db` (disposable Postgres via `TEST_DATABASE_URL`, default `postgresql+psycopg://yahbah_test@localhost/postgres`), `temporal` (local dev server), `live_llm` (real models, opt-in via `-m live_llm`); skip with e.g. `-m "not browser"`. Shared harness in `test/harness/`, safety invariants in `test/invariants/`.
+- Frontend checks: `cd frontend && npm test && npx tsc --noEmit`; `npm run lint` too (it still reports 2 older errors).
+- For full app, Ask the user to Run: `temporal server start-dev --db-filename ~/.temporal/yahbah.db` (persistent; `mkdir -p ~/.temporal` first); `uv run uvicorn yahbah.api.main:app --reload --port 8000`; `uv run python -m yahbah.worker`.
 - Debug one URL without Temporal: `uv run python scripts/run_pipeline.py <url>` (does not submit unless `--submit`).
 - Migrations: `uv run alembic upgrade head` (same `.env` role as the app; `yahbah_app` owns the DB and tables).
 
@@ -66,8 +67,15 @@ When a development task materially changes architecture, interfaces,
 dependencies, workflows, or important implementation behavior,
 update the relevant wiki pages as part of the task.
 
-Use the `project-wiki-manager` agent for substantial documentation
-creation, architectural audits, or multi-page maintenance.
+Every architecturally meaningful change (structure, interfaces,
+decisions, workflow paradigm) gets an entry in `docs/wiki/changelog.md`.
+Update wiki pages whenever behavior changes or existing text becomes
+outdated.
+
+Documentation writing is delegated to the `project-knowledge-maintainer`
+agent, including substantial documentation creation, architectural
+audits, multi-page maintenance, and changelog entries. The main session
+reviews its output.
 
 Minor fixes and routine refactoring generally do not require
 documentation changes unless existing documentation becomes

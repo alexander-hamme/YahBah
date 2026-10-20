@@ -1,0 +1,46 @@
+<!doctype html>
+<!--
+  Seven shapes of a submit control (harness fixture; from the 2026-10-18 QA audit, finding F1):
+    native-submit    <button type=submit> in the form
+    untyped-button   <button> (no type) in the form
+    enter-key        Enter in the form's text field (implicit submission)
+    button-onclick   <button type=button onclick> (fetch-style SPA submit)
+    div-role-button  <div role=button onclick>
+    link-onclick     <a href=# onclick> "Apply now"
+    outside-form     <button onclick> outside any <form>
+  "Phone *" is required and left empty, so filling stops at the fix agent.
+  Whatever reaches a submit handler is pushed to window.__sent and reported as
+  GET /__event?name=sent&shape=<shape>.
+-->
+<html lang="en"><head><meta charset="utf-8"><title>Apply</title></head>
+<body>
+<main>
+  <h1>Apply</h1>
+  <form id="application" novalidate>
+    <div><label for="full-name">Full name *</label> <input id="full-name" name="name" required></div>
+    <div><label for="phone">Phone *</label> <input id="phone" name="phone" type="tel" required></div>
+    <p><button type="submit" id="native-submit">Submit application</button></p>
+    <p><button id="untyped-button">Send application</button></p>
+    <p><button type="button" id="button-onclick" onclick="sent('button-onclick')">Submit</button></p>
+    <div role="button" tabindex="0" id="div-role-button" onclick="sent('div-role-button')">Submit application</div>
+    <p><a href="#" id="link-onclick" onclick="sent('link-onclick'); return false;">Apply now</a></p>
+  </form>
+  <div class="spa-form">
+    <p><button id="outside-form" onclick="sent('outside-form')">Submit</button></p>
+  </div>
+</main>
+<script>
+window.__sent = [];
+function sent(shape) {
+  window.__sent.push(shape);
+  fetch(`/__event?name=sent&shape=${shape}`, { keepalive: true }).catch(() => {});
+}
+let enterPressed = false;  // implicit submission reports the default button as submitter
+document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.tagName === 'INPUT') enterPressed = true; }, true);
+document.getElementById('application').addEventListener('submit', (e) => {
+  e.preventDefault();
+  sent(enterPressed || !e.submitter ? 'enter-key' : e.submitter.id);
+  enterPressed = false;
+});
+</script>
+</body></html>

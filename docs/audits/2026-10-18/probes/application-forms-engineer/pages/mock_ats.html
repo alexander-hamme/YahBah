@@ -1,0 +1,8 @@
+<!doctype html><html><body><div id="app"><h1>Apply: Engineer</h1>
+<form id="f" onsubmit="event.preventDefault(); window.__clicks=(window.__clicks||0)+1;
+  if(!window.__timer){window.__timer=setTimeout(()=>{document.getElementById('app').innerHTML='<h1>Thank you</h1><p>Your application has been received.</p>';},6000);}">
+<label for="a">First name *</label><input id="a" name="a" required>
+<label for="b">Email *</label><input id="b" name="b" type="email" required>
+<label for="c">Last name *</label><input id="c" name="c" required>
+<button type="submit">Submit application</button>
+</form></div></body></html>

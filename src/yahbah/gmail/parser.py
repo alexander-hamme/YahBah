@@ -1,12 +1,24 @@
 """
 Email body parsing and verification code extraction.
 
+A code must look like one: a 4-12 character token that contains a digit (and is not a year), or,
+without digits, fullmatches the board's declared code shape (``code_pattern``), is the whole text
+of a heading, appears once, and has mixed case, so it is not a word or a name. With a declared
+shape, every code must fullmatch it.
+
 Extraction strategy:
-  1. Heuristic: Greenhouse emails put the code in an <h1> tag.
-  2. Fallback: LLM extracts the code from the plain-text body.
+  1. Heuristic: such a token within _WINDOW characters of a code keyword (code, verification,
+     verify, security, one-time, OTP, passcode), or alone in a heading of an email whose subject
+     has a keyword. Across emails, a code keyword in the subject wins, then the closer candidate,
+     then the newer email.
+  2. Fallback: the LLM reads emails that mention a code keyword; its answer must appear in the
+     email and pass the same shape rule.
+
+Code values are never logged.
 """
 import base64
 import re
+from dataclasses import dataclass
 from html.parser import HTMLParser
 
 from loguru import logger
@@ -27,25 +39,153 @@ class EmailStatusClassification(BaseModel):
     company_name: str | None = None
 
 
-class _H1Extractor(HTMLParser):
-    """Extracts text content of the first <h1> tag."""
+_KEYWORD = re.compile(
+    r"\b(?:verification|verify|security|one[- ]time|otp|passcode|code)\b", re.IGNORECASE)
+_TOKEN = re.compile(r"(?<![A-Za-z0-9_-])[A-Za-z0-9]{4,12}(?![A-Za-z0-9_-])")
+_URL_OR_EMAIL = re.compile(r"(?:https?://|www\.)\S+|\S+@\S+", re.IGNORECASE)
+_YEAR = re.compile(r"(?:19|20)\d\d")
+_WINDOW = 80  # max characters between a code and a code keyword
+_HEADINGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
+
+
+class _EmailText(HTMLParser):
+    """Visible text of an HTML email, and the text of each heading."""
+
+    _SKIP = frozenset({"script", "style", "head", "title"})
+    _BREAKS = frozenset({"p", "div", "br", "tr", "td", "th", "li", "table", *_HEADINGS})
 
     def __init__(self) -> None:
         super().__init__()
-        self._in_h1 = False
-        self.text: str | None = None
+        self._parts: list[str] = []
+        self._skip = 0
+        self._heading: list[str] | None = None
+        self.headings: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list) -> None:
-        if tag == "h1" and self.text is None:
-            self._in_h1 = True
+        if tag in self._SKIP:
+            self._skip += 1
+        elif tag in _HEADINGS:
+            self._heading = []
+        if tag in self._BREAKS:
+            self._parts.append(" ")
 
     def handle_endtag(self, tag: str) -> None:
-        if tag == "h1":
-            self._in_h1 = False
+        if tag in self._SKIP and self._skip:
+            self._skip -= 1
+        elif tag in _HEADINGS and self._heading is not None:
+            self.headings.append(" ".join("".join(self._heading).split()))
+            self._heading = None
+        if tag in self._BREAKS:
+            self._parts.append(" ")
 
     def handle_data(self, data: str) -> None:
-        if self._in_h1 and self.text is None:
-            self.text = data.strip()
+        if self._skip:
+            return
+        self._parts.append(data)
+        if self._heading is not None:
+            self._heading.append(data)
+
+    @property
+    def text(self) -> str:
+        return " ".join("".join(self._parts).split())
+
+
+@dataclass(frozen=True)
+class _CodeEmail:
+    id: str
+    epoch: int
+    subject: str
+    text: str                 # visible text, whitespace collapsed, URLs and addresses removed
+    headings: frozenset[str]
+    llm_text: str             # what the LLM fallback reads: the plain-text part if any
+
+    @classmethod
+    def from_parts(cls, html: str | None, plain: str | None, *, subject: str = "",
+                   id: str = "", epoch: int = 0) -> "_CodeEmail":
+        headings: frozenset[str] = frozenset()
+        if html:
+            parser = _EmailText()
+            try:
+                parser.feed(html)
+                parser.close()
+                text, headings = parser.text, frozenset(parser.headings)
+            except Exception:
+                text = " ".join(re.sub(r"<[^>]+>", " ", html).split())
+        else:
+            text = " ".join((plain or "").split())
+        return cls(id, epoch, subject, " ".join(_URL_OR_EMAIL.sub(" ", text).split()),
+                   headings, plain or text)
+
+    @classmethod
+    def from_message(cls, msg: dict) -> "_CodeEmail":
+        headers = {h["name"].lower(): h["value"] for h in msg.get("payload", {}).get("headers", [])}
+        html, plain = get_body_parts(msg.get("payload", {}))
+        return cls.from_parts(html, plain, subject=headers.get("subject", ""), id=msg.get("id", ""),
+                              epoch=int(msg.get("internalDate", "0")) // 1000)
+
+    @property
+    def mentions_code(self) -> bool:
+        return bool(_KEYWORD.search(self.subject) or _KEYWORD.search(self.text))
+
+
+def _looks_like_code(token: str, email: _CodeEmail, pattern: re.Pattern[str] | None) -> bool:
+    if pattern is not None and not pattern.fullmatch(token):
+        return False
+    if any(c.isdigit() for c in token):
+        return not _YEAR.fullmatch(token)
+    mixed_case = any(c.islower() for c in token) and any(c.isupper() for c in token[1:])
+    return (pattern is not None and token in email.headings and mixed_case
+            and len(re.findall(rf"\b{token}\b", email.text)) == 1)
+
+
+def _heuristic_code(email: _CodeEmail, pattern: re.Pattern[str] | None) -> tuple[tuple, str] | None:
+    """(rank, code) of the best code candidate in *email*, or None. Higher rank is better."""
+    keywords = [m.span() for m in _KEYWORD.finditer(email.text)]
+    subject_keyword = bool(_KEYWORD.search(email.subject))
+    best: tuple[tuple, str] | None = None
+    for m in _TOKEN.finditer(email.text):
+        token = m.group()
+        if not _looks_like_code(token, email, pattern):
+            continue
+        gap = min((max(start - m.end(), m.start() - end, 0) for start, end in keywords), default=None)
+        near = gap is not None and gap <= _WINDOW
+        in_heading = token in email.headings
+        if not (near or (in_heading and subject_keyword)):
+            continue
+        rank = (in_heading, -(gap if near else _WINDOW + 1), -m.start())
+        if best is None or rank > best[0]:
+            best = (rank, token)
+    return best
+
+
+async def _choose_code(
+    emails: list[_CodeEmail], pattern: re.Pattern[str] | None, require_keyword: bool,
+) -> tuple[str, str] | None:
+    found = [
+        ((bool(_KEYWORD.search(e.subject)), hit[0], e.epoch), hit[1], e.id)
+        for e in emails if (hit := _heuristic_code(e, pattern)) is not None
+    ]
+    if found:
+        _, code, message_id = max(found, key=lambda f: f[0])
+        logger.debug(f"[gmail] Verification code found via heuristic in message {message_id}")
+        return code, message_id
+
+    for e in sorted(emails, key=lambda e: e.epoch, reverse=True):
+        if (require_keyword and not e.mentions_code) or not e.llm_text.strip():
+            continue
+        try:
+            code = await extract_code_llm(e.llm_text)
+        except Exception as exc:
+            logger.warning(f"[gmail] LLM code extraction failed on message {e.id}: {type(exc).__name__}")
+            continue
+        if not code:
+            continue
+        in_email = code in _TOKEN.findall(e.text) or code in _TOKEN.findall(e.llm_text)
+        if in_email and _looks_like_code(code, e, pattern):
+            logger.debug(f"[gmail] Verification code found via LLM in message {e.id}")
+            return code, e.id
+        logger.info(f"[gmail] Rejected the LLM's answer for message {e.id}: not a code in that email")
+    return None
 
 
 def decode_gmail_body(data: str) -> str:
@@ -79,20 +219,26 @@ def get_body_parts(payload: dict) -> tuple[str | None, str | None]:
     return html, plain
 
 
-def extract_code_heuristic(html: str) -> str | None:
+def extract_code_heuristic(
+    html: str | None, plain: str | None = None, *, subject: str = "", code_pattern: str | None = None,
+) -> str | None:
+    """The verification code in one email by the heuristic (module docstring), or None."""
+    email = _CodeEmail.from_parts(html, plain, subject=subject)
+    hit = _heuristic_code(email, re.compile(code_pattern) if code_pattern else None)
+    return hit[1] if hit else None
+
+
+async def pick_verification_code(
+    messages: list[dict], *, code_pattern: str | None = None, require_keyword: bool = True,
+) -> tuple[str, str] | None:
+    """(code, message_id) from the most likely code email among Gmail *messages* (format=full).
+
+    *code_pattern* is the board's declared code shape (a regex the whole code must match).
+    *require_keyword* limits the LLM fallback to emails that mention a code keyword; pass False
+    when the Gmail query already filtered on the board's code-email subject.
     """
-    Tries to extract a verification code from HTML using simple heuristics.
-
-    Greenhouse puts the code inside an <h1> tag. The code is typically
-    8 alphanumeric characters.
-    """
-    parser = _H1Extractor()
-    parser.feed(html)
-
-    if parser.text and re.fullmatch(r"[A-Za-z0-9]{4,12}", parser.text.strip()):
-        return parser.text.strip()
-
-    return None
+    emails = [_CodeEmail.from_message(m) for m in messages]
+    return await _choose_code(emails, re.compile(code_pattern) if code_pattern else None, require_keyword)
 
 
 async def extract_code_llm(text: str) -> str | None:
@@ -137,24 +283,16 @@ async def classify_status_email(
     )
 
 
-async def extract_verification_code(html: str | None, plain_text: str | None) -> str | None:
+async def extract_verification_code(
+    html: str | None, plain_text: str | None, *, subject: str = "", code_pattern: str | None = None,
+) -> str | None:
     """
-    Extracts a verification code from email content, or None if it has none.
+    Extracts a verification code from one email's content, or None if it has none.
 
-    Tries heuristic extraction from HTML first, falls back to LLM.
+    Heuristic first, then the LLM fallback, under the rules in the module docstring.
     """
-    if html:
-        code = extract_code_heuristic(html)
-        if code:
-            logger.debug(f"Verification code extracted via heuristic: {code}")
-            return code
-
-    # Fall back to LLM — prefer plain text (less noise), use HTML stripped if needed
-    body = plain_text or html or ""
-    if not body:
+    if not (html or plain_text):
         raise ValueError("Email has no body content to extract code from")
-
-    logger.debug("Heuristic extraction failed — falling back to LLM")
-    code = await extract_code_llm(body)
-    logger.debug(f"Verification code extracted via LLM: {code}")
-    return code
+    email = _CodeEmail.from_parts(html, plain_text, subject=subject)
+    found = await _choose_code([email], re.compile(code_pattern) if code_pattern else None, True)
+    return found[0] if found else None

@@ -1,18 +1,18 @@
 """Regression checks against saved job-board pages (test/yahbah/fixtures), offline.
 
 Each case in cases.json is a page verified by hand: the board must be recognised from the DOM alone
-(the page is loaded into about:blank) and read_form_schema must return exactly the expected fields.
-The fill plumbing (CDP typing, read-back, file upload, submit guard) is exercised on the same pages.
+(the page is served from 127.0.0.1 by the harness fixture server, so its URL says nothing about the
+board) and read_form_schema must return exactly the expected fields. The fill plumbing (CDP typing,
+read-back, file upload, submit guard) is exercised on the same pages.
 
 Add a case whenever a page has been verified by hand (scripts/save_fixture.py saves one).
 """
-import asyncio
 import json
 from pathlib import Path
 
 import pytest
-from browser_use import BrowserProfile, BrowserSession
 
+from harness.browser import load
 from yahbah.agent.boards import detect_board
 from yahbah.agent.fill import (
     GUARD_SUBMIT_JS,
@@ -31,30 +31,24 @@ FIXTURES = Path(__file__).parents[1] / "fixtures"
 CASES = json.loads((FIXTURES / "cases.json").read_text())
 
 
-@pytest.fixture(scope="module")
-async def session():
-    s = BrowserSession(browser_profile=BrowserProfile(headless=True, keep_alive=True))
-    await s.start()
-    yield s
-    await s.kill()
+@pytest.fixture
+def session(browser):
+    return browser
 
 
-async def load_fixture(session: BrowserSession, filename: str) -> None:
-    """browser-use blocks file:// navigation, so put the saved page into about:blank instead."""
-    await session.navigate_to("about:blank")
-    cdp = await session.get_or_create_cdp_session()
-    tree = await cdp.cdp_client.send.Page.getFrameTree(session_id=cdp.session_id)
-    await cdp.cdp_client.send.Page.setDocumentContent(
-        params={"frameId": tree["frameTree"]["frame"]["id"], "html": (FIXTURES / filename).read_text()},
-        session_id=cdp.session_id,
-    )
-    await asyncio.sleep(0.5)
+@pytest.fixture
+def load_fixture(fixture_server):
+    async def load_fixture(session, filename: str) -> str:
+        url = fixture_server.url(filename)
+        await load(session, url)
+        return url
+    return load_fixture
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c["name"] for c in CASES])
-async def test_board_and_fields(session, case) -> None:
-    await load_fixture(session, case["file"])
-    board = await detect_board(lambda c: run_js(session, c), "about:blank")
+async def test_board_and_fields(session, load_fixture, case) -> None:
+    url = await load_fixture(session, case["file"])
+    board = await detect_board(lambda c: run_js(session, c), url)
     assert board.name == case["board"]
 
     got = [(f["label"], f["type"], f["required"]) for f in await get_form_schema(session)]
@@ -63,7 +57,7 @@ async def test_board_and_fields(session, case) -> None:
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c["name"] for c in CASES])
-async def test_fill_plumbing(session, case, tmp_path) -> None:
+async def test_fill_plumbing(session, load_fixture, case, tmp_path) -> None:
     await load_fixture(session, case["file"])
     fields = await get_form_schema(session)
     await capture_empty_values(session, fields)  # as map_form does, before anything is filled
@@ -102,7 +96,7 @@ async def test_fill_plumbing(session, case, tmp_path) -> None:
         assert any(label in p for p in problems), f"gate missed empty required field {label!r}"
 
 
-async def test_submit_guard_blocks_and_releases(session) -> None:
+async def test_submit_guard_blocks_and_releases(session, load_fixture) -> None:
     await load_fixture(session, CASES[0]["file"])
     count_submits = """(() => {
         window.__submits = 0;
