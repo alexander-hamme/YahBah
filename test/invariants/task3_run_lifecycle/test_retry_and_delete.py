@@ -5,12 +5,10 @@ from datetime import datetime, timezone
 from temporalio.client import WorkflowExecutionStatus
 
 from harness.api import FakeTemporal, api_client
-from harness.contract import defect
 
 NOW = datetime.now(timezone.utc)
 
 
-@defect("contract §7", 3, "retry accepts a run whose submit was attempted, and the retried run can click again")
 async def test_retry_of_an_attempted_run_is_refused(db) -> None:
     run_id = await db.seed_run(status="FAILED", submit_attempted_at=NOW, error_message="submit_unverified")
     temporal = FakeTemporal()
@@ -22,7 +20,6 @@ async def test_retry_of_an_attempted_run_is_refused(db) -> None:
     assert (await db.run(run_id))["status"] == "FAILED"
 
 
-@defect("contract §7", 3, "retry resets the original row in place instead of creating a linked run")
 async def test_retry_creates_a_new_run_linked_to_the_original(db, runtime_settings) -> None:
     runtime_settings.set(submission_mode="review")
     original = await db.seed_run(status="FAILED", error_message="form_not_found", completed_at=NOW,
@@ -44,7 +41,6 @@ async def test_retry_creates_a_new_run_linked_to_the_original(db, runtime_settin
     assert [s["id"] for s in temporal.started] == [new["temporal_workflow_id"]]
 
 
-@defect("contract §7", 3, "retry starts a second workflow for the run while the first is still alive")
 async def test_retry_terminates_the_original_workflow_if_it_is_still_running(workflows, db) -> None:
     gate = workflows.stubs.gate("fill_activity", timeout=20)
     run_id = await workflows.enqueue()
@@ -62,7 +58,6 @@ async def test_retry_terminates_the_original_workflow_if_it_is_still_running(wor
         f"the original workflow is still {described.status.name} beside the retry")
 
 
-@defect("contract §9", 3, "scheduled_job.promoted_run_id has no ON DELETE SET NULL: a promoted run can't be deleted")
 async def test_deleting_a_promoted_run_succeeds(db) -> None:
     run_id = await db.seed_run(status="FAILED", completed_at=NOW)
     job = await db.insert("scheduled_job", job_url=(await db.run(run_id))["job_url"], source="other",

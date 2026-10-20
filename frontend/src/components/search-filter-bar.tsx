@@ -10,12 +10,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { DEFAULT_FILTER, OUTCOME_FILTERS } from "@/lib/outcomes";
 
 interface SearchFilterBarProps {
   search: string;
   onSearchChange: (value: string) => void;
-  status: string;
-  onStatusChange: (value: string) => void;
+  filter: string;
+  onFilterChange: (value: string) => void;
   sort: string;
   onSortChange: (value: string) => void;
 }
@@ -26,31 +27,22 @@ function handleSelect(fn: (v: string) => void) {
   };
 }
 
-const STATUSES = [
-  { value: "hide_failed", label: "All (hide failed)" },
-  { value: "all", label: "All Statuses" },
-  { value: "PENDING", label: "Pending" },
-  { value: "RUNNING", label: "Running" },
-  { value: "COMPLETED", label: "Completed" },
-  { value: "FAILED", label: "Failed" },
-  { value: "DUPLICATE", label: "Duplicate" },
-];
-
 const SORTS = [
   { value: "created_at_desc", label: "Newest First" },
   { value: "created_at_asc", label: "Oldest First" },
   { value: "updated_at_desc", label: "Recently Updated" },
+  { value: "review_deadline_asc", label: "Review deadline" },
 ];
 
 export function SearchFilterBar({
   search,
   onSearchChange,
-  status,
-  onStatusChange,
+  filter,
+  onFilterChange,
   sort,
   onSortChange,
 }: SearchFilterBarProps) {
-  const hasActiveFilters = search || (status !== "all" && status !== "hide_failed");
+  const hasActiveFilters = search || filter !== DEFAULT_FILTER;
 
   return (
     <div className="flex flex-col sm:flex-row gap-2">
@@ -58,6 +50,7 @@ export function SearchFilterBar({
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground transition-colors group-focus-within/search:text-cyan-400" />
         <Input
           type="search"
+          aria-label="Search applications"
           placeholder="Search by company, title, or URL..."
           value={search}
           onChange={(e) => onSearchChange(e.target.value)}
@@ -67,14 +60,16 @@ export function SearchFilterBar({
       <div className="flex gap-2">
         <div className="relative">
           <SlidersHorizontal className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
-          <Select value={status} onValueChange={handleSelect(onStatusChange)}>
-            <SelectTrigger className="w-[170px] pl-9 bg-white/5 border-white/10">
-              <SelectValue />
+          <Select value={filter} onValueChange={handleSelect(onFilterChange)}>
+            <SelectTrigger aria-label="Filter by outcome" className="w-[180px] pl-9 bg-white/5 border-white/10">
+              <SelectValue>
+                {(value: string) => OUTCOME_FILTERS.find((f) => f.value === value)?.label ?? value}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent className="bg-[#111827] border-white/10">
-              {STATUSES.map((s) => (
-                <SelectItem key={s.value} value={s.value}>
-                  {s.label}
+              {OUTCOME_FILTERS.map((f) => (
+                <SelectItem key={f.value} value={f.value}>
+                  {f.label}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -83,8 +78,10 @@ export function SearchFilterBar({
         <div className="relative">
           <ArrowUpDown className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
           <Select value={sort} onValueChange={handleSelect(onSortChange)}>
-            <SelectTrigger className="w-[180px] pl-9 bg-white/5 border-white/10">
-              <SelectValue />
+            <SelectTrigger aria-label="Sort" className="w-[180px] pl-9 bg-white/5 border-white/10">
+              <SelectValue>
+                {(value: string) => SORTS.find((s) => s.value === value)?.label ?? "Sorted by column"}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent className="bg-[#111827] border-white/10">
               {SORTS.map((s) => (
@@ -101,9 +98,10 @@ export function SearchFilterBar({
             size="icon"
             onClick={() => {
               onSearchChange("");
-              onStatusChange("hide_failed");
+              onFilterChange(DEFAULT_FILTER);
             }}
             className="text-muted-foreground hover:text-foreground hover:bg-white/5"
+            aria-label="Clear filters"
             title="Clear filters"
           >
             <X className="h-4 w-4" />

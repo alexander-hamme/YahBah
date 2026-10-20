@@ -1,10 +1,11 @@
 """
-POST /jobs — enqueue a new application run.
+POST /jobs — enqueue a new application run (409 if the job was, or may have been, applied to).
 """
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
-from yahbah.jobs import submit_job_for_application
+from yahbah.api.errors import api_error, enqueue_refused
+from yahbah.jobs import AlreadyApplied, RunInFlight, submit_job_for_application
 from yahbah.url_utils import UnsafeURLError, normalize_job_url
 
 router = APIRouter()
@@ -28,15 +29,15 @@ async def enqueue_job(
     try:
         job_url = await normalize_job_url(body.job_url)
     except UnsafeURLError as exc:
-        raise HTTPException(status_code=422, detail=f"URL not allowed: {exc}") from exc
+        raise api_error(422, "invalid_url", f"URL not allowed: {exc}") from exc
 
     try:
         temporal = request.app.state.temporal
         run_id = await submit_job_for_application(job_url, temporal)
+    except (AlreadyApplied, RunInFlight) as exc:
+        raise enqueue_refused(exc) from exc
     except Exception as exc:
-        raise HTTPException(
-            status_code=503, detail=f"Failed to start workflow: {exc}"
-        ) from exc
+        raise api_error(503, "temporal_unavailable", f"Failed to start workflow: {exc}") from exc
 
     return EnqueueJobResponse(
         run_id=run_id,

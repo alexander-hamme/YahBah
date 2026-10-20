@@ -5,11 +5,10 @@ postgresql+psycopg://yahbah_test@localhost/postgres; that role has CREATEDB and 
 migrated with `alembic upgrade head` in a subprocess, and dropped at session end. Only names
 starting with `yahbah_test_` are ever created, migrated, truncated or dropped.
 
-After migrating, the harness adds:
-- harness_status_log, filled by a trigger on every application_run status write. Tests read
-  transitions from it (never FAILED? peak RUNNING?) instead of polling, so short-lived states
-  can't be missed.
-- the KNOWN_DRIFT columns: ORM columns no migration creates (recorded in TestDatabase.drift first).
+After migrating, the harness records ORM columns no migration created (TestDatabase.drift) and
+adds harness_status_log, filled by a trigger on every application_run status write. Tests read
+transitions from it (never FAILED? peak RUNNING?) instead of polling, so short-lived states
+can't be missed.
 
 TestDB (the `db` fixture) is per test: tables truncated first, every `AsyncSessionLocal` in yahbah
 pointed at this database through a NullPool engine (no connections shared across event loops).
@@ -17,6 +16,7 @@ pointed at this database through a NullPool engine (no connections shared across
 import os
 import subprocess
 import sys
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -52,12 +52,6 @@ END $$ LANGUAGE plpgsql;
 CREATE TRIGGER harness_status_log AFTER INSERT OR UPDATE ON application_run
     FOR EACH ROW EXECUTE FUNCTION harness_log_status();
 """
-
-
-# ORM columns no migration creates (found 2026-10-19: a fresh `alembic upgrade head` can't load a
-# JobPosting). Added after migrating so DB tests can run; test/invariants/task3_run_lifecycle/
-# test_schema.py holds the fix. Remove an entry once a migration creates the column.
-KNOWN_DRIFT = {("job_posting", "canonical_url"), ("job_posting", "location")}
 
 
 class PostgresUnavailable(Exception):
@@ -100,16 +94,6 @@ def _orm_drift(conn) -> set[tuple[str, str]]:
     return {(t.name, c.name) for t in Base.metadata.sorted_tables for c in t.columns if (t.name, c.name) not in have}
 
 
-def _add_known_drift(conn, drift: set[tuple[str, str]]) -> None:
-    from sqlalchemy.dialects import postgresql
-
-    from yahbah.db.models import Base
-
-    for table, column in sorted(drift & KNOWN_DRIFT):
-        col_type = Base.metadata.tables[table].columns[column].type.compile(dialect=postgresql.dialect())
-        conn.execute(f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS "{column}" {col_type}')
-
-
 def _empty_database() -> TestDatabase:
     admin = make_url(os.environ.get("TEST_DATABASE_URL", DEFAULT_ADMIN_URL))
     try:
@@ -124,13 +108,12 @@ def _empty_database() -> TestDatabase:
 
 
 def create_database() -> TestDatabase:
-    """Migrated to head, plus the harness's status log and the KNOWN_DRIFT columns."""
+    """Migrated to head, plus the harness's status log."""
     db = _empty_database()
     try:
         migrate(db)
         with psycopg.connect(_libpq(db.url), autocommit=True) as c:
             db.drift = _orm_drift(c)
-            _add_known_drift(c, db.drift)
             c.execute(STATUS_LOG_SQL)
     except BaseException:
         drop_database(db)
@@ -167,10 +150,24 @@ def execute(db: TestDatabase, sql: str, params: dict | None = None) -> list[dict
         return [dict(zip(names, row)) for row in cur.fetchall()]
 
 
-def drop_database(db: TestDatabase) -> None:
+def drop_database(db: TestDatabase, attempts: int = 5) -> None:
+    """DROP ... WITH (FORCE) ends the test's own leftover connections. It can't end a backend of another
+    role, e.g. an autovacuum worker that started on a freshly migrated database ("permission denied to
+    terminate process"); a plain DROP makes autovacuum exit by itself, so that is tried next, a few times."""
     _checked(db.url)
     with psycopg.connect(_libpq(db.admin_url), autocommit=True, connect_timeout=3) as conn:
-        conn.execute(f'DROP DATABASE IF EXISTS "{db.name}" WITH (FORCE)')
+        for attempt in range(attempts):
+            try:
+                conn.execute(f'DROP DATABASE IF EXISTS "{db.name}" WITH (FORCE)')
+                return
+            except psycopg.errors.InsufficientPrivilege:
+                try:
+                    conn.execute(f'DROP DATABASE IF EXISTS "{db.name}"')
+                    return
+                except psycopg.errors.ObjectInUse:
+                    if attempt == attempts - 1:
+                        raise
+                    time.sleep(0.5)
 
 
 class TestDB:
@@ -222,8 +219,6 @@ class TestDB:
         present = await self.columns(table)
         if not present:
             raise SchemaNotReady(f"table {table} does not exist yet (contract §9)")
-        if table == "application_run":
-            values = self._legacy_run_values(values, present)
         missing = sorted(set(values) - present)
         if missing:
             raise SchemaNotReady(f"{table}.{', '.join(missing)} does not exist yet (contract §9, migration 0018/0019)")
@@ -231,14 +226,6 @@ class TestDB:
         params = ", ".join(f":{k}" for k in values)
         result = await self.execute(f"INSERT INTO {table} ({cols}) VALUES ({params}) RETURNING *", **values)
         return dict(result.one()._mapping)
-
-    @staticmethod
-    def _legacy_run_values(values: dict, present: set[str]) -> dict:
-        """Before migration 0018 a testing-mode run is `is_test_run = true` (the contract's backfill)."""
-        if "submission_mode" in values and "submission_mode" not in present and "is_test_run" in present:
-            values = dict(values)
-            values["is_test_run"] = values.pop("submission_mode") == "testing"
-        return values
 
     async def seed_posting(self, url: str | None = None, **values) -> uuid.UUID:
         url = url or f"https://jobs.harness.example/acme/{uuid.uuid4().hex[:8]}"
@@ -255,6 +242,18 @@ class TestDB:
         defaults = {"id": run_id, "job_posting_id": posting_id, "job_url": posting["url"], "status": status,
                     "temporal_workflow_id": f"application-{run_id}", "created_at": now, "updated_at": now}
         return (await self.insert("application_run", **{**defaults, **values}))["id"]
+
+    async def seed_profile(self, **overrides) -> uuid.UUID:
+        """The synthetic applicant (harness.profile) as the ApplicantProfile row the activities load."""
+        from harness.profile import applicant
+        from yahbah.db.models import ApplicantProfile
+
+        fields = vars(applicant(**overrides))
+        async with self.Session() as session:
+            row = ApplicantProfile(**{k: v for k, v in fields.items() if hasattr(ApplicantProfile, k)})
+            session.add(row)
+            await session.commit()
+            return row.id
 
     async def posting(self, posting_id) -> dict:
         row = await self.fetchone("SELECT * FROM job_posting WHERE id = :id", id=uuid.UUID(str(posting_id)))

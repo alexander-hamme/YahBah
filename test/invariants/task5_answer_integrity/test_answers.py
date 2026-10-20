@@ -7,7 +7,6 @@ US citizen, authorized in the US, no clearance). The answer cache is the real an
 """
 import pytest
 
-from harness.contract import defect
 from harness.llm import answer, map_all
 from harness.profile import applicant
 from yahbah.agent.fill import match_option
@@ -31,7 +30,6 @@ async def cached(db) -> list[tuple[str, str]]:
     return [(r["question"], r["answer"]) for r in await db.fetchall("SELECT question, answer FROM answer_cache")]
 
 
-@defect("A5", 5, "an applicant fact backed only by job-description text is typed in and cached")
 async def test_a_clearance_claim_backed_only_by_the_job_description_needs_an_answer(db, llm, mapper) -> None:
     jd = "Requirements: 10+ years of Kubernetes. Candidates must hold an active security clearance."
     llm.on("prose", handler=lambda call: answer("Yes", quotes=["must hold an active security clearance"]))
@@ -41,7 +39,6 @@ async def test_a_clearance_claim_backed_only_by_the_job_description_needs_an_ans
     assert await cached(db) == []
 
 
-@defect("A5", 5, "quotes of unrelated stored answers pass the evidence check (live run 2026-10-17)")
 async def test_a_start_date_backed_by_irrelevant_stored_answers_needs_an_answer(db, llm, mapper) -> None:
     llm.on("prose", handler=lambda call: answer(
         "Immediately", quotes=["willing_to_relocate: Yes, willing to relocate"],
@@ -51,7 +48,6 @@ async def test_a_start_date_backed_by_irrelevant_stored_answers_needs_an_answer(
     assert await cached(db) == []
 
 
-@defect("A5", 5, "US-only authorization facts are generalized to another jurisdiction (live probe: Germany -> Yes)")
 async def test_work_authorization_for_another_country_needs_an_answer(db, llm, mapper) -> None:
     llm.on("prose", handler=lambda call: answer(
         "Yes", quotes=["work_authorization: Yes", "work_status: US Citizen"], basis=["work_authorization", "work_status"]))
@@ -61,7 +57,6 @@ async def test_work_authorization_for_another_country_needs_an_answer(db, llm, m
     assert await cached(db) == []
 
 
-@defect("A5", 5, "the answer cache is read before the stored answers and never invalidated")
 async def test_an_updated_stored_answer_wins_over_the_cache(db, llm, mapper) -> None:
     def faithful(call):  # answers from the stored sponsorship fact it is shown
         current = mapper.known_answers["sponsorship_required"]
@@ -76,7 +71,6 @@ async def test_an_updated_stored_answer_wins_over_the_cache(db, llm, mapper) -> 
     assert second[0].value == "Yes", "a cached answer shadows the updated stored answer"
 
 
-@defect("A5", 5, "conditional and company-specific answers are cached by label for every later form")
 @pytest.mark.parametrize("label, reply, jd", [
     ("If yes, please explain", answer("N/A", quotes=["sponsorship_required: No"], basis=["sponsorship_required"]), US_JOB),
     ("Why do you want to join Acme Robotics?",
@@ -89,7 +83,6 @@ async def test_context_dependent_answers_are_not_cached(db, llm, mapper, label, 
     assert await cached(db) == []
 
 
-@defect("A5", 5, "a required open-ended question with nothing quotable ends the run as NeedsAnswer")
 async def test_a_required_curveball_is_answered_and_labelled_generated(db, llm, mapper) -> None:
     llm.on("prose", handler=lambda call: answer(
         "A pineapple: prickly on the outside, but I build things that hold up, like a Kafka pipeline at 2B events/day.",
@@ -100,12 +93,10 @@ async def test_a_required_curveball_is_answered_and_labelled_generated(db, llm, 
     assert out[0].generated is True
 
 
-@defect("A5 (match_option)", 5, "character-prefix matching turns a stored 'No' into another option")
 @pytest.mark.parametrize("options, wrong", [(["Now", "In the future", "Never"], "Now"), (["Yes", "Not sure"], "Not sure")])
 def test_no_is_never_matched_to_a_longer_word(options, wrong) -> None:
     assert match_option("No", options) != wrong
 
 
-@defect("B6", 5, "profile_text drops the work-experience bullets the prose prompt tells the model to use")
 def test_profile_text_includes_the_work_experience_bullets() -> None:
     assert "Kafka ingestion service" in profile_text(applicant())

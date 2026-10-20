@@ -170,6 +170,8 @@ The batch-1 safety work is therefore not a detour. Agentic loops on unfamiliar p
 
 ## First batch (proposed, pending user review)
 
+*Status 2026-10-20: implemented; see "Batch 1 status" below. This section is kept as planned.*
+
 **Goal:** the first live submission is safe, recorded and provable. **Gate:** no unattended live submission until tasks 1–5 land and C7 passes.
 
 **Step 0, main session, before wave 2 starts: shared contract.** A short decision record in the wiki fixing:
@@ -209,11 +211,47 @@ The batch-1 safety work is therefore not a detour. Agentic loops on unfamiliar p
 
 **Batch 2 candidates:**
 - **B0, the step-aware loop:** written spec-first, with Nav and Forms co-leading. It absorbs B1, B5's wizard loop and B8.
-- **The `auto_reviewed` reviewer pass** (LLM). Needs task 5's basis output, plus a reviewer eval: its catch rate on seeded wrong answers.
+- **The `auto_reviewed` reviewer pass** (LLM). Needs task 5's basis output, plus a reviewer eval: its catch rate on seeded wrong answers. It also adds the third option to the dashboard's mode control.
 - **B2:** once the jobright fixtures exist.
 - **B3:** includes deciding whether the scheduled queue's promotion delay is still needed now that every run waits for review after filling. Then B4.
 - **C2 with C3, and C5.**
 - **Then B5's iframes and widgets**, before any Workday work.
+
+**Batch 1 follow-ups (added 2026-10-20):**
+- **Invented-event judge and reviewer.** Generated behavioural (STAR) answers can invent incidents; they are labelled `generated` and shown at review, but nothing checks them. The reviewer pass needs an eval judge for invented events (LLM).
+- **Alert-time match scoring on `llm.profile.profile_text`** (Gmail owner). `gmail/alert_parser.build_profile_summary` still builds its own profile text from YAML, so alert scores and run-time scores use different profile sources.
+- **Per-answer editing at review.** Batch 1 is all-or-nothing: to change an answer the user rejects, edits the stored answer or profile, and retries.
+- **Bulk approval**, pending the user's answer on whether and how.
+- **The rest of C4:** a `task` and prompt hash on every logged call, a seed, temperature 0, logs for Gmail-side calls. (The 53-item answer eval has landed.)
+- **The slot backlog (Temporal F3).** The run-slot wait is an activity that holds a worker slot, so about 100 or more waiting runs stall admission. Needs the dispatcher design (decision 5).
+- **B7, extended:** a confirmation email arriving at a run's alias should resolve `SUBMIT_UNCERTAIN` to `COMPLETED` (today it only sets `email_confirmed_at`, which keeps blocking the posting). The company-name fallback in the status poller (`_match_by_company`) also looks only at `COMPLETED` and `FAILED` runs.
+- **B2's identity key for claims.** `submission_claim.posting_key` is `str(job_posting_id)`, so the same job posted under two URLs is two postings, caught only by the canonical-URL and title+company+location checks. B2's `(ats, tenant, job_id)` key should replace it.
+
+## Batch 1 status (2026-10-20)
+
+**Outcome:** tasks 1–6 are implemented and QA-verified, and the C7 acceptance gate passes. Wave 1 is committed (`d04bc45`); wave 2 is in the working tree, uncommitted.
+
+**What landed** (the [changelog](../../wiki/changelog.md) has the detail, the [contract](../../wiki/contracts/run-lifecycle.md) the rules):
+- **A1, A6:** wave 1.
+- **A2, A7 (review mode):** `SUBMIT_UNCERTAIN`, `AWAITING_REVIEW`, `EXPIRED`, `failure_reason`; `possibly_applied()` at every dedup site; the atomic `claim_submission()`; fenced writes and a DB attempt lease; resume on restart with heartbeats; retry as a new linked run; cancel through the workflow; the review gate with rounds.
+- **A3, A4:** evidence-based success, a pending state instead of sleeps, an action-level agent guard with a tripwire, the claim after the button is located.
+- **A5 and B6's prompt/profile fixes:** typed screening facts, `basis`/`generated`, a provenance-bearing cache, the canonical profile, the cover letter only on request, `match_option` whole words. The opt-in eval (53 items) met every target.
+- **Task 6 and part of C3** (the trace endpoint and timeline are not done): the review queue and panel, outcome- and actions-driven UI, validated settings, the §8 error shape, ESLint clean.
+- **C1, C7:** the shared harness; the end-to-end gate with the real worker, activities and Chrome against a fixture.
+- **Beyond the plan:** the attempt lease and the approved-state baseline (both from QA's review), the agent tripwire always ending `SUBMIT_UNCERTAIN`, and `slow`/`e2e` markers with a parallel test path. The mode control is two-way (Testing | Review) until `auto_reviewed` exists.
+
+**Verification (2026-10-20):** the complete Python suite gives 848 passed, 1 skipped in 43 s in parallel (about 4 min serial, default selection); frontend 64 tests, `tsc` and `eslint` clean. QA's independent review found 10 defects plus 1 follow-up; all are fixed.
+
+**Gate status:** the gate ("no unattended live submission until tasks 1–5 land and C7 passes") is met offline. **Live submission still needs the user to apply migrations 0018 and 0019 (`uv run alembic upgrade head`) and run the app.** The first live runs should stay in `review` mode with a human approving. A leftover `testing_mode` key in `config/settings.yaml` is ignored, and without a `submission_mode` key new runs use `review`.
+
+**Accepted remaining risks:**
+- a stale attempt can claim once in the window before its retry takes the lease, but never makes a second click;
+- the approve-then-reject race: a reject sent after an approval was accepted is ignored (cancel still works);
+- the run-slot backlog stalls at about 100 or more waiting runs.
+
+**Open risk:** invented STAR incidents in generated behavioural answers (mitigation: the batch-2 reviewer pass and an invented-event judge).
+
+The "Operational notes" below are as of 2026-10-19 and are superseded: the pollers now respect their flags and `testing_mode` no longer exists. Follow-ups are in the batch-2 list above.
 
 ## Decisions (resolved 2026-10-19)
 

@@ -1,8 +1,12 @@
 """
 LLM activities — stateless, retryable.
+
+  map_answers_activity            map every form field to an answer (and score the match)
+  map_new_fields_activity         map fields that appeared on a review re-fill, for the next review round
+  generate_cover_letter_activity  cover letter text + PDF
+  extract_job_metadata_activity   title, company, salary, technologies, ...
 """
 import json
-import uuid
 from dataclasses import asdict
 from pathlib import Path
 from fpdf import FPDF
@@ -17,18 +21,23 @@ from yahbah.llm.client import OllamaClient
 from yahbah.llm.field_mapper import FieldMapper, NeedsAnswer
 from yahbah.llm.cover_letter import CoverLetterGenerator
 from yahbah.llm.logs import use_run_log_dir
+from yahbah.llm.profile import profile_text
+from yahbah.run_state import attempt_tag
 from yahbah.schemas import (
     CoverLetterInput,
     CoverLetterOutput,
+    FieldMapping,
     FormField,
     JobMetadataInput,
     JobMetadataOutput,
     MapAnswersInput,
     MapAnswersOutput,
+    MapNewFieldsInput,
 )
-from yahbah.workflows.activities.db_ops import persist_artifact_activity
+from yahbah.workflows.activities.db_ops import fenced_update, persist_artifact_activity
+from yahbah.workflows.activities.heartbeat import heartbeating
 from yahbah.db.session import AsyncSessionLocal
-from yahbah.db.models import ApplicantProfile, ApplicationRun
+from yahbah.db.models import ApplicantProfile
 from sqlalchemy import select
 
 
@@ -51,6 +60,7 @@ async def _load_profile() -> ApplicantProfile:
 
 
 @activity.defn
+@heartbeating
 async def map_answers_activity(input_: MapAnswersInput) -> MapAnswersOutput:
     use_run_log_dir(input_.run_id)
     profile = await _load_profile()
@@ -58,7 +68,8 @@ async def map_answers_activity(input_: MapAnswersInput) -> MapAnswersOutput:
 
     mapper = FieldMapper()
     try:
-        mappings = await mapper.map(fields, profile, job_description=input_.job_description)
+        mappings = await mapper.map(fields, profile, job_description=input_.job_description,
+                                    job_location=input_.job_location)
     except NeedsAnswer as exc:
         raise ApplicationError(str(exc), type="needs_answer", non_retryable=True) from exc
 
@@ -83,40 +94,14 @@ async def map_answers_activity(input_: MapAnswersInput) -> MapAnswersOutput:
     # Compute match score (separate LLM call)
     match_score, match_rationale = None, None
     try:
-        # Build profile text the same way the mapper does
-        name_parts = profile.full_name.split(maxsplit=1)
-        profile_summary = (
-            f"Name: {profile.full_name}\n"
-            f"Location: {profile.location}\n"
-            f"Years of experience: {profile.years_of_experience}\n"
-            f"Skills: {', '.join(profile.skills)}\n"
-            f"Bio: {profile.bio or 'N/A'}\n"
-        )
-        relevant_exp = [
-            e for e in profile.work_experience
-            if e.get("use_in_custom_prompts", True)
-        ]
-        if relevant_exp:
-            exp_lines = [
-                f"  - {e.get('title', '')} at {e.get('company', '')} ({e.get('duration', '')})"
-                for e in relevant_exp
-            ]
-            profile_summary += "Work experience:\n" + "\n".join(exp_lines)
-
         match_score, match_rationale = await mapper.compute_match_score(
-            profile_summary, input_.job_description
+            profile_text(profile, contact=False), input_.job_description
         )
         activity.logger.info(
             f"[match] Score: {match_score}% — {match_rationale}"
         )
 
-        # Persist to DB
-        async with AsyncSessionLocal() as session:
-            run = await session.get(ApplicationRun, uuid.UUID(input_.run_id))
-            if run:
-                run.match_score = match_score
-                run.match_rationale = match_rationale
-                await session.commit()
+        await fenced_update(input_.run_id, match_score=match_score, match_rationale=match_rationale)
     except Exception as exc:
         activity.logger.warning(f"[match] Failed to compute match score: {exc}")
 
@@ -125,6 +110,42 @@ async def map_answers_activity(input_: MapAnswersInput) -> MapAnswersOutput:
         match_score=match_score,
         match_rationale=match_rationale,
     )
+
+
+@activity.defn
+@heartbeating
+async def map_new_fields_activity(input_: MapNewFieldsInput) -> MapAnswersOutput:
+    """Map required fields that appeared when an approved application was re-filled (contract §4).
+    Their rows (fill-evidence shape, nothing written yet) are saved as the `new_fields` artifact of
+    the review round they go to; the approved mappings are the mapper's prior context."""
+    use_run_log_dir(input_.run_id)
+    profile = await _load_profile()
+    fields = [FormField(key=f["key"], label=f["label"], field_type=f["type"], required=bool(f.get("required")),
+                        options=f.get("options") or [], options_total=f.get("options_total"),
+                        empty_value=f.get("empty_value"), autocomplete=f.get("autocomplete"))
+              for f in input_.fields]
+    prior = [FieldMapping(**m) for m in input_.approved_mappings]
+    try:
+        mappings = await FieldMapper().map(fields, profile, input_.job_description, prior=prior,
+                                           job_location=input_.job_location)
+    except NeedsAnswer as exc:
+        raise ApplicationError(str(exc), type="needs_answer", non_retryable=True) from exc
+    for m in mappings:
+        if m.source == "email" and input_.account_email:
+            m.value = input_.account_email
+
+    by_key = {m.key: m for m in mappings}
+    rows = [{"key": f.key, "label": f.label, "type": f.field_type, "required": f.required, "options": f.options,
+             "answer": (m := by_key.get(f.key)) and m.value, "source": m and m.source,
+             "basis": list(m.basis) if m else [], "generated": bool(m and m.generated),
+             "written": None, "page_value": None, "ok": None}
+            for f in fields]
+    path = artifact_path(input_.run_id, f"new_fields_{input_.review_round}_{attempt_tag()}.json")
+    with open(path, "w") as f:
+        json.dump(rows, f, indent=2, ensure_ascii=False)
+    await persist_artifact_activity(input_.run_id, "new_fields", path, {"review_round": input_.review_round})
+    activity.logger.info("[map_new_fields] " + ", ".join(f"[{m.key}] {m.label[:30]!r}<-{m.source}" for m in mappings))
+    return MapAnswersOutput(field_mappings=[asdict(m) for m in mappings])
 
 
 def _text_to_pdf(text: str, path: str) -> None:
@@ -155,6 +176,7 @@ async def generate_cover_letter_activity(input: CoverLetterInput) -> CoverLetter
         input.run_id,
         "cover_letter",
         cover_letter_path,
+        {"text": cover_letter_text},  # shown in review (contract §8)
     )
 
     return CoverLetterOutput(

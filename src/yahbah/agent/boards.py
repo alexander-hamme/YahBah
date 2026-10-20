@@ -49,7 +49,8 @@ class BoardProfile:
 
     # ── Submit / verify ──────────────────────────────────────────────────────
     # JS that finds the submit button, tags it data-ja-field="submit-cta" and returns its text
-    # (or null). None: submit.FIND_SUBMIT_JS.
+    # (or null). None: controls.FIND_SUBMIT_JS, which uses the shared submit/advance classifier (a
+    # "Next"/"Continue" step button is never the final submit; a hook must not return one either).
     submit_button_js: str | None = None
     # JS that tags the verification-code inputs data-ja-field="code-<i>" and returns how many
     # there are. None: submit.FIND_CODE_INPUTS_JS.

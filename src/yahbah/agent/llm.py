@@ -6,8 +6,12 @@ browser-use model clients and agent runs.
 - Crew: who does what in an agent run (driver, vision, escalation + tools + stall tracker).
 - Escalator: on a stall (or repeated failures) hands the next steps to the escalation
   model with thinking + screenshots, then hands back to the driver.
-- run_agent: a browser-use Agent configured for slow local models.
+- run_agent: a browser-use Agent configured for slow local models. Every agent phase runs through it, and
+  so through the submit-control guard (controls.py): the crew's tools refuse clicks and key presses that
+  would submit or advance the application, whatever the phase; mode "fix" (the agent that repairs a filled
+  form) adds a tripwire that raises StageFailed("possibly_submitted") if the form was left.
 """
+import asyncio
 import time
 from dataclasses import dataclass
 
@@ -15,6 +19,7 @@ from browser_use import Agent, ChatOllama
 from browser_use.browser import BrowserSession
 from loguru import logger
 
+from yahbah.agent.controls import AgentMode, GuardedTools, block_native_submits, check_still_on_form, snapshot
 from yahbah.agent.tools import StallTracker, make_tools
 from yahbah.config import settings
 from yahbah.llm import logs
@@ -132,8 +137,21 @@ class Escalator:
             )
 
 
-async def run_agent(task: str, crew: Crew, session: BrowserSession, max_steps: int, output=None):
-    """Run a browser-use agent on the session's current page. Returns the AgentHistoryList."""
+async def run_agent(task: str, crew: Crew, session: BrowserSession, max_steps: int, output=None, *,
+                    mode: AgentMode = "form"):
+    """Run a browser-use agent on the session's current page. Returns the AgentHistoryList.
+
+    mode says what the agent may do to the page (default: the most restricted that isn't "fix"):
+      navigate  find the form: click "Apply" and the like. Submit/advance controls are off limits only once
+                the page shows an application form (or the control sits in a form of its own that takes input).
+      form      work on the open form (map it, read dropdowns): submit/advance controls and Enter are off
+                limits, and so is navigating away.
+      fix       repair a filled form: as "form", plus native submit events are cancelled while it runs and,
+                afterwards, a form that was left (new document or URL, fields gone) raises
+                StageFailed("possibly_submitted"): an unclassified control may have submitted it.
+    """
+    if not isinstance(crew.tools, GuardedTools):
+        raise TypeError("agents must run with controls.GuardedTools (make_crew builds them)")
     esc = Escalator(crew)
     log_dir = logs.current_log_dir()
     agent = Agent(
@@ -153,6 +171,24 @@ async def run_agent(task: str, crew: Crew, session: BrowserSession, max_steps: i
         save_conversation_path=(log_dir / "steps") if log_dir else None,
     )
     esc.agent = agent
-    history = await agent.run(max_steps=max_steps)
+    crew.tools.mode = mode
+    before = None
+    if mode == "fix":
+        before = await snapshot(session)
+        await block_native_submits(session, True)
+    try:
+        history = await agent.run(max_steps=max_steps)
+    except (Exception, asyncio.CancelledError):
+        # If the form was left, that is the news, not this error or the cancellation: the activity must record a
+        # possible submission (a cancelled run that may have submitted ends SUBMIT_UNCERTAIN, never CANCELLED).
+        if before:
+            await check_still_on_form(session, before)
+        raise
+    finally:
+        crew.tools.mode = "form"
+        if before:
+            await block_native_submits(session, False)
+    if before:
+        await check_still_on_form(session, before)
     logger.info(f"[agent] {history.number_of_steps()} steps, {esc.escalations} escalation(s)")
     return history

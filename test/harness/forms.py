@@ -7,7 +7,6 @@
     assert await page_count(session, "__clicks") == 1 and claim.calls == 1
 """
 import asyncio
-import inspect
 import json
 
 from yahbah.agent.fill import FillContext, fill_form
@@ -31,21 +30,9 @@ class Claim:
 
 async def submit(session, board, ctx: FillContext, *, claim: Claim, already_attempted: bool = False,
                  map_new_fields=None, email: str = APPLICANT_EMAIL):
-    """submit_and_verify with the contract's `claim` callback (§6).
-
-    Until task 4 replaces `mark_attempted` with `claim`, the claim is passed as mark_attempted (its
-    result ignored), so today's tests fail on today's behaviour rather than on the signature.
-    Delete the legacy branch when task 4 lands.
-    """
-    params = inspect.signature(submit_and_verify).parameters
-    kwargs = {"email": email, "already_attempted": already_attempted, "map_new_fields": map_new_fields}
-    if "claim" in params:
-        kwargs["claim"] = claim
-    else:  # legacy (pre-task-4)
-        async def mark_attempted() -> None:
-            await claim()
-        kwargs["mark_attempted"] = mark_attempted
-    return await submit_and_verify(session, board, ctx, **{k: v for k, v in kwargs.items() if k in params})
+    """submit_and_verify with the contract's `claim` callback (§6); verify-only and mapper as the caller says."""
+    return await submit_and_verify(session, board, ctx, email=email, already_attempted=already_attempted,
+                                   claim=claim, map_new_fields=map_new_fields)
 
 
 def context_for(schema: list[dict], values: dict[str, str]) -> FillContext:

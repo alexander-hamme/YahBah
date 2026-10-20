@@ -12,7 +12,6 @@ import pytest
 from temporalio.client import WorkflowExecutionStatus
 
 from harness.api import FakeTemporal, api_client
-from harness.contract import defect
 
 NEW_REQUIRED_FIELD = {"key": "9", "label": "Visa type", "type": "text", "field_type": "text",
                       "required": True, "options": []}
@@ -52,7 +51,6 @@ async def back_in_review(workflows, db, runtime_settings):
 
 # ── workflow ──────────────────────────────────────────────────────────────────
 
-@defect("contract §4", 3, "there is no review gate: a review-mode run fills and submits without approval")
 async def test_review_mode_waits_for_approval_without_submitting(workflows, db, runtime_settings) -> None:
     runtime_settings.set(submission_mode="review")
     run_id = await workflows.enqueue()
@@ -65,7 +63,6 @@ async def test_review_mode_waits_for_approval_without_submitting(workflows, db, 
     assert row.get("review_deadline") is not None
 
 
-@defect("contract §4", 3, "there is no approve signal: the run submits whether or not it is approved")
 async def test_approval_refills_the_approved_answers_and_submits_exactly_once(workflows, db, runtime_settings) -> None:
     runtime_settings.set(submission_mode="review")
     run_id = await workflows.enqueue()
@@ -80,7 +77,6 @@ async def test_approval_refills_the_approved_answers_and_submits_exactly_once(wo
     assert submits[0].heartbeat_timeout and timedelta(minutes=2) <= submits[0].heartbeat_timeout <= timedelta(minutes=3)
 
 
-@defect("contract §4", 3, "there is no review window: nothing expires, the run submits")
 async def test_an_unapproved_run_expires_and_submits_nothing(workflows, db, runtime_settings) -> None:
     runtime_settings.set(submission_mode="review", review_window_hours=0.001)  # 3.6 s
     run_id = await workflows.enqueue()
@@ -90,7 +86,6 @@ async def test_an_unapproved_run_expires_and_submits_nothing(workflows, db, runt
     assert workflows.stubs.calls_to("submit_activity", run_id) == []
 
 
-@defect("contract §4", 3, "there is no reject signal: a rejected application is submitted anyway")
 async def test_rejecting_a_review_cancels_the_run(workflows, db, runtime_settings) -> None:
     runtime_settings.set(submission_mode="review")
     run_id = await workflows.enqueue()
@@ -102,7 +97,6 @@ async def test_rejecting_a_review_cancels_the_run(workflows, db, runtime_setting
     assert workflows.stubs.calls_to("submit_activity", run_id) == []
 
 
-@defect("contract §4", 3, "there is no review loop: a required field that appears on re-fill is never reviewed")
 async def test_a_new_required_field_on_refill_returns_the_run_to_review(workflows, db, runtime_settings) -> None:
     run_id = await back_in_review(workflows, db, runtime_settings)
     assert workflows.stubs.calls_to("submit_activity", run_id) == []
@@ -112,8 +106,6 @@ async def test_a_new_required_field_on_refill_returns_the_run_to_review(workflow
     await workflows.wait_closed(run_id)
 
 
-@defect("contract §4", 3, "there are no review rounds: an approval of what the user saw earlier would cover "
-                          "fields they never saw")
 async def test_a_stale_round_approval_after_a_return_to_review_submits_nothing(workflows, db, runtime_settings) -> None:
     run_id = await back_in_review(workflows, db, runtime_settings)
     await approve(workflows, run_id, 1)  # stale: round 1 didn't contain the new field
@@ -134,7 +126,6 @@ async def _awaiting_review(db, review_round: int):
                              review_deadline=deadline)
 
 
-@defect("contract §4, §8", 3, "there are no approve/reject routes")
 @pytest.mark.parametrize("route, body", [("approve", {}), ("reject", {"reason": "not a fit"})])
 async def test_a_stale_round_is_refused_by_the_review_routes(db, route, body) -> None:
     run_id = await _awaiting_review(db, review_round=2)
@@ -146,7 +137,6 @@ async def test_a_stale_round_is_refused_by_the_review_routes(db, route, body) ->
     assert temporal.actions == []
 
 
-@defect("contract §4", 3, "there are no approve/reject routes")
 @pytest.mark.parametrize("route, body, signal, args", [
     ("approve", {}, "approve_submission", (2,)),
     ("reject", {"reason": "not a fit"}, "reject_submission", (2, "not a fit")),

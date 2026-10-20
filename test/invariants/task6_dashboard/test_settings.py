@@ -3,8 +3,6 @@ closed to review, and writes are validated. The settings file is the test's temp
 import httpx
 import pytest
 
-from harness.contract import defect
-
 
 async def _client():
     from yahbah.api.main import app
@@ -13,8 +11,6 @@ async def _client():
                              base_url="http://localhost")  # TrustedHostMiddleware: loopback hosts only
 
 
-@defect("contract §3, §8", 6, "GET /settings returns the raw file: a missing or invalid submission_mode isn't "
-                              "reported as the effective review")
 @pytest.mark.parametrize("setting", [None, "yolo"], ids=["missing", "invalid"])
 async def test_settings_report_review_when_submission_mode_is_missing_or_invalid(runtime_settings, setting) -> None:
     if setting is None:
@@ -28,7 +24,6 @@ async def test_settings_report_review_when_submission_mode_is_missing_or_invalid
     assert resp.json().get("review_window_hours") == 48
 
 
-@defect("contract §3, §8", 6, "PUT /settings writes any value: an invalid submission_mode is stored")
 async def test_an_invalid_submission_mode_is_rejected_and_not_written(runtime_settings) -> None:
     before = runtime_settings.path.read_text()
     async with await _client() as client:

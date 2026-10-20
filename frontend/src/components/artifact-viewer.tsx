@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import Lightbox from "yet-another-react-lightbox";
 import Zoom from "yet-another-react-lightbox/plugins/zoom";
@@ -25,24 +24,48 @@ import { Maximize2, Download, Eye, EyeOff, FileDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { artifactDownloadUrl } from "@/lib/api";
 import { useDevMode } from "@/components/dev-mode-context";
-import type { Artifact } from "@/lib/types";
+import type { Artifact, Outcome } from "@/lib/types";
+
+// Screenshot labels written by workflows/activities/browser.py.
+const SCREENSHOT_LABELS: Record<string, string> = {
+  form_found: "Form Found",
+  before_fill: "Before Fill",
+  before_submit: "Before Submit",
+  confirmation: "After Submit",
+  discover_failed: "Discover Failed",
+  map_failed: "Mapping Failed",
+  fill_failed: "Fill Failed",
+  submit_failed: "Submit Failed",
+};
+
+// Each fill attempt saves a full-page capture labelled "filled_<round>_<seq>-<attempt>"
+// (workflows/activities/browser.py). Returns the review round, or null for any other label.
+const FILLED_STEP = /^filled_(\d+)_\d+-\d+$/;
+
+function filledRound(step: string): number | null {
+  const m = FILLED_STEP.exec(step);
+  return m ? Number(m[1]) : null;
+}
 
 function screenshotLabel(step: string): string {
-  switch (step) {
-    case "before_submit":
-      return "Before Submit";
-    case "before_fill":
-      return "Before Fill";
-    case "submit_failed":
-      return "Submit Failed";
-    case "confirmation":
-      return "After Submit";
-    case "extract_form":
-      return "After Extract";
-    default:
-      return step.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-  }
+  const round = filledRound(step);
+  if (round != null) return `Filled (review round ${round})`;
+  return SCREENSHOT_LABELS[step] ?? step.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
+
+const OUTCOME_SLOT_MESSAGE: Record<Outcome, string> = {
+  queued: "In progress...",
+  in_progress: "In progress...",
+  awaiting_review: "Waiting for your review",
+  test_only: "Not submitted (testing mode)",
+  submitted: "No confirmation screenshot",
+  email_verified: "No confirmation screenshot",
+  submit_uncertain: "No screenshot after submit",
+  failed: "Not submitted",
+  cancelled: "Not submitted",
+  expired: "Not submitted",
+  duplicate: "Not submitted",
+};
 
 function screenshotByStep(screenshots: Artifact[]): Map<string, Artifact> {
   const byStep = new Map<string, Artifact>();
@@ -54,9 +77,30 @@ function screenshotByStep(screenshots: Artifact[]): Map<string, Artifact> {
 }
 
 // Left slot: latest progress screenshot (upgrades as workflow progresses)
-const LEFT_PRIORITY = ["before_submit", "before_fill", "extract_form", "after_auth"];
+const LEFT_PRIORITY = ["before_fill", "form_found"];
 
-function pickLeftScreenshot(byStep: Map<string, Artifact>): Artifact | null {
+/** The newest fill capture: the highest review round, then the latest registered within it. */
+export function latestFilled(screenshots: readonly Artifact[]): Artifact | null {
+  let best: { round: number; artifact: Artifact } | null = null;
+  for (const artifact of screenshots) {
+    const round = filledRound(String(artifact.metadata?.step ?? ""));
+    if (round == null) continue;
+    if (
+      !best ||
+      round > best.round ||
+      (round === best.round && artifact.created_at >= best.artifact.created_at)
+    ) {
+      best = { round, artifact };
+    }
+  }
+  return best?.artifact ?? null;
+}
+
+function pickLeftScreenshot(byStep: Map<string, Artifact>, screenshots: readonly Artifact[]): Artifact | null {
+  const before = byStep.get("before_submit");
+  if (before) return before;
+  const filled = latestFilled(screenshots);
+  if (filled) return filled;
   for (const step of LEFT_PRIORITY) {
     const a = byStep.get(step);
     if (a) return a;
@@ -65,8 +109,14 @@ function pickLeftScreenshot(byStep: Map<string, Artifact>): Artifact | null {
 }
 
 // Right slot: outcome screenshot (appears when workflow completes or fails)
+const RIGHT_PRIORITY = ["confirmation", "submit_failed", "fill_failed", "map_failed", "discover_failed"];
+
 function pickRightScreenshot(byStep: Map<string, Artifact>): Artifact | null {
-  return byStep.get("confirmation") ?? byStep.get("submit_failed") ?? null;
+  for (const step of RIGHT_PRIORITY) {
+    const a = byStep.get(step);
+    if (a) return a;
+  }
+  return null;
 }
 
 function ScreenshotThumbnail({
@@ -133,50 +183,6 @@ function ScreenshotPlaceholder({
       <div className="rounded-lg border border-white/5 bg-white/[0.02] flex items-center justify-center h-48 text-sm text-muted-foreground">
         {message}
       </div>
-    </div>
-  );
-}
-
-function InlineText({
-  runId,
-  artifact,
-  label,
-}: {
-  runId: string;
-  artifact: Artifact;
-  label: string;
-}) {
-  const url = artifactDownloadUrl(runId, artifact.id);
-  const { data: text } = useQuery<string>({
-    queryKey: ["artifact-text", artifact.id],
-    queryFn: async () => {
-      const res = await fetch(url);
-      if (!res.ok) return "";
-      return res.text();
-    },
-  });
-
-  if (!text) return null;
-
-  return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between">
-        <Badge variant="outline" className="text-xs">
-          {label}
-        </Badge>
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 hover:bg-cyan-500/20 hover:shadow-[0_0_12px_rgba(56,189,248,0.15)] transition-all"
-        >
-          <Download className="h-3 w-3" />
-          Download
-        </a>
-      </div>
-      <pre className="text-sm whitespace-pre-wrap bg-white/[0.02] border border-white/5 rounded-lg p-3 max-h-64 overflow-y-auto text-foreground/80">
-        {text}
-      </pre>
     </div>
   );
 }
@@ -250,9 +256,11 @@ function CoverLetterViewer({
 export function ArtifactViewer({
   artifacts,
   runId,
+  outcome,
 }: {
   artifacts: Artifact[];
   runId: string;
+  outcome?: Outcome;
 }) {
   const { devMode } = useDevMode();
   const [lightboxIndex, setLightboxIndex] = useState(-1);
@@ -265,7 +273,7 @@ export function ArtifactViewer({
 
   const screenshots = artifacts.filter((a) => a.artifact_type === "screenshot");
   const byStep = screenshotByStep(screenshots);
-  const leftShot = pickLeftScreenshot(byStep);
+  const leftShot = pickLeftScreenshot(byStep, screenshots);
   const rightShot = pickRightScreenshot(byStep);
 
   // Build lightbox slides from the two primary slots + all in dev mode
@@ -341,7 +349,7 @@ export function ArtifactViewer({
                 onExpand={() => openLightbox(leftShot ? 1 : 0)}
               />
             ) : (
-              <ScreenshotPlaceholder label="Outcome" message="Submission Pending" />
+              <ScreenshotPlaceholder label="Outcome" message={outcome ? OUTCOME_SLOT_MESSAGE[outcome] : "Waiting..."} />
             )}
           </div>
         )}

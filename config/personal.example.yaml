@@ -10,6 +10,10 @@ prompts:
     - Close with enthusiasm and a call to action
     - Output the cover letter text directly, no JSON
 
+# Stored answers. Screening questions (work authorization and sponsorship, citizenship, clearance,
+# years per skill, start date, salary, EEO, age, background checks, ...) are answered ONLY from
+# typed keys like the ones below: a question with no matching key fails the run as needs_answer,
+# naming the question, instead of being guessed. Edits apply to the next run without a restart.
 known_answers:
   # Compensation
   salary_expectation: "Open to discussion"
@@ -25,10 +29,22 @@ known_answers:
   zip_code_of_residence: "00000"
   phone_number: "555-555-5555"
 
-  # Work authorization
+  # Work authorization. Unsuffixed keys describe country_of_residence (default: United States).
+  # Other jurisdictions get their own suffixed keys (a country name or code, or "eu"), e.g.
+  # work_authorization_germany / sponsorship_required_eu; a fact for one never answers another.
   work_status: "US Citizen"
   work_authorization: "Yes"
   sponsorship_required: "No"
+  # work_authorization_uk: "No"
+  # sponsorship_required_uk: "Yes"
+
+  # Other screening facts: uncomment and fill in the ones you want answered automatically.
+  # security_clearance: "None"
+  # start_date: "Two weeks after an offer"
+  # at_least_18: "Yes"
+  # years_python: "5"            # years_<skill>, one per skill; total years: profile.years_of_experience
+  # background_check: "Yes"      # willing to undergo one
+  # criminal_record: "No"
 
   # Job discovery
   how_i_found_this_job: "<COMPANY (replace with company name)>'s Job Board"

@@ -1,7 +1,6 @@
-"""Code-side decisions of the fill and submit stages: option matching, read-back checks,
-problem lists, post-submit verdict consistency."""
-from yahbah.agent.fill import FillContext, match_option, problems_for, value_ok
-from yahbah.agent.submit import PostSubmitState, Signals, contradicts
+"""Code-side decisions of the fill stage: option matching, read-back checks, problem lists, fill evidence rows.
+(The submit stage's structural verdict is in test_submit_evidence_logic.py.)"""
+from yahbah.agent.fill import FillContext, intended_answer, match_option, problems_for, submitted_values, value_ok
 
 
 # ── match_option ──────────────────────────────────────────────────────────────
@@ -25,6 +24,22 @@ def test_prefix_either_way() -> None:
 
 def test_word_inside_longer_option() -> None:
     assert match_option("LinkedIn", ["Job board (e.g. LinkedIn, Indeed)", "Referral"]) == "Job board (e.g. LinkedIn, Indeed)"
+
+
+def test_prefixes_are_whole_words() -> None:
+    """Audit LLM F1: "No" is a prefix of "Now" but not a word-prefix of it."""
+    assert match_option("No", ["Now", "Later"]) is None
+    assert match_option("No", ["Now", "No"]) == "No"
+    assert match_option("No", ["Now", "No, thanks"]) == "No, thanks"
+    assert match_option("Yes", ["Yesterday", "Maybe"]) is None
+    assert match_option("Yes", ["Yesterday", "Yes, I do"]) == "Yes, I do"
+    assert match_option("In", ["Indiana", "Illinois"]) is None
+    assert match_option("US", ["USA", "Uruguay"]) is None
+    # the other direction: the option is a word-prefix of the intended answer
+    assert match_option("No thanks", ["No", "Now"]) == "No"
+    assert match_option("Now or never", ["No", "Now"]) == "Now"
+    # still prefixes by words
+    assert match_option("United States of America", ["United States", "Canada"]) == "United States"
 
 
 def test_ambiguous_or_empty_goes_to_the_model() -> None:
@@ -146,27 +161,41 @@ def test_no_problems_when_everything_matches() -> None:
     assert problems_for(ctx, values, []) == []
 
 
-# ── post-submit verdicts ──────────────────────────────────────────────────────
+# ── fill evidence rows (contract run-lifecycle §8) ────────────────────────────
 
-def _signals(**kw) -> Signals:
-    base = dict(url="https://x/confirmation", form_fields_present=0, submit_button_visible=False,
-                errors=[], code_inputs=0)
-    return Signals(**{**base, **kw})
+def test_submitted_values_rows_have_the_contract_shape() -> None:
+    ctx = _ctx()
+    ctx.fields["2"]["options"] = ["a", "b"]
+    ctx.mappings["2"] = {"key": "2", "source": "email", "value": "jane@example.com", "basis": ["email"],
+                         "generated": False}
+    ctx.mappings["3"] = {"key": "3", "source": "custom", "value": "I build things.", "basis": ["experience"],
+                         "generated": True}
+    ctx.written = {"1": "Jane", "2": "jane@example.com", "4": "resume.pdf"}
+    values = {"1": {"value": "Jane"}, "2": {"value": "jane@example.com"}, "3": {"value": ""},
+              "4": {"value": "", "missing": True, "files": 0, "shown": "resume.pdf Remove"}}
+    rows = {r["key"]: r for r in submitted_values(ctx, values)}
+
+    assert set(rows["1"]) == {"key", "label", "type", "required", "options", "answer", "source", "basis",
+                              "generated", "written", "page_value", "ok"}
+    assert rows["1"] | {"basis": [], "generated": False} == {
+        "key": "1", "label": "First Name", "type": "text", "required": True, "options": [], "answer": "Jane",
+        "source": "first_name", "basis": [], "generated": False, "written": "Jane", "page_value": "Jane", "ok": True}
+    # basis / generated come through from the mapping
+    assert rows["2"]["basis"] == ["email"] and rows["2"]["options"] == ["a", "b"]
+    assert rows["3"]["generated"] is True and rows["3"]["basis"] == ["experience"]
+    assert rows["3"]["written"] is None and rows["3"]["ok"] is True  # nothing written: nothing to disagree
+    # a document is shown by its file name, never its path; a swapped-out upload widget shows the name it shows
+    assert rows["4"]["answer"] == "resume.pdf" and rows["4"]["page_value"] == "resume.pdf Remove"
+    assert intended_answer(ctx, "4") == "resume.pdf"
+    # an unmapped field has no answer, source or basis
+    row = {"key": "9", "label": "Other", "type": "text", "required": False, "options": [], "answer": None,
+           "source": None, "basis": [], "generated": False, "written": None, "page_value": None, "ok": True}
+    ctx.fields["9"] = {"label": "Other", "type": "text", "required": False, "options": []}
+    assert {r["key"]: r for r in submitted_values(ctx, {})}["9"] == row
 
 
-def test_verdict_consistency() -> None:
-    assert PostSubmitState(reasoning="", state="submitted").consistent()
-    assert not PostSubmitState(reasoning="", state="needs_fix").consistent()  # no problems listed
-    assert PostSubmitState(reasoning="", state="needs_fix", problems=["Phone is invalid"]).consistent()
-    assert not PostSubmitState(reasoning="", state="blocked").consistent()  # no reason
-    assert PostSubmitState(reasoning="", state="blocked", blocked_reason="captcha").consistent()
-
-
-def test_verdicts_that_contradict_the_page_get_a_second_opinion() -> None:
-    submitted = PostSubmitState(reasoning="", state="submitted")
-    assert not contradicts(submitted, _signals())
-    assert contradicts(submitted, _signals(form_fields_present=9, errors=[{"key": "2", "message": "required"}]))
-    assert contradicts(submitted, _signals(form_fields_present=9, code_inputs=8))
-    assert contradicts(PostSubmitState(reasoning="", state="needs_fix", problems=["x"]), _signals())
-    assert contradicts(PostSubmitState(reasoning="", state="email_code"), _signals(form_fields_present=9))
-    assert not contradicts(PostSubmitState(reasoning="", state="email_code"), _signals(code_inputs=8))
+def test_submitted_values_marks_a_disagreement() -> None:
+    ctx = _ctx()
+    ctx.written = {"1": "Jane"}
+    (row,) = [r for r in submitted_values(ctx, {"1": {"value": "Jan"}}) if r["key"] == "1"]
+    assert row["ok"] is False and row["page_value"] == "Jan" and row["written"] == "Jane"

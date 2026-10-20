@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import {
   Activity,
   Calendar,
@@ -12,25 +13,49 @@ import {
   Check,
   ExternalLink,
   MessageSquareCheck,
+  Settings2,
 } from "lucide-react";
-import { StatusBadge } from "@/components/status-badge";
+import { OutcomeBadge } from "@/components/outcome-badge";
 import { ApplicationStatusPipeline } from "@/components/application-status-pipeline";
+import { DeadlineCountdown } from "@/components/deadline-countdown";
 import { useDevMode } from "@/components/dev-mode-context";
+import { modeLabel } from "@/components/submission-mode-control";
 import { UntrustedHtmlFrame } from "@/components/untrusted-html-frame";
-import type { RunDetail, StatusUpdate } from "@/lib/types";
+import { failureReasonInfo } from "@/lib/failure-reasons";
+import { OUTCOME_INFO } from "@/lib/outcomes";
+import { timeAgo } from "@/lib/time";
+import type { Outcome, RunDetail, StatusUpdate } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
-function timeAgo(iso: string | null): string {
-  if (!iso) return "-";
-  const seconds = Math.floor(
-    (Date.now() - new Date(iso).getTime()) / 1000
+const IN_FLIGHT_OUTCOMES: ReadonlySet<Outcome> = new Set(["queued", "in_progress", "awaiting_review"]);
+const SENT_OUTCOMES: ReadonlySet<Outcome> = new Set(["submitted", "email_verified"]);
+
+function ReasonBox({ run }: { run: RunDetail }) {
+  const reason = failureReasonInfo(run.failure_reason);
+  if (!reason && !run.error_message) return null;
+  const failed = run.outcome === "failed";
+  return (
+    <div
+      className={cn(
+        "flex gap-3 rounded-lg border p-3",
+        failed ? "border-red-500/20 bg-red-500/10" : "border-white/10 bg-white/[0.03]"
+      )}
+    >
+      <AlertTriangle className={cn("mt-0.5 h-4 w-4 shrink-0", failed ? "text-red-400" : "text-muted-foreground")} aria-hidden />
+      <div className="min-w-0">
+        <p className={cn("text-sm font-medium", failed ? "text-red-300" : "text-foreground")}>
+          {reason?.title ?? "Error"}
+        </p>
+        {reason?.detail && <p className="mt-0.5 text-sm text-foreground/75">{reason.detail}</p>}
+        <p className="mt-0.5 text-xs text-muted-foreground">{OUTCOME_INFO[run.outcome].description}</p>
+        {run.error_message && (
+          <p className={cn("mt-1.5 whitespace-pre-wrap text-xs", failed ? "text-red-300/80" : "text-muted-foreground")}>
+            {run.error_message}
+          </p>
+        )}
+      </div>
+    </div>
   );
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
 }
 
 function formatDateTime(iso: string | null): string {
@@ -99,11 +124,11 @@ export function RunInfoCard({
   statusUpdates: StatusUpdate[];
 }) {
   const { devMode } = useDevMode();
-  const showPipeline =
-    run.status === "COMPLETED" || statusUpdates.length > 0;
+  const submitted = SENT_OUTCOMES.has(run.outcome);
+  const showPipeline = submitted || statusUpdates.length > 0;
 
-  const isInProgress = run.status === "RUNNING" || run.status === "PENDING";
-  const isDone = run.status === "COMPLETED" || run.status === "FAILED" || run.status === "DUPLICATE";
+  const isInProgress = run.outcome === "queued" || run.outcome === "in_progress";
+  const isDone = !IN_FLIGHT_OUTCOMES.has(run.outcome);
 
   return (
     <div className="glass-panel rounded-xl">
@@ -119,8 +144,23 @@ export function RunInfoCard({
       <div className="px-5 pb-5 space-y-5">
         {/* Single row: status fields + pipeline + track button */}
         <div className="flex items-center gap-8 flex-wrap">
-          <Field icon={<Activity className="h-3 w-3" />} label="Status">
-            <StatusBadge status={run.status} />
+          <Field icon={<Activity className="h-3 w-3" />} label="Outcome">
+            <OutcomeBadge outcome={run.outcome} />
+          </Field>
+
+          {run.outcome === "awaiting_review" && run.review_deadline && (
+            <Field icon={<Clock className="h-3 w-3" />} label="Review deadline">
+              <DeadlineCountdown deadline={run.review_deadline} className="text-sm" />
+            </Field>
+          )}
+
+          <Field icon={<Settings2 className="h-3 w-3" />} label="Mode">
+            <span className="text-sm">
+              {run.submission_mode ? modeLabel(run.submission_mode) : "Legacy run"}
+              {run.origin && (
+                <span className="text-muted-foreground"> · {run.origin === "discovered" ? "from a job alert" : "added by you"}</span>
+              )}
+            </span>
           </Field>
 
           {isInProgress && !devMode && (
@@ -130,7 +170,7 @@ export function RunInfoCard({
           )}
 
           {isDone && !devMode && (
-            <Field icon={<Clock className="h-3 w-3" />} label={run.status === "COMPLETED" ? "Completed" : "Ended"}>
+            <Field icon={<Clock className="h-3 w-3" />} label={submitted ? "Submitted" : "Ended"}>
               <span title={formatDateTime(run.completed_at)}>
                 {run.completed_at ? timeAgo(run.completed_at) : "-"}
               </span>
@@ -142,7 +182,7 @@ export function RunInfoCard({
             <div className="flex-1 min-w-0">
               <ApplicationStatusPipeline
                 updates={statusUpdates}
-                runStatus={run.status}
+                submitted={submitted}
                 completedAt={run.completed_at}
                 emailConfirmedAt={run.email_confirmed_at}
               />
@@ -199,18 +239,18 @@ export function RunInfoCard({
           </div>
         )}
 
-        {/* Error message */}
-        {run.error_message && (
-          <div className="flex gap-3 p-3 rounded-lg bg-red-500/10 border border-red-500/20 shadow-[0_0_12px_rgba(239,68,68,0.08)]">
-            <AlertTriangle className="h-4 w-4 text-red-400 shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm font-medium text-red-400">Error</p>
-              <p className="text-sm text-red-300/80 mt-0.5 whitespace-pre-wrap">
-                {run.error_message}
-              </p>
-            </div>
-          </div>
+        {run.retry_of_run_id && (
+          <p className="text-xs text-muted-foreground">
+            Retry of{" "}
+            <Link href={`/applications/${run.retry_of_run_id}`} className="font-medium text-cyan-300 hover:underline">
+              an earlier run
+            </Link>
+            . That run and its evidence are unchanged.
+          </p>
         )}
+
+        {/* Why it ended. Uncertain runs explain themselves in the resolution panel. */}
+        {isDone && run.outcome !== "submit_uncertain" && <ReasonBox run={run} />}
 
         {/* Confirmation page excerpt: third-party HTML, sandboxed */}
         {run.confirmation_html && (

@@ -146,8 +146,7 @@ def applicant_facts(tmp_path, monkeypatch):
 
 
 class RuntimeSettings:
-    """config/settings.yaml for the test. `testing_mode` (removed by contract §3) is written alongside
-    submission_mode until task 3 lands, so pre-contract readers see the same mode."""
+    """config/settings.yaml for the test."""
 
     DEFAULTS = {"submission_mode": "testing", "review_window_hours": 48,
                 "job_alert_polling_enabled": False, "gmail_status_polling_enabled": False}
@@ -167,9 +166,7 @@ class RuntimeSettings:
         self._write()
 
     def _write(self) -> None:
-        data = dict(self.values)
-        data.setdefault("testing_mode", data.get("submission_mode") == "testing")
-        self.path.write_text(yaml.safe_dump(data, sort_keys=False))
+        self.path.write_text(yaml.safe_dump(dict(self.values), sort_keys=False))
 
 
 @pytest.fixture
@@ -242,7 +239,11 @@ async def workflows(temporal_env, db, runtime_settings, monkeypatch):
 @pytest.fixture
 def activity_env():
     """activity_env(workflow_id=..., attempt=...) -> an ActivityEnvironment whose `call(fn, *args)` runs
-    fn (sync or async) inside an activity context with that info."""
+    fn (sync or async) inside an activity context with that info.
+
+    Pass an `async def` (or a sync function), never a lambda returning a coroutine: the lambda runs in the
+    context but its coroutine is awaited outside it, so activity.in_activity() is False there and no
+    fence or lease check applies."""
     from temporalio.testing import ActivityEnvironment
 
     class Environment(ActivityEnvironment):

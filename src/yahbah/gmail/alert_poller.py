@@ -27,9 +27,7 @@ from sqlalchemy import select, update
 
 from yahbah.config import settings, get_runtime_settings
 from yahbah.db.models import (
-    ApplicationRun,
     GmailCheckpoint,
-    JobPosting,
     ScheduledJob,
 )
 from yahbah.db.session import AsyncSessionLocal
@@ -43,6 +41,7 @@ from yahbah.gmail.alert_parser import (
 )
 from yahbah.gmail.client import GmailClient, InvalidHistoryIdError
 from yahbah.gmail.parser import get_body_parts
+from yahbah.run_state import possibly_applied_url
 
 _INBOX_LABEL_ID = "INBOX"
 _CHECKPOINT_KEY = "alert_poller"
@@ -298,19 +297,10 @@ async def _process_message(
                 logger.debug(f"[alert-poller] Already scheduled: {job.url}")
                 continue
 
-        # Dedup: already applied to?
+        # Dedup: already (or possibly) applied to? (contract §5)
         async with AsyncSessionLocal() as session:
-            existing = await session.execute(
-                select(ApplicationRun.id)
-                .join(JobPosting)
-                .where(
-                    (JobPosting.url == job.url) | (JobPosting.canonical_url == job.url)
-                )
-                .where(ApplicationRun.status.notin_(["FAILED"]))
-                .limit(1)
-            )
-            if existing.scalar_one_or_none() is not None:
-                logger.debug(f"[alert-poller] Already applied: {job.url}")
+            if blocker := await possibly_applied_url(session, job.url):
+                logger.debug(f"[alert-poller] Already applied: {job.url} (run {blocker.run_id}: {blocker.reason})")
                 continue
 
         admission = await _evaluate_job(job, profile_text=profile_text, min_score=min_score)
@@ -462,13 +452,13 @@ async def _promote_ready_jobs(temporal_client, rt: dict) -> int:
     if not ready:
         return 0
 
-    from yahbah.jobs import submit_job_for_application
+    from yahbah.jobs import AlreadyApplied, RunInFlight, submit_job_for_application
 
     promoted = 0
     for job in ready:
         try:
             run_id = await submit_job_for_application(
-                job.job_url, temporal_client
+                job.job_url, temporal_client, origin="discovered"
             )
             async with AsyncSessionLocal() as session:
                 sj = await session.get(ScheduledJob, job.id)
@@ -479,6 +469,15 @@ async def _promote_ready_jobs(temporal_client, rt: dict) -> int:
             logger.info(
                 f"[alert-poller] Promoted {job.job_url} → run {run_id}"
             )
+        except AlreadyApplied as exc:
+            # Applied (or possibly) since it was scheduled: never promote it automatically.
+            async with AsyncSessionLocal() as session:
+                sj = await session.get(ScheduledJob, job.id)
+                sj.status = "SKIPPED"
+                await session.commit()
+            logger.info(f"[alert-poller] Not promoting {job.job_url}: {exc}")
+        except RunInFlight as exc:
+            logger.info(f"[alert-poller] Not promoting {job.job_url} yet: {exc}")  # retried next cycle
         except Exception as exc:
             logger.warning(
                 f"[alert-poller] Failed to promote {job.job_url}: {exc}"

@@ -10,6 +10,7 @@ Modules:
   llm        ScriptedLLM: OllamaClient replies scripted per role/schema, every call recorded
   agent      AgentScript: a scripted browser-use chat model that drives the real agent loops
   forms      submit-boundary helpers: counting claim, filled FillContext, page counters
+  activities browser activities without Chrome: FakeBrowserSession, activity inputs, a RUNNING run
   db         disposable Postgres database (yahbah_test_<hex>), migrated with alembic
   temporal   Temporal dev server, stub activities under their real names, the real worker
   api        the real FastAPI routers on a test app, with a fake or real Temporal client

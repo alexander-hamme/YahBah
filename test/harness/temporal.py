@@ -194,14 +194,12 @@ class Stubs:
         job_id = url.rstrip("/").rsplit("/", 1)[-1]  # per-URL job identity, so title+company dedup can't collide
         schema = i.get("form_schema_dict") or {"fields": [STUB_FIELD], "page_url": url, "board": "generic"}
         mappings = i.get("field_mappings") or [STUB_MAPPING]
-        mode = (self.runtime_settings.values.get("submission_mode") if self.runtime_settings else None) or "testing"
         defaults = {
             "page_url": url, "board": "generic", "account_email": APPLICANT_EMAIL,
             "job_description": "Synthetic job description for harness tests.", "canonical_url": url,
             "job_title": f"Software Engineer {job_id}", "job_company": "Acme", "job_location": "Boston, MA",
             "form_schema_dict": schema, "field_mappings": mappings,
             "written": {m["key"]: m["value"] for m in mappings if m.get("value")},
-            "testing_mode": mode == "testing",  # pre-task-3 FillOutput; dropped by make() once removed
             "cover_letter_path": "", "cover_letter_text": "",
             "confirmation_url": url + "/thanks", "confirmation_text": "Thank you for applying",
         }

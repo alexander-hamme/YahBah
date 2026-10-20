@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 import pytest
 
 from harness import db as dbh
-from harness.contract import defect
 
 pytestmark = pytest.mark.db  # (its own database, not the `db` fixture's)
 
@@ -52,12 +51,10 @@ def backfilled():
         dbh.drop_database(database)
 
 
-@defect("contract §9", 3, "no migration 0018: a FAILED run that clicked submit stays FAILED (looks never applied)")
 def test_a_failed_run_with_a_submit_attempt_becomes_submit_uncertain(backfilled) -> None:
     assert backfilled["failed_after_submit_attempt"]["status"] == "SUBMIT_UNCERTAIN"
 
 
-@defect("contract §9", 3, "no migration 0018: user cancellations are stored as FAILED")
 def test_a_user_cancellation_becomes_cancelled(backfilled) -> None:
     row = backfilled["cancelled_by_user"]
     assert (row["status"], row.get("failure_reason")) == ("CANCELLED", "cancelled")
@@ -67,14 +64,12 @@ def test_an_ordinary_failure_stays_failed(backfilled) -> None:
     assert backfilled["failed_before_submit"]["status"] == "FAILED"
 
 
-@defect("contract §3, §9", 3, "no migration 0018: test runs are marked by is_test_run, not submission_mode")
 def test_is_test_run_becomes_testing_mode(backfilled) -> None:
     assert backfilled["test_run"].get("submission_mode") == "testing"
     assert backfilled["real_run"].get("submission_mode") is None  # legacy
     assert "is_test_run" not in backfilled["test_run"]
 
 
-@defect("contract §3, §9", 3, "no migration 0018: runs have no origin")
 def test_origin_is_discovered_for_promoted_runs_else_manual(backfilled) -> None:
     assert backfilled["promoted"].get("origin") == "discovered"
     assert backfilled["real_run"].get("origin") == "manual"

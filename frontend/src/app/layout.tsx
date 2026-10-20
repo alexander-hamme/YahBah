@@ -3,7 +3,7 @@ import { DM_Sans, Sora, Bungee, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import { Providers } from "@/components/providers";
 import { NavLinks } from "@/components/nav-links";
-import { TestingToggle } from "@/components/testing-toggle";
+import { SubmissionModeControl } from "@/components/submission-mode-control";
 import "./globals.css";
 
 const dmSans = DM_Sans({
@@ -46,7 +46,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         <Providers>
           <header className="sticky top-0 z-40 glass-panel-elevated">
-            <div className="max-w-7xl mx-auto px-6 py-3 flex items-center gap-6">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center gap-x-6 gap-y-2">
               <Link
                 href="/applications"
                 className="flex items-center gap-2.5 text-lg font-bold tracking-tight text-foreground hover:text-primary transition-colors"
@@ -57,7 +57,7 @@ export default function RootLayout({
               </Link>
               <NavLinks />
               <div className="ml-auto">
-                <TestingToggle />
+                <SubmissionModeControl />
               </div>
             </div>
             <div className="h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent" />

@@ -6,14 +6,19 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Bug } from "lucide-react";
 import { RunActions } from "@/components/run-actions";
 import { getRunDetail, getRunSteps, getRunArtifacts, getRunStatusUpdates } from "@/lib/api";
+import { asApiError } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
+import { ApiErrorMessage } from "@/components/api-error-message";
 import { CompanyLogo } from "@/components/company-logo";
 import { useDevMode } from "@/components/dev-mode-context";
 import { JobMetadataCard } from "@/components/job-metadata-card";
+import { OutcomeBadge } from "@/components/outcome-badge";
+import { ReviewPanel } from "@/components/review/review-panel";
 import { RunInfoCard } from "@/components/run-info-card";
 import { StepTimeline } from "@/components/step-timeline";
 import { ArtifactViewer } from "@/components/artifact-viewer";
 import { FieldMappingsTable } from "@/components/field-mappings-table";
+import { UncertainResolution } from "@/components/uncertain-resolution";
 
 function DetailSkeleton() {
   return (
@@ -36,7 +41,7 @@ export default function ApplicationDetailPage({
   const { id } = use(params);
   const { devMode, toggleDevMode } = useDevMode();
 
-  const { data: run, isLoading: runLoading } = useQuery({
+  const { data: run, error: runError } = useQuery({
     queryKey: ["run", id],
     queryFn: () => getRunDetail(id),
     refetchInterval: 10_000,
@@ -60,19 +65,30 @@ export default function ApplicationDetailPage({
     refetchInterval: 30_000,
   });
 
-  if (runLoading || !run) {
+  if (!run) {
     return (
-      <div className="max-w-5xl mx-auto px-6 py-8">
-        <DetailSkeleton />
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8 space-y-4">
+        {runError ? (
+          <>
+            <ApiErrorMessage error={asApiError(runError)} title="Couldn't load this application" />
+            <Link href="/applications" className="text-sm font-medium text-cyan-300 hover:underline">
+              Back to all applications
+            </Link>
+          </>
+        ) : (
+          <DetailSkeleton />
+        )}
       </div>
     );
   }
 
+  const reviewable = run.actions.includes("approve") || run.actions.includes("reject");
+
   return (
-    <div className="max-w-5xl mx-auto px-6 py-8 space-y-6 animate-fade-in">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Link href="/applications">
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-6 animate-fade-in">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <Link href="/applications" aria-label="Back to all applications">
             <Button
               variant="ghost"
               size="icon"
@@ -86,19 +102,19 @@ export default function ApplicationDetailPage({
             companyName={run.job_posting?.company ?? null}
             size={36}
           />
-          <div>
-            <h1 className="text-xl font-bold tracking-tight">
-              {run.job_posting?.company ?? "Unknown"} &mdash;{" "}
-              {run.job_posting?.title ?? "Untitled"}
-            </h1>
-          </div>
+          <h1 className="min-w-0 text-xl font-bold tracking-tight">
+            {run.job_posting?.company ?? "Unknown"} &mdash;{" "}
+            {run.job_posting?.title ?? "Untitled"}
+          </h1>
+          <OutcomeBadge outcome={run.outcome} />
         </div>
         <div className="flex items-center gap-2">
-          <RunActions runId={id} status={run.status} testMode={run.is_test_run} />
+          <RunActions runId={id} actions={run.actions} />
           <Button
             variant={devMode ? "default" : "ghost"}
             size="sm"
             onClick={toggleDevMode}
+            aria-pressed={devMode}
             className={`gap-1.5 text-xs ${
               devMode
                 ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 hover:bg-cyan-500/30"
@@ -111,6 +127,18 @@ export default function ApplicationDetailPage({
         </div>
       </div>
 
+      {runError && (
+        <ApiErrorMessage error={asApiError(runError)} title="Couldn't refresh; showing the last state" />
+      )}
+
+      {reviewable && (
+        <section aria-label="Review" className="glass-panel rounded-xl p-4 sm:p-5">
+          <ReviewPanel runId={id} actions={run.actions} />
+        </section>
+      )}
+
+      <UncertainResolution run={run} />
+
       <RunInfoCard run={run} statusUpdates={statusUpdates ?? []} />
 
       {run.job_posting && (
@@ -121,8 +149,8 @@ export default function ApplicationDetailPage({
 
       {artifacts && artifacts.length > 0 && (
         <>
-          <FieldMappingsTable artifacts={artifacts} runId={id} />
-          <ArtifactViewer artifacts={artifacts} runId={id} />
+          {!reviewable && <FieldMappingsTable artifacts={artifacts} runId={id} outcome={run.outcome} />}
+          <ArtifactViewer artifacts={artifacts} runId={id} outcome={run.outcome} />
         </>
       )}
     </div>

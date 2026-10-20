@@ -113,7 +113,7 @@ async def test_search_verification_emails() -> None:
 
 async def test_poll_verification_code() -> None:
     """
-    Runs the full fetch_verification_code polling loop with a short timeout.
+    Runs the full wait_for_verification_code polling loop with a short timeout (changes nothing in the mailbox).
     Expects a recent verification code email to exist — will timeout if none found.
 
     Pass a recipient email as the first CLI argument, or defaults to searching
@@ -134,12 +134,12 @@ async def test_poll_verification_code() -> None:
 
     client = GmailClient()
     try:
-        code = await client.fetch_verification_code(
+        found = await client.wait_for_verification_code(
             recipient_email=recipient,
             timeout_seconds=30,
             poll_interval=5,
         )
-        print(f"  Verification code received: {code}")
+        print(f"  Verification code received: {found.code} (message {found.message_id})")
         print("test_poll_verification_code PASSED")
     except RuntimeError as exc:
         print(f"  Polling timed out: {exc}")

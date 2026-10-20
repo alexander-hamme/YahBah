@@ -10,11 +10,9 @@ import pytest
 from temporalio.client import WorkflowExecutionStatus
 from temporalio.exceptions import ApplicationError
 
-from harness.contract import defect
 from harness.forms import CappedAsyncio
 
 
-@defect("contract §1, §7", 3, "a worker restart marks the in-flight run FAILED and frees its run slot (probe B)")
 async def test_a_worker_restart_mid_fill_never_shows_failed_and_completes_once(workflows, db, monkeypatch) -> None:
     from yahbah.config import settings
 
@@ -44,7 +42,6 @@ async def test_a_worker_restart_mid_fill_never_shows_failed_and_completes_once(w
     assert not problems, "\n".join(problems)
 
 
-@defect("contract §1, §7", 3, "the worker marks RUNNING runs FAILED when it starts and when it stops")
 async def test_the_worker_writes_no_status_at_start_or_stop(workflows, db) -> None:
     running = await db.seed_run(status="RUNNING", current_state="FILL")  # its workflow is resumed by Temporal
     pending = await db.seed_run(status="PENDING")
@@ -60,7 +57,6 @@ def _write(activity_name: str):
     return (fn, ("FILL",)) if activity_name == "update_run_state_activity" else (fn, ())
 
 
-@defect("contract §7", 3, "status writes are not fenced by the owning workflow id or a terminal status")
 @pytest.mark.parametrize("activity_name", ["update_run_state_activity", "mark_run_completed_activity"])
 @pytest.mark.parametrize("case", ["stale_workflow", "terminal_status"])
 async def test_a_superseded_workflows_writes_are_rejected(db, activity_env, activity_name, case) -> None:
@@ -74,8 +70,6 @@ async def test_a_superseded_workflows_writes_are_rejected(db, activity_env, acti
     assert (row["status"], row["current_state"]) == (status, "MAP_FORM")
 
 
-@defect("contract §7", 3, "long activities have no heartbeat_timeout: a dead worker is noticed after 45 min, "
-                          "and a timed-out attempt keeps running beside its retry (probe C)")
 async def test_long_activities_heartbeat_within_two_to_three_minutes(workflows) -> None:
     run_id = await workflows.enqueue()  # testing mode: every stage up to FILL
     await workflows.wait_closed(run_id)
@@ -103,8 +97,6 @@ class _FakeBrowserSession:
         pass
 
 
-@defect("contract §7", 3, "SessionRegistry gives a run's live browser to any caller, so an attempt "
-                          "superseded by its retry keeps driving the page")
 async def test_a_superseded_attempt_cannot_get_the_runs_browser(activity_env, monkeypatch) -> None:
     from yahbah.agent import session as session_module
 

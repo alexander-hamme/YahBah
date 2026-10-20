@@ -1,15 +1,15 @@
 # Contract: Run Lifecycle, Review Gate & Submission Safety
 
-**Status: TARGET CONTRACT (agreed 2026-10-19), being implemented by batch 1** of the [2026-10-18 roadmap](../../audits/2026-10-18/roadmap.md) (tasks 1–6).
-- **Until it is implemented**, source code shows current behaviour; this page shows the agreed target.
-- **Once batch 1 lands**, this page becomes the authoritative description and the "TARGET" banner is removed.
+**Status: IMPLEMENTED and authoritative** (agreed 2026-10-19; implemented by batch 1 of the [2026-10-18 roadmap](../../audits/2026-10-18/roadmap.md), amended through 2026-10-20 and verified against the code that day).
+- **Source of truth:** this page and `src/yahbah/run_state.py` agree. A difference between this page and the code is a defect to report to the main session, not a licence to pick one.
 - **Owner:** the main session. Changing any name, value or semantic here needs main-session approval first; agents report proposed changes, they don't make them unilaterally.
+- **History:** the decisions behind the amendments are in the [changelog](../changelog.md), "Batch 1, wave 2 + close-out (2026-10-20)".
 
 Guiding rules:
 - **Code evidence decides; models advise.**
 - **Nothing is submitted without a code-recorded claim.**
 - **"May have been submitted" is never treated as "not applied".**
-- **Replace, don't layer:** superseded code (`testing_mode`, `is_test_run`, the worker's FAILED sweep, retry-in-place) is removed, not kept alongside the new code.
+- **Replace, don't layer:** superseded code (`testing_mode`, `is_test_run`, the worker's FAILED sweep, retry-in-place) was removed, not kept alongside the new code.
 
 ## 1. Run status (`application_run.status`, text)
 
@@ -19,7 +19,7 @@ Guiding rules:
 | `RUNNING` | no | Executing a stage. **Only this status holds a run slot.** |
 | `AWAITING_REVIEW` | no | Filled; evidence saved; browser closed; waiting for approve or reject (§4) |
 | `COMPLETED` | yes | Finished the work its mode asks for: submitted and verified by code evidence, or in `testing` mode, filled |
-| `SUBMIT_UNCERTAIN` | yes | `submit_attempted_at` is set but success was not verified by code evidence. Never auto-retried; resolved only per §6. |
+| `SUBMIT_UNCERTAIN` | yes | `submit_attempted_at` is set but success was not verified by code evidence, or the agent tripwire fired (§6). Never auto-retried; resolved only per §6. |
 | `FAILED` | yes | Ended **before** any submit claim (`submit_attempted_at IS NULL`) |
 | `CANCELLED` | yes | The user cancelled, or rejected in review, before any submit claim |
 | `EXPIRED` | yes | The review window elapsed without approval; nothing was submitted |
@@ -36,13 +36,13 @@ Guiding rules:
 
 ## 2. `failure_reason` (new column, text, nullable)
 
-Set on every terminal status except `COMPLETED`. `error_message` keeps the human-readable detail.
+Set on every terminal status except `COMPLETED`. `error_message` keeps the human-readable detail. A run forced to `SUBMIT_UNCERTAIN` by the §1 invariant keeps the reason that ended it (`cancelled`, `timeout`, `browser_error`, ...).
 
 | Group | Values |
 |---|---|
 | Discover/map | `form_not_found`, `form_unmapped`, `form_changed`, `job_closed`, `login_wall`, `captcha`, `blocked` |
 | Answers | `needs_answer` |
-| Fill | `fill_failed`, `possibly_submitted` (agent tripwire: the page navigated or the form vanished while an agent acted) |
+| Fill | `fill_failed`, `possibly_submitted` (agent tripwire: the page navigated or the form vanished while an agent acted; always ends `SUBMIT_UNCERTAIN`, §6) |
 | Submit | `submit_button_not_found`, `claim_denied`, `email_code_entry`, `email_code_timeout`, `submit_unverified` |
 | Infra | `browser_error`, `llm_error`, `timeout`, `superseded`, `internal_error` |
 | User/policy | `cancelled`, `review_rejected`, `review_expired`, `duplicate` |
@@ -88,13 +88,15 @@ The workflow ignores, and logs, any signal whose round is not the current round.
 **Timeout:** `EXPIRED` / `review_expired`. Nothing is submitted on timeout, ever.
 
 **Approve path:**
-1. Acquire a run slot, then go to `RUNNING`.
+1. Go to `PENDING` while waiting for a run slot, then to `RUNNING` once it has one.
 2. Re-open the browser, re-discover, and check the form is unchanged (`form_changed` otherwise).
 3. **Re-fill exactly the approved mappings**, with no new model mapping.
 4. If a required field without an approved answer appears, map it, add it to the evidence as `new_fields`, and **return to `AWAITING_REVIEW`** with a fresh deadline. Repeat as needed.
 5. Otherwise submit (§6).
 
 **Interface between tasks 3 and 4:** `fill_form(..., map_new_fields=None)` records such fields on `ctx.unmapped_new_fields: list[dict]`, with the same row shape as schema fields, instead of failing. The FILL/submit activity returns them to the workflow as `FillOutput.unmapped_new_fields: list[dict]`, and the workflow turns them into the review loop.
+
+**Approved-state baseline** (added 2026-10-20). On a locked re-fill, `fill_form` records what every field *without* an approved answer shows once code has filled (`FillContext.baseline`), before any agent runs. It travels as data: `FillOutput.baseline` → `SubmitInput.baseline` → `submit_and_verify`, so the submit gate and every post-claim fix round can tell an agent's write from a starting value. `agent/fill.py` owns its shape. A locked submit without a baseline fails closed (`fill_failed`) before the gate and the claim. A re-fill that submit has to redo itself (browser lost between re-fill and submit) takes its own baseline.
 
 **The review window** is `review_window_hours: float`. Like `submission_mode`, it is snapshotted at run creation into `ApplicationWorkflowInput.review_window_hours`, so the workflow stays deterministic. Fractional values are valid; tests use sub-hour windows.
 
@@ -112,7 +114,7 @@ class Blocker:
     reason: Literal["in_flight", "completed", "submit_uncertain", "attempted", "email_confirmed", "claim"]
 
 async def possibly_applied(session, job_posting_id: UUID, *, exclude_run_id: UUID | None = None) -> Blocker | None
-async def possibly_applied_url(session, url: str, *, exclude_run_id: UUID | None = None) -> Blocker | None  # resolves the posting by normalized URL
+async def possibly_applied_url(session, url: str, *, exclude_run_id: UUID | None = None) -> Blocker | None  # every posting whose url or canonical_url is `url` or its canonical form
 ```
 
 Returns what blocks a new application, or `None`. Both functions live in `run_state.py`. A run blocks when **all** of these hold:
@@ -124,16 +126,15 @@ Returns what blocks a new application, or `None`. Both functions live in `run_st
   - its status is `COMPLETED` or `SUBMIT_UNCERTAIN`;
   - `submit_attempted_at` or `email_confirmed_at` is set, whatever the status.
 
-A `submission_claim` row for the posting (§6) also blocks.
+A `submission_claim` row for the posting (§6) also blocks, unless it is `exclude_run_id`'s own. When several runs block, the reported `reason` is the first of `in_flight`, `completed`, `submit_uncertain`, `attempted`, `email_confirmed` (then `claim`).
 
 `FAILED`, `CANCELLED`, `EXPIRED` and `DUPLICATE` runs without a claim do **not** block.
 
 **Every dedup site calls it:**
-- `check_duplicate_activity`;
-- `POST /jobs` (409 with the existing run id);
+- `check_duplicate_activity`, for the posting, every posting with the same canonical URL, and (within `duplicate_window_days`) every posting with the same title + company + location;
+- `POST /jobs` (409 with the existing run id) and scheduled promotion, both through `submit_job_for_application` (§7);
 - `POST /scheduled`;
-- the alert poller's "already applied" check;
-- scheduled promotion.
+- the alert poller's "already applied" check.
 
 Testing-mode runs never block a real one.
 
@@ -144,7 +145,7 @@ async def claim_submission(run_id: str, workflow_id: str, job_posting_id: UUID) 
 ```
 
 Called once, immediately before the first submit click, **after the submit button has been located**. It is one transaction:
-1. `UPDATE application_run SET submit_attempted_at = now() WHERE id = :run AND temporal_workflow_id = :wf AND submit_attempted_at IS NULL AND status = 'RUNNING'`
+1. `UPDATE application_run SET submit_attempted_at = now() WHERE id = :run AND temporal_workflow_id = :wf AND submit_attempted_at IS NULL AND status = 'RUNNING' AND <the caller holds the attempt lease, §7>`
 2. `INSERT INTO submission_claim (posting_key, run_id, claimed_at) VALUES (:posting, :run, now()) ON CONFLICT DO NOTHING`
 
 It returns `True` only if both affected one row; otherwise it rolls back and returns `False`.
@@ -157,20 +158,37 @@ It returns `True` only if both affected one row; otherwise it rolls back and ret
 
 **Activity retries within the same workflow:** `already_attempted=True` means verify-only. A re-click then requires code evidence: code-detected validation errors, or verification-code inputs.
 
+**Agent tripwire** (added 2026-10-19 for tasks 3 and 4). Agents never click submit: an action-level guard blocks it in every agent phase. If an agent action still navigates the page or makes the form vanish, the in-browser code raises `StageFailed("possibly_submitted")`. A submission may have happened without a claim, so the activity first calls `record_possible_submission(run_id, workflow_id, job_posting_id) -> None` (in `run_state.py`). That call does two things in one transaction:
+- a fenced `UPDATE … SET submit_attempted_at = now() WHERE submit_attempted_at IS NULL`;
+- `INSERT INTO submission_claim … ON CONFLICT DO NOTHING`.
+
+The run then ends `SUBMIT_UNCERTAIN` / `possibly_submitted`, never `FAILED`.
+- `possibly_submitted` is always non-retryable, even when recording it fails.
+- The terminal write treats `failure_reason = possibly_submitted` as attempted on its own: it records the claim if it is missing and writes `SUBMIT_UNCERTAIN`.
+- A cancellation that arrives after an agent left the form still trips the wire.
+
+**Per-round submit evidence.** `submit_and_verify(..., record: Callable[[dict], Awaitable[None]])` calls `record` once per verify round with a JSON-serializable evidence dict, then once more for the final evidence pass. Task 4 owns the dict's shape and documents it in `modules/agent.md`. The submit activity (task 3) appends each dict to a `submit_evidence.jsonl` run artifact as it arrives, so the evidence survives a lost worker.
+
+**Verification codes.** `submit_and_verify` calls `GmailClient.wait_for_verification_code(..., code_pattern=board.email_code_pattern, exclude_message_ids=<ids already tried>)`, enters the code, and calls `finalize_code_message(message_id)` only after the page accepts it. The `fetch_verification_code` compatibility wrapper has been deleted.
+
 **Resolving `SUBMIT_UNCERTAIN`:**
 - `POST /runs/{id}/confirm-submitted` → `COMPLETED`.
-- `POST /runs/{id}/confirm-not-submitted` → `FAILED`, keeping its `failure_reason`, and deletes the claim. This is the only path that re-enables applying to that posting.
-- An alias-matched confirmation email moves `SUBMIT_UNCERTAIN` → `COMPLETED`. This is the poller's job (batch 2, B7).
+- `POST /runs/{id}/confirm-not-submitted` → `FAILED`, keeping its `failure_reason`. It also deletes the claim and clears `submit_attempted_at`, keeping the original attempt time in `error_message`, so the run neither blocks the posting nor breaks the §1 rule that FAILED means never attempted. This is the only path that re-enables applying to that posting.
+- An alias-matched confirmation email moves `SUBMIT_UNCERTAIN` → `COMPLETED`. **Not implemented in batch 1** (batch 2, B7): the status poller sets `email_confirmed_at` (which keeps blocking the posting) but does not change the status.
 
 ## 7. Run ownership, retry and cancel
 
-- **Fenced writes:** every status or state write from an activity runs as `UPDATE … WHERE id = :run AND temporal_workflow_id = :wf AND status NOT IN (<terminal>)`. If zero rows change, the activity raises a non-retryable `ApplicationError(type="superseded")`.
-- **Browser ownership:** `SessionRegistry` entries carry an owner `(workflow_id, attempt)`, taken from `activity.info()` by default.
+- **Fenced writes:** every status or state write from an activity runs as `UPDATE … WHERE id = :run AND temporal_workflow_id = :wf AND <lease held> AND status NOT IN (<terminal>)`. If zero rows change, the activity raises a non-retryable `ApplicationError(type="superseded")`.
+- **Attempt lease** (amended 2026-10-20 after the QA review): each activity attempt that acts on a run takes the run's lease when it starts (`RunLeaseInterceptor`, registered on the worker; `close_session_activity` is exempt). The lease is the owner `(workflow_id, activity sequence, attempt)`, stored on `application_run` in columns added by migration 0018.
+  - Taking the lease is monotonic: an older owner can never overwrite a newer one.
+  - Every fenced write and `claim_submission()` also require that the caller still holds the lease, so a timed-out attempt cannot claim or write once its retry has started, on this worker or any other.
+  - `record_possible_submission()` sets `submit_attempted_at` only while the caller holds the lease, but it **always** inserts the claim. A possible submission must block the posting whoever recorded it.
+- **Browser ownership:** `SessionRegistry` entries carry an owner `(workflow_id, activity sequence, attempt)`, taken from `activity.info()` by default. The sequence is needed because Temporal's attempt number restarts for every activity.
   - `open(run_id, url)` and `get(run_id)` keep their call shape.
   - The latest attempt of the owning workflow owns the session: a higher attempt takes it over, and any older attempt's `get` returns `None`, so the older attempt fails as `superseded`.
   - A different workflow id never gets it.
 - **Restart policy is resume.** The worker writes no status at start or stop, and sets a `graceful_shutdown_timeout`.
-- **Long activities heartbeat:** every activity with `start_to_close` over 10 min (discover, map_form, map_answers, fill, submit) has a `heartbeat_timeout` of 2–3 min, kept alive by a background heartbeat task. A dead worker is then detected in minutes, and a timed-out attempt is cancelled locally before any retry.
+- **Long activities heartbeat:** every activity with `start_to_close` over 10 min (discover, map_form, map_answers, map_new_fields, fill, submit) has a `heartbeat_timeout` of 2–3 min, kept alive by a background heartbeat task. A dead worker is then detected in minutes, and a timed-out attempt is cancelled locally before any retry.
 - **Timeouts are module-level constants** in `workflows/application.py`, so tests can patch them.
 - **Retry** (`POST /runs/{id}/retry`):
   - Allowed only from `FAILED`, `CANCELLED`, `EXPIRED` or `DUPLICATE` with `submit_attempted_at IS NULL`, or from a `COMPLETED` testing-mode run. Anything else gets 409.
@@ -179,6 +197,14 @@ It returns `True` only if both affected one row; otherwise it rolls back and ret
 - **Cancel** (`POST /runs/{id}/cancel`): requests workflow cancellation. The workflow's cancellation path closes the browser and writes `CANCELLED`, or `SUBMIT_UNCERTAIN` if a claim exists.
 - **Reconciliation:** if the workflow no longer exists, the API reconciles the row itself: `CANCELLED` if unclaimed, `SUBMIT_UNCERTAIN` if claimed.
 - **One active run per posting:** a partial unique index on `application_run(job_posting_id) WHERE status IN ('PENDING','RUNNING','AWAITING_REVIEW')`.
+- **Run creation** (`src/yahbah/jobs.py`, the only path that creates a run):
+  - it is refused while `possibly_applied()` blocks the posting, in every mode; testing runs are ignored only as blockers;
+  - if the workflow fails to start, the row is deleted rather than left `PENDING`. The row is committed before the workflow starts, so a process crash in between leaves a `PENDING` row with no workflow: it holds the posting's active-run slot until the user cancels it, which reconciles it (below).
+- **Delete** is allowed only when `allowed_actions()` lists it, so in-flight and `SUBMIT_UNCERTAIN` runs can't be deleted. Bulk delete skips those runs and reports them as `skipped`.
+- **Temporal end states:**
+  - `COMPLETED`, `DUPLICATE`, `EXPIRED` and a review rejection complete normally;
+  - `FAILED` and `SUBMIT_UNCERTAIN` fail the workflow;
+  - a cancel ends it as Canceled.
 
 ## 8. Evidence and API shapes
 
@@ -229,16 +255,23 @@ The frontend renders `outcome`; it never derives it from `status`.
 
 **Listing and stats** work by outcome:
 - `GET /applications` accepts a multi-value `outcome` filter and `sort=review_deadline_asc`.
-- `/stats` counts by outcome.
+- `/stats` counts by outcome: `{"counts": {<every outcome>: n}, "total": n}`.
+- List rows also carry `review_round`.
 
 **Error bodies:** every 4xx raised by the routes has the shape `{"detail": {"code": "<snake_case>", "message": "<human text>", "run_id": "<blocking or affected run, optional>"}}`. Examples:
 - `already_applied`: `POST /jobs` or `/scheduled`, with the blocking run's id;
 - `not_awaiting_review`;
 - `stale_review_round`;
 - `action_not_allowed`;
-- `invalid_url`.
+- `invalid_url`;
+- `run_in_flight`: the posting already has an active run. This comes from the §7 partial unique index, e.g. when a testing run is in flight, which `possibly_applied()` ignores.
+- request and lookup errors: `invalid_run_id`, `invalid_artifact_id`, `run_not_found`, `artifact_not_found`, `missing_selection`, `invalid_request` (FastAPI validation), `temporal_unavailable` (503);
+- `already_scheduled`: `POST /scheduled` for a job already in the queue;
+- `scheduled_not_found` (404): an unknown scheduled-job id. A malformed id is `invalid_request`.
+- settings errors: `unknown_setting` (404) and `invalid_setting` (422);
+- `invalid_outcome` (422): an unknown `outcome` filter value.
 
-**Settings:** `GET /settings` returns the **effective** values: `submission_mode` (`review` when missing or invalid) and `review_window_hours`. `PUT /settings/{key}` validates through `validate_runtime_setting()` in `config.py` and rejects unknown keys.
+**Settings:** `GET /settings` returns the **effective** values of every runtime setting in `config.RUNTIME_SETTINGS`, with `submission_mode` (`review` when missing or invalid) and `review_window_hours` (48 when missing or invalid) as runs will use them. `PUT /settings/{key}` validates through `validate_runtime_setting()` in `config.py` and rejects unknown keys.
 
 **Artifacts:** the download route serves HTML artifacts as `text/plain` with `Content-Security-Policy: sandbox`, never as `text/html`.
 
@@ -251,19 +284,23 @@ The frontend renders `outcome`; it never derives it from `status`.
   - `failure_reason` (text, nullable);
   - `review_deadline` (timestamptz, nullable);
   - `retry_of_run_id` (uuid, nullable, references `application_run` `ON DELETE SET NULL`).
-- **Also added:** `review_round` (int, nullable).
-- **Schema drift repair:** `job_posting.canonical_url` and `job_posting.location` are mapped by the ORM and present in the production DB, but no migration creates them, so a fresh `alembic upgrade head` lacks both (QA harness finding). Migration 0018 adds them with `ADD COLUMN IF NOT EXISTS`, and the harness's `KNOWN_DRIFT` bridge is then deleted.
+- **Also added:** `review_round` (int, nullable), and the attempt-lease columns `lease_workflow_id` (text), `lease_activity_seq` (int) and `lease_attempt` (int), all nullable (§7).
+- **Schema drift repair:** `job_posting.canonical_url` and `job_posting.location` are mapped by the ORM and present in the production DB, but no migration creates them, so a fresh `alembic upgrade head` lacks both (QA harness finding). Migration 0018 adds them (and `ix_job_posting_canonical_url`) with `IF NOT EXISTS`, and leaves them alone on downgrade. The harness's `KNOWN_DRIFT` bridge has been deleted.
 - **Backfill:**
   - `submission_mode = 'testing'` where `is_test_run`;
   - `origin = 'discovered'` for runs referenced by `scheduled_job.promoted_run_id`, else `'manual'`;
   - `FAILED` with `submit_attempted_at` set becomes `SUBMIT_UNCERTAIN` (0 such rows exist today, but the rule must hold);
-  - `FAILED` with `error_message = 'Cancelled by user'` becomes `CANCELLED` / `cancelled`.
+  - `FAILED` with `error_message = 'Cancelled by user'` becomes `CANCELLED` / `cancelled`;
+  - `DUPLICATE` gets `failure_reason = 'duplicate'`; other `FAILED` rows get the contract reason their `error_message` starts with, when it is one;
+  - `FAILED` with `submit_attempted_at` set gets `failure_reason = 'submit_unverified'`;
+  - older in-flight runs of a posting that has a newer in-flight run become `FAILED` / `superseded` (`SUBMIT_UNCERTAIN` if attempted), so the unique index can be created. They are orphans of the in-memory Temporal dev server;
+  - one `submission_claim` per posting whose run has `submit_attempted_at`.
 - **Drop:** `is_test_run`.
 - **New table:** `submission_claim (posting_key text PRIMARY KEY, run_id uuid NULL REFERENCES application_run ON DELETE SET NULL, claimed_at timestamptz NOT NULL)`.
 - **New index:** the partial unique index from §7.
 - **Foreign key:** `scheduled_job.promoted_run_id` becomes `ON DELETE SET NULL`, which unblocks deleting promoted runs.
 
-**Migration `0019_answer_cache_provenance`** belongs to task 5 (`down_revision = "0018"`). Integration order is task 3, then task 5.
+**Migration `0019_answer_cache_provenance`** (task 5, `down_revision = "0018"`) deletes every `answer_cache` row (none has provenance), makes the primary key `(namespace, question_key)` and adds `namespace`, `basis`, `basis_hash`, `model`, `prompt_hash` and `run_id` (`ON DELETE SET NULL`); see [llm](../modules/llm.md). Integration order is task 3, then task 5.
 
 ## 10. Shared code location
 
@@ -271,13 +308,17 @@ The frontend renders `outcome`; it never derives it from `status`.
 - the status, `failure_reason`, `submission_mode`, `origin`, `outcome` and `Action` literals;
 - the terminal-status set;
 - `derive_outcome()` and `allowed_actions()`;
-- `possibly_applied()` / `possibly_applied_url()`.
+- `possibly_applied()` / `possibly_applied_url()`;
+- `claim_submission()` and `record_possible_submission()` (§6);
+- the attempt-lease helpers `activity_owner()`, `lease_clauses()`, `lease_values()` and `attempt_tag()` (§7), and `posting_key()`.
 
-Before wave 2 starts, the main session lands a skeleton with the literals, `derive_outcome()` and the `FieldMapping` fields; task 3 implements the rest.
+`src/yahbah/api/errors.py` holds `api_error()` / `enqueue_refused()`, which build the §8 error bodies.
 
-## 11. Batch-1 file ownership
+The main session landed the skeleton (the literals, `derive_outcome()`, `allowed_actions()` and the `FieldMapping` fields) before wave 2; task 3 implemented the rest.
 
-Agents edit only their own files. Each agent writes tests for its own modules under the matching `test/yahbah/<area>/` directory; the shared harness belongs to task 1.
+## 11. Batch-1 file ownership (historical)
+
+How batch 1 was split; later work follows the ownership rules in the root `CLAUDE.md`. Agents edited only their own files. Each agent writes tests for its own modules under the matching `test/yahbah/<area>/` directory; the shared harness belongs to task 1.
 
 | Task | Owns |
 |---|---|

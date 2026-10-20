@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { RunInfoCard } from "@/components/run-info-card";
 import { UntrustedHtmlFrame } from "@/components/untrusted-html-frame";
 import { untrustedHtmlSrcDoc } from "@/lib/untrusted-html";
-import type { RunDetail } from "@/lib/types";
+import { makeRun } from "@/test/fixtures";
 
 const PAYLOAD =
   '<p>Application received</p><img src=x onerror="window.__x=1"><script>window.__x=2</script>';
@@ -31,26 +31,7 @@ describe("UntrustedHtmlFrame", () => {
 });
 
 describe("RunInfoCard confirmation", () => {
-  const run: RunDetail = {
-    id: "00000000-0000-0000-0000-000000000001",
-    job_url: "https://boards.example/jobs/1",
-    status: "COMPLETED",
-    current_state: null,
-    temporal_workflow_id: null,
-    account_email: null,
-    error_message: null,
-    match_score: null,
-    match_rationale: null,
-    is_test_run: false,
-    tracking_url: null,
-    confirmation_html: PAYLOAD,
-    submit_attempted_at: null,
-    email_confirmed_at: null,
-    created_at: "2026-10-01T00:00:00Z",
-    updated_at: "2026-10-01T00:00:00Z",
-    completed_at: "2026-10-01T00:00:00Z",
-    job_posting: null,
-  };
+  const run = makeRun({ confirmation_html: PAYLOAD });
 
   it("never injects confirmation_html into the dashboard DOM", () => {
     render(<RunInfoCard run={run} statusUpdates={[]} />);

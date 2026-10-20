@@ -298,7 +298,7 @@ async def discover(session: BrowserSession, trace: Trace) -> DiscoverResult:
     t = time.time()
     history = await run_agent(
         with_notes(load_prompts_config()["prompts"]["agent_discover_task"], board),
-        make_crew(), session, max_steps=6, output=NavOutcome,
+        make_crew(), session, max_steps=6, output=NavOutcome, mode="navigate",
     )
     outcome: NavOutcome | None = history.structured_output
     await _follow_embed(session, trace)

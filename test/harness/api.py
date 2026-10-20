@@ -1,7 +1,12 @@
-"""The real API routers on a bare FastAPI app (no lifespan, no middleware), for route-level tests.
+"""The real API on a test app (no lifespan, no middleware), for route-level tests.
 
     async with api_client(temporal=FakeTemporal()) as client:
         resp = await client.post(f"/runs/{run_id}/retry")
+
+make_app() mounts every route of yahbah.api.main.app (the routers and the app's own /settings and
+/health endpoints) and installs the real app's exception handlers, so errors have the real bodies
+(contract §8, e.g. FastAPI's validation errors as `invalid_request`). What it leaves out: the
+lifespan (it would connect to Temporal) and the host-check/CORS middleware.
 
 `temporal` becomes app.state.temporal: a FakeTemporal that records what the routes ask of
 Temporal, or a real client from the `temporal_env` fixture. Unhandled route errors come back as
@@ -12,14 +17,16 @@ from dataclasses import dataclass, field
 
 import httpx
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 
 
 def make_app(temporal=None) -> FastAPI:
-    from yahbah.api.routes import jobs, runs
+    from yahbah.api.main import app as real
 
     app = FastAPI()
-    app.include_router(jobs.router, prefix="/jobs")
-    app.include_router(runs.router, prefix="/runs")
+    app.router.routes.extend(route for route in real.router.routes if isinstance(route, APIRoute))
+    for exc_class, handler in real.exception_handlers.items():
+        app.add_exception_handler(exc_class, handler)
     app.state.temporal = temporal
     return app
 

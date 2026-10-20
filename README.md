@@ -1,8 +1,8 @@
 # YahBah — Autonomous Job Application System
 
-Give it a job URL; it fills out the application form, optionally submits it, and records artifacts, job metadata, and logs. It also watches Gmail for verification codes and post-submission status emails (confirmations, rejections, interview requests) and links them back to the application.
+Give it a job URL; it fills out the application form, waits for you to review the filled answers, submits it once you approve, and records artifacts, job metadata, and logs. It also watches Gmail for verification codes and post-submission status emails (confirmations, rejections, interview requests) and links them back to the application.
 
-Everything runs locally: local Ollama models, a local Chrome driven by [browser-use](https://github.com/browser-use/browser-use) (pinned in `pyproject.toml`), Postgres, and Temporal. The agentic revamp is in place on branch `browser-use`; safety hardening from the 2026-10-18 audit is in progress. The wiki's [changelog](docs/wiki/changelog.md) records what changed and why.
+Everything runs locally: local Ollama models, a local Chrome driven by [browser-use](https://github.com/browser-use/browser-use) (pinned in `pyproject.toml`), Postgres, and Temporal. The agentic revamp is in place on branch `browser-use`; the first batch of safety hardening from the 2026-10-18 audit (review gate, duplicate protection, guarded submit) is implemented and tested offline, but no run has yet been made against a live site. The wiki's [changelog](docs/wiki/changelog.md) records what changed and why.
 
 ## Architecture
 
@@ -21,10 +21,14 @@ Everything runs locally: local Ollama models, a local Chrome driven by [browser-
 
 ```
 QUEUED → DISCOVER → MAP_FORM → EXTRACT_METADATA → CHECK_DUPLICATE
-  → MAP_ANSWERS → GENERATE_COVER_LETTER → FILL → SUBMIT → DONE
+  → MAP_ANSWERS → GENERATE_COVER_LETTER → FILL → (REVIEW → FILL → SUBMIT) → DONE
 ```
 
-Each stage is a Temporal activity with its own retries and timeouts. With the runtime setting `testing_mode` on, a run stops after FILL and does not submit.
+Each stage is a Temporal activity with its own retries and timeouts. What happens after FILL depends on the runtime setting `submission_mode`, which each run records when it is created:
+- `review` (the default, and what a missing or invalid value means): the run saves the filled form's evidence and waits as `AWAITING_REVIEW` for up to `review_window_hours` (default 48). You approve or reject it in the dashboard (`/review`) or through the API. An approval re-fills exactly the approved answers and submits; a rejection or an expired window submits nothing.
+- `testing`: the run stops after FILL and never submits.
+
+A run that may have been submitted but could not be verified ends `SUBMIT_UNCERTAIN`: it is never retried automatically and blocks applying to that job again until you resolve it in the dashboard.
 
 Design rule: **code first, models as fallbacks**. Each browser stage tries deterministic code, then one structured model call, then an agent loop, and verifies the result in code at each tier. Agents are never given a submit tool; submission is gated code (`src/yahbah/agent/submit.py`). Board-specific logic lives in `src/yahbah/agent/boards.py`.
 
@@ -128,7 +132,7 @@ uv run python -m yahbah.worker                               # worker + Gmail po
 
 **Local only, no authentication.** The API (uvicorn's default `127.0.0.1`) and the dashboard both bind loopback, and the API rejects any `Host` or `X-Forwarded-Host` other than `localhost` / `127.0.0.1`. Add authentication before exposing either beyond this machine. Read `frontend/AGENTS.md` before changing frontend code; this Next.js version has breaking changes.
 
-There is no separate poller process: the status and job-alert pollers run inside the worker, and each does nothing (no Gmail calls) unless its flag is enabled (see Email status tracking). On worker start and stop, rows that were RUNNING are marked FAILED because browser sessions are in-process, but the Temporal workflow is not stopped: it retries the interrupted activity on the next worker, so a run shown as FAILED can still continue. The audit's resume-on-restart policy replaces this ([run-lifecycle contract](docs/wiki/contracts/run-lifecycle.md)).
+There is no separate poller process: the status and job-alert pollers run inside the worker, and each does nothing (no Gmail calls) unless its flag is enabled (see Email status tracking). Stopping the worker does not change any run's status: Temporal retries an interrupted activity on the next worker, which re-opens the browser and re-checks the form. A run that had already clicked submit only verifies, or ends `SUBMIT_UNCERTAIN` ([run-lifecycle contract](docs/wiki/contracts/run-lifecycle.md)). To stop a run, cancel it.
 
 ### Debug one URL without Temporal
 
@@ -141,21 +145,24 @@ Runs discover → map → answers → fill without Temporal or a run record. It 
 ## Tests
 
 ```bash
-uv run pytest                    # everything, offline (about a minute)
+uv run pytest                    # offline; leaves out the slow and e2e tests (about 4 minutes)
+uv run pytest --complete         # everything, including slow (real timeouts) and e2e (whole runs through Temporal and Chrome)
+uv run --with pytest-xdist==3.8.0 pytest -n auto --dist load --complete   # the same, in parallel (under a minute)
 uv run pytest -m "not browser"   # skip tests that launch headless Chrome
 uv run pytest -m "not db"        # skip tests that need the test Postgres (also "not temporal")
 
 cd frontend
 npm test                         # Vitest + Testing Library
-npm run lint                     # ESLint (reports some older findings)
+npm run lint                     # ESLint
 npx tsc --noEmit                 # type check
 ```
 
-Tests live in `test/`; the shared harness is `test/harness/` and the safety-invariant suite `test/invariants/` (mostly strict `xfail` until the batch-1 work lands). Markers:
+Tests live in `test/`; the shared harness is `test/harness/` and the safety-invariant suite `test/invariants/` (including the `c7_acceptance` end-to-end gate). Markers:
 - `browser`: headless Chrome against local fixture pages (`test/yahbah/fixtures/`), no network.
 - `db`: a disposable Postgres database created and dropped per session through `TEST_DATABASE_URL` (default `postgresql+psycopg://yahbah_test@localhost/postgres`). Create that role once, with passwordless local access: `CREATE ROLE yahbah_test WITH LOGIN CREATEDB;`. The tests skip if Postgres is unreachable.
 - `temporal`: workflows on a local Temporal dev server (the `temporal` binary on PATH).
 - `live_llm`: the real local models; skipped unless selected with `-m live_llm` or `YAHBAH_LIVE_LLM=1`.
+- `slow` and `e2e`: set by hand; a bare `pytest` leaves them out and `--complete`, a path or any `-m` expression runs them.
 
 Tests cannot reach the real database, the network beyond localhost, or Ollama (outside `live_llm`). `scripts/save_fixture.py <url> <name>` saves a live page as a new fixture. `scripts/manual/` holds hand-run live checks (Gmail, metadata extraction), not part of pytest. Details: [docs/wiki/development.md](docs/wiki/development.md).
 
@@ -167,7 +174,10 @@ curl -X POST http://localhost:8000/jobs \
   -H "Content-Type: application/json" \
   -d '{"job_url": "https://boards.greenhouse.io/company/jobs/12345"}'
 
-curl http://localhost:8000/runs/<run_id>             # status
+curl http://localhost:8000/runs/<run_id>             # status, outcome, allowed actions
+curl http://localhost:8000/runs/<run_id>/review      # what a run awaiting review would submit
+curl -X POST http://localhost:8000/runs/<run_id>/approve \
+  -H "Content-Type: application/json" -d '{"review_round": 1}'   # or /reject
 curl http://localhost:8000/runs/<run_id>/artifacts   # artifacts
 ```
 
@@ -192,7 +202,7 @@ WHERE technologies @> '["PyTorch"]'::jsonb;
 - Each application uses a unique email alias (`user+job-<hash>@gmail.com`); the hash comes from the ATS, company, and job ID and extends in length if a collision occurs.
 - The status poller (in the worker) reads Gmail history incrementally, keeps messages sent to a `+alias`, classifies them with the LLM (UNDER_REVIEW, ONLINE_ASSESSMENT, INTERVIEW_REQUEST, INTERVIEW_SCHEDULED, OFFER, REJECTED, WITHDRAWN, OTHER), links them to the run, and optionally archives them into a Gmail folder per status. A history checkpoint is kept in the database.
 - The job-alert poller reads alert emails (LinkedIn, Indeed, etc., by sender pattern), scores jobs, queues them in `scheduled_job`, and promotes them to runs after a delay. Only a job that was actually scored, at or above `job_alert_min_match_score`, is queued; one that could not be scored is skipped. At most `job_alert_max_promotions_per_cycle` (default 5) jobs are promoted per cycle, alerts older than `job_alert_max_age_days` (default 14) are ignored, and queued jobs older than that expire. Alert links and job pages are fetched only from public hosts (the same URL policy as above).
-- Polling loops are off by default and toggled at runtime in `config/settings.yaml` (`gmail_status_polling_enabled`, `job_alert_polling_enabled`, auto-archive toggles, `testing_mode`), via `PUT /settings/{key}`. A poller does nothing when its flag is not exactly `true`, including the first cycle at worker startup (it makes no Gmail calls, label changes or promotions). The alert limits above default from `config.py` and can be overridden in `config/settings.yaml`.
+- Polling loops are off by default and toggled at runtime in `config/settings.yaml` (`gmail_status_polling_enabled`, `job_alert_polling_enabled`, auto-archive toggles), via `PUT /settings/{key}`; `submission_mode` and `review_window_hours` are set the same way and apply to new runs only. A poller does nothing when its flag is not exactly `true`, including the first cycle at worker startup (it makes no Gmail calls, label changes or promotions). The alert limits above default from `config.py` and can be overridden in `config/settings.yaml`.
 - Trigger a cycle manually: `POST /gmail/poll` (status) or `POST /gmail/alert-poll` (alerts).
 
 ## API overview
@@ -200,10 +210,10 @@ WHERE technologies @> '["PyTorch"]'::jsonb;
 | Prefix | Endpoints |
 |---|---|
 | `/jobs` | `POST` enqueue a run |
-| `/runs` | `GET /{id}`, `/{id}/steps`, `/{id}/artifacts`, `/{id}/status-updates`, artifact download; `POST /{id}/cancel`, `/{id}/retry`, `/bulk-delete`; `DELETE /{id}` |
-| `/applications` | `GET` list, `GET /stats` |
+| `/runs` | `GET /{id}`, `/{id}/review`, `/{id}/steps`, `/{id}/artifacts`, `/{id}/status-updates`, artifact download; `POST /{id}/approve`, `/reject`, `/cancel`, `/retry`, `/confirm-submitted`, `/confirm-not-submitted`, `/bulk-delete`; `DELETE /{id}` |
+| `/applications` | `GET` list (filter by `outcome`), `GET /stats` |
 | `/scheduled` | create, list, stats, get, `approve` / `reject` / `hold` / `promote`, delete |
-| `/settings` | `GET`; `PUT /{key}` (body `{"value": ...}`) |
+| `/settings` | `GET` (effective values); `PUT /{key}` (body `{"value": ...}`, validated) |
 | `/gmail` | `POST /poll`, `POST /alert-poll` |
 | `/health` | `GET` |
 

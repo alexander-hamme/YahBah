@@ -6,6 +6,13 @@ share the same page without re-navigating. Each session launches its own headles
 with its own temporary profile, so concurrent runs never share cookies or state.
 A session only survives across activities within the same worker process; activities
 re-open the job URL when it's gone (e.g. after a worker restart).
+
+Ownership (contract §7): inside a Temporal activity, a session belongs to the activity attempt
+that opened or last took it, identified by (workflow_id, activity sequence number, attempt). The
+run's activities execute one at a time, so a later activity or a later attempt of the same one
+takes the session over, while an earlier one (an attempt that timed out and was retried) gets
+None from get() and SessionSuperseded from open(); another workflow never gets it. Outside an
+activity (scripts/run_pipeline.py) there is no owner and no check.
 """
 import asyncio
 import shutil
@@ -13,8 +20,8 @@ from pathlib import Path
 
 from browser_use import BrowserProfile, BrowserSession
 from loguru import logger
-
 from yahbah.config import settings
+from yahbah.run_state import Owner, activity_owner
 
 
 def artifact_path(run_id: str, filename: str) -> str:
@@ -24,11 +31,21 @@ def artifact_path(run_id: str, filename: str) -> str:
     return str((dir_ / filename).resolve())
 
 
+class SessionSuperseded(Exception):
+    """The caller is not (or no longer) the owner of the run's browser."""
+
+
+def _may_take(owner: Owner | None, caller: Owner | None) -> bool:
+    if owner is None or caller is None:
+        return True
+    return caller[0] == owner[0] and caller[1:] >= owner[1:]
+
+
 class SessionRegistry:
     _instance: "SessionRegistry | None" = None
 
     def __init__(self) -> None:
-        self._sessions: dict[str, BrowserSession] = {}
+        self._sessions: dict[str, tuple[BrowserSession, Owner | None]] = {}
 
     @classmethod
     def instance(cls) -> "SessionRegistry":
@@ -37,27 +54,41 @@ class SessionRegistry:
         return cls._instance
 
     def get(self, run_id: str) -> BrowserSession | None:
-        return self._sessions.get(run_id)
+        """The run's live session for the caller (taking it over), or None if there is none or the
+        caller has been superseded."""
+        entry = self._sessions.get(run_id)
+        if entry is None:
+            return None
+        session, owner = entry
+        caller = activity_owner()
+        if not _may_take(owner, caller):
+            logger.warning(f"[session] run {run_id}: {caller} is superseded by {owner}; no browser for it")
+            return None
+        self._sessions[run_id] = (session, caller or owner)
+        return session
 
     async def open(self, run_id: str, url: str) -> BrowserSession:
         """Start a fresh browser for the run and load the URL (replacing any session it had)."""
+        caller = activity_owner()
         if run_id in self._sessions:
+            if not _may_take(self._sessions[run_id][1], caller):
+                raise SessionSuperseded(f"run {run_id}'s browser belongs to a newer attempt")
             logger.warning(f"Session already open for run {run_id} — closing old one")
-            await self.close(run_id)
+            await self._kill(run_id)
         session = BrowserSession(browser_profile=BrowserProfile(
             headless=settings.browser_headless,
             keep_alive=True,
             # No user_data_dir: browser-use creates a fresh temp profile per session.
         ))
         await session.start()
-        self._sessions[run_id] = session
+        self._sessions[run_id] = (session, caller)
         await session.navigate_to(url)
         await asyncio.sleep(3)  # let client-side apps render; discover re-checks the page anyway
         return session
 
     async def screenshot(self, run_id: str, label: str, full_page: bool = True) -> str | None:
-        """Save artifacts/<run_id>/screenshot_<label>.png; None if the run has no session."""
-        session = self._sessions.get(run_id)
+        """Save artifacts/<run_id>/screenshot_<label>.png; None if the caller has no session."""
+        session = self.get(run_id)
         if session is None:
             return None
         path = artifact_path(run_id, f"screenshot_{label}.png")
@@ -69,9 +100,17 @@ class SessionRegistry:
         return path
 
     async def close(self, run_id: str) -> None:
-        session = self._sessions.pop(run_id, None)
-        if session is None:
-            return
+        """Close the run's browser, unless a newer attempt than the caller owns it."""
+        entry = self._sessions.get(run_id)
+        if entry is not None and _may_take(entry[1], activity_owner()):
+            await self._kill(run_id)
+
+    async def close_all(self) -> None:
+        for run_id in list(self._sessions):
+            await self._kill(run_id)
+
+    async def _kill(self, run_id: str) -> None:
+        session, _ = self._sessions.pop(run_id)
         profile_dir = session.browser_profile.user_data_dir
         try:
             await session.kill()
@@ -79,7 +118,3 @@ class SessionRegistry:
             logger.warning(f"[session] kill failed for run {run_id}: {exc}")
         if profile_dir and "browser-use-user-data-dir-" in str(profile_dir):
             shutil.rmtree(profile_dir, ignore_errors=True)
-
-    async def close_all(self) -> None:
-        for run_id in list(self._sessions):
-            await self.close(run_id)

@@ -28,6 +28,7 @@ from yahbah.config import settings
 from yahbah.db.models import ApplicantProfile
 from yahbah.db.session import AsyncSessionLocal
 from yahbah.llm.cover_letter import CoverLetterGenerator
+from yahbah.llm import answer_cache
 from yahbah.llm.field_mapper import FieldMapper, NeedsAnswer
 from yahbah.llm.logs import use_run_log_dir
 from yahbah.schemas import FieldMapping, FormField
@@ -74,7 +75,9 @@ async def main() -> None:
                                  empty_value=f.get("empty_value"), autocomplete=f.get("autocomplete"))
                        for f in fields]
         t = time.time()
-        mappings = await FieldMapper().map(form_fields, profile, job.get("description") or "")
+        mapper = FieldMapper(cache_namespace=answer_cache.DEBUG)  # debug answers never reach live runs
+        mappings = await mapper.map(form_fields, profile, job.get("description") or "",
+                                    job_location=job.get("location") or None)
         trace.add("answers", "model", t, f"{len(mappings)} fields mapped")
         print("\n=== answers ===")
         for m in mappings:
@@ -101,7 +104,8 @@ async def main() -> None:
             new = [FormField(key=f["key"], label=f["label"], field_type=f["type"], required=bool(f["required"]),
                              options=f.get("options") or [], autocomplete=f.get("autocomplete")) for f in new_fields]
             prior = [FieldMapping(**m) for m in ctx.mappings.values()]
-            return [asdict(m) for m in await FieldMapper().map(new, profile, job.get("description") or "", prior)]
+            return [asdict(m) for m in await mapper.map(new, profile, job.get("description") or "", prior,
+                                                        job_location=job.get("location") or None)]
 
         t = time.time()
         problems = await fill_form(session, board, ctx, map_new_fields=map_new, beat=lambda note: print(f"  · {note}"))
@@ -120,10 +124,10 @@ async def main() -> None:
             if problems:
                 print("\nnot submitting: problems left")
             else:
-                async def noop() -> None:
-                    pass
+                async def allow() -> bool:
+                    return True
                 result = await submit_and_verify(session, board, ctx, email=profile.email, already_attempted=False,
-                                                 mark_attempted=noop, map_new_fields=map_new,
+                                                 claim=allow, map_new_fields=map_new,
                                                  beat=lambda note: print(f"  · {note}"))
                 print(f"\nSUBMITTED: {result.confirmation_url}\n{result.confirmation_text[:500]}")
                 await registry.screenshot(run_id, "confirmation")

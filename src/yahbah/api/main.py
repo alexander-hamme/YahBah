@@ -1,15 +1,25 @@
 from contextlib import asynccontextmanager
+from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from loguru import logger
+from pydantic import BaseModel
 from starlette.datastructures import Headers
-from starlette.responses import PlainTextResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 from temporalio.client import Client as TemporalClient
 
-from yahbah.config import settings, get_runtime_settings, set_runtime_setting
+from yahbah.config import (
+    RUNTIME_SETTINGS,
+    get_effective_runtime_settings,
+    set_runtime_setting,
+    settings,
+    validate_runtime_setting,
+)
+from yahbah.api.errors import api_error
 from yahbah.api.routes import applications, jobs, runs, scheduled
 
 
@@ -63,6 +73,26 @@ def _reject_foreign_forwarded_host(app: ASGIApp) -> ASGIApp:
 app.add_middleware(_reject_foreign_forwarded_host)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=_LOCAL_HOSTS)
 
+_LOCATIONS = {"body", "query", "path", "header", "cookie"}
+
+
+def _validation_message(errors: list[dict]) -> str:
+    """FastAPI's validation errors in one line: "page: Input should be greater than or equal to 1"."""
+    parts = []
+    for err in errors[:3]:
+        loc = [str(p) for p in err.get("loc", ()) if p not in _LOCATIONS]
+        parts.append(f"{'.'.join(loc)}: {err.get('msg', 'invalid')}" if loc else str(err.get("msg", "invalid")))
+    more = f" (and {len(errors) - 3} more)" if len(errors) > 3 else ""
+    return f"Invalid request: {'; '.join(parts)}{more}."
+
+
+@app.exception_handler(RequestValidationError)
+async def _invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Request validation failures use the contract §8 error body too: {"detail": {"code", "message"}}."""
+    return JSONResponse(status_code=422, content={
+        "detail": {"code": "invalid_request", "message": _validation_message(list(exc.errors()))}})
+
+
 app.include_router(applications.router, prefix="/applications", tags=["applications"])
 app.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
 app.include_router(runs.router, prefix="/runs", tags=["runs"])
@@ -74,20 +104,35 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
+# ── Runtime settings (contract §3, §8) ────────────────────────────────────
+
+async def _effective_settings() -> dict:
+    """The settings as runs use them (submission_mode fails closed to review), known keys only."""
+    effective = await get_effective_runtime_settings()
+    return {key: value for key, value in effective.items() if key in RUNTIME_SETTINGS}
+
+
 @app.get("/settings")
 async def get_settings() -> dict:
-    return await get_runtime_settings()
+    return await _effective_settings()
 
 
-from pydantic import BaseModel as _BaseModel
-from typing import Any as _Any
+class _SettingUpdate(BaseModel):
+    value: Any
 
-class _SettingUpdate(_BaseModel):
-    value: _Any
 
 @app.put("/settings/{key}")
 async def update_setting(key: str, body: _SettingUpdate) -> dict:
-    return await set_runtime_setting(key, body.value)
+    """Validated by config.validate_runtime_setting(); returns the effective settings after the write.
+    submission_mode and review_window_hours are snapshotted per run, so a change affects new runs only."""
+    if key not in RUNTIME_SETTINGS:
+        raise api_error(404, "unknown_setting", f"There is no runtime setting {key!r}.")
+    try:
+        value = validate_runtime_setting(key, body.value)
+    except ValueError as exc:
+        raise api_error(422, "invalid_setting", f"{exc}.") from None
+    await set_runtime_setting(key, value)
+    return await _effective_settings()
 
 
 @app.post("/gmail/poll")
@@ -112,7 +157,7 @@ async def trigger_gmail_alert_poll() -> dict:
         return {"success": False, "error": str(exc)}
 
 
-class _BackfillRequest(_BaseModel):
+class _BackfillRequest(BaseModel):
     since: str  # ISO date, e.g. "2026-04-10"
 
 @app.post("/gmail/alert-backfill")

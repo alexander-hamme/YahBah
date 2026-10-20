@@ -1,4 +1,3 @@
-from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -90,6 +89,8 @@ settings = Settings()
 
 
 import asyncio as _asyncio
+from datetime import date
+from typing import get_args
 
 _SETTINGS_PATH = Path("config/settings.yaml")
 
@@ -99,7 +100,7 @@ def _read_settings_sync() -> dict:
         with open(_SETTINGS_PATH) as f:
             return yaml.safe_load(f) or {}
     except FileNotFoundError:
-        return {"testing_mode": False}
+        return {}
 
 
 def _write_settings_sync(data: dict) -> None:
@@ -108,12 +109,14 @@ def _write_settings_sync(data: dict) -> None:
 
 
 async def get_runtime_settings() -> dict:
-    """Read runtime settings (async-safe, always fresh)."""
+    """Read runtime settings (async-safe, always fresh). The raw file: whatever decides how a run
+    behaves reads get_effective_runtime_settings() instead."""
     return await _asyncio.to_thread(_read_settings_sync)
 
 
 async def set_runtime_setting(key: str, value) -> dict:
-    """Update a single runtime setting and return the full settings dict."""
+    """Update a single runtime setting and return the full settings dict.
+    API writes are checked with validate_runtime_setting() first."""
     def _update():
         settings_dict = _read_settings_sync()
         settings_dict[key] = value
@@ -122,17 +125,151 @@ async def set_runtime_setting(key: str, value) -> dict:
     return await _asyncio.to_thread(_update)
 
 
-@lru_cache
-def load_prompts_config() -> dict:
-    """Load prompts from prompts.yaml, merge with personal.yaml (cover_letter + known_answers).
+# ── Runtime-setting validation (contract §3, §8) ─────────────────────────────
 
-    prompts.yaml is safe to publish; personal.yaml contains personal info and is gitignored.
+DEFAULT_REVIEW_WINDOW_HOURS = 48.0
+
+
+def _submission_mode(value):
+    from yahbah.run_state import SubmissionMode  # (run_state imports the DB session, which imports this module)
+
+    if value not in get_args(SubmissionMode):
+        raise ValueError(f"must be one of {list(get_args(SubmissionMode))}")
+    return value
+
+
+def _positive_hours(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not value > 0:
+        raise ValueError("must be a number of hours greater than 0")
+    return float(value)
+
+
+def _flag(value):
+    if not isinstance(value, bool):
+        raise ValueError("must be true or false")
+    return value
+
+
+def _whole(minimum: int):
+    def check(value):
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise ValueError(f"must be a whole number >= {minimum}")
+        return value
+    return check
+
+
+def _text(value):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("must be a non-empty string")
+    return value
+
+
+def _choice(*options):
+    def check(value):
+        if value not in options:
+            raise ValueError(f"must be one of {list(options)}")
+        return value
+    return check
+
+
+def _sender_patterns(value):
+    if not isinstance(value, list) or not all(isinstance(v, str) and v.strip() for v in value):
+        raise ValueError("must be a list of sender patterns")
+    return value
+
+
+def _archive_by_status(value):
+    if not isinstance(value, dict) or not all(isinstance(k, str) and isinstance(v, bool) for k, v in value.items()):
+        raise ValueError("must map status types to true or false")
+    return value
+
+
+def _iso_date(value):
+    try:
+        date.fromisoformat(value)
+    except (TypeError, ValueError):
+        raise ValueError("must be an ISO date (YYYY-MM-DD)") from None
+    return value
+
+
+# Every key PUT /settings/{key} may write, with its validator (which returns the value to store).
+RUNTIME_SETTINGS = {
+    "submission_mode": _submission_mode,
+    "review_window_hours": _positive_hours,
+    "gmail_status_polling_enabled": _flag,
+    "gmail_status_polling_interval_minutes": _whole(1),
+    "gmail_folder_label": _text,
+    "gmail_status_label": _text,
+    "gmail_verification_code_action": _choice("archive", "delete", "nothing"),
+    "gmail_auto_archive": _archive_by_status,
+    "job_alert_polling_enabled": _flag,
+    "job_alert_polling_interval_minutes": _whole(1),
+    "job_alert_label": _text,
+    "job_alert_auto_archive": _flag,
+    "job_alert_sender_patterns": _sender_patterns,
+    "job_alert_promotion_delay_hours": _whole(0),
+    "job_alert_min_match_score": _whole(0),
+    "job_alert_max_promotions_per_cycle": _whole(0),
+    "job_alert_max_age_days": _whole(1),
+    "job_alert_backfill_since": _iso_date,
+}
+
+
+def validate_runtime_setting(key: str, value):
+    """The value to store for `key`; ValueError for an unknown key or an invalid value."""
+    if key not in RUNTIME_SETTINGS:
+        raise ValueError(f"unknown setting {key!r}")
+    try:
+        return RUNTIME_SETTINGS[key](value)
+    except ValueError as exc:
+        raise ValueError(f"{key} {exc}") from None
+
+
+def effective_runtime_settings(raw: dict) -> dict:
+    """`raw` with submission_mode and review_window_hours as new runs use them: a missing or invalid
+    submission_mode means review (fail closed); a missing or invalid window means 48 hours."""
+    from yahbah.run_state import DEFAULT_SUBMISSION_MODE
+
+    out = dict(raw)
+    for key, default in (("submission_mode", DEFAULT_SUBMISSION_MODE),
+                         ("review_window_hours", DEFAULT_REVIEW_WINDOW_HOURS)):
+        try:
+            out[key] = validate_runtime_setting(key, raw[key])
+        except (KeyError, ValueError):
+            out[key] = default
+    return out
+
+
+async def get_effective_runtime_settings() -> dict:
+    return effective_runtime_settings(await get_runtime_settings())
+
+
+_prompts_cache: dict = {}
+
+
+def load_prompts_config() -> dict:
+    """prompts.yaml merged with personal.yaml (prompts such as cover_letter, known_answers, profile).
+
+    Re-read whenever either file changes (mtime or size), so an edited stored answer applies to the
+    next call without a worker restart. prompts.yaml is safe to publish; personal.yaml contains
+    personal info and is gitignored.
     """
-    with open(Path(settings.prompts_path)) as f:
+    paths = (Path(settings.prompts_path), Path(settings.personal_path))
+    stamp = tuple((str(p), p.stat().st_mtime_ns, p.stat().st_size) for p in paths)
+    if _prompts_cache.get("stamp") != stamp:
+        _prompts_cache.update(stamp=stamp, config=_read_prompts_config(*paths))
+    return _prompts_cache["config"]
+
+
+load_prompts_config.cache_clear = _prompts_cache.clear  # forces a re-read (tests)
+
+
+def _read_prompts_config(prompts_path: Path, personal_path: Path) -> dict:
+    with open(prompts_path) as f:
         config = yaml.safe_load(f)
 
-    with open(Path(settings.personal_path)) as f:
-        personal = yaml.safe_load(f)
+    with open(personal_path) as f:
+        personal = yaml.safe_load(f) or {}
 
     # Merge personal prompts (e.g. cover_letter) into the prompts dict
     if "prompts" in personal:

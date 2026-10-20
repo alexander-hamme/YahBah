@@ -12,15 +12,17 @@ DELETE /scheduled/{id}          — remove from queue
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from yahbah.api.errors import api_error, enqueue_refused
 from yahbah.config import settings, get_runtime_settings
-from yahbah.db.models import ApplicationRun, JobPosting, ScheduledJob
+from yahbah.db.models import ScheduledJob
 from yahbah.db.session import get_session
-from yahbah.jobs import submit_job_for_application
+from yahbah.jobs import AlreadyApplied, RunInFlight, submit_job_for_application
+from yahbah.run_state import possibly_applied_url
 from yahbah.url_utils import UnsafeURLError, normalize_job_url
 
 router = APIRouter()
@@ -76,7 +78,7 @@ def _sj_id(scheduled_id: str) -> uuid.UUID:
     try:
         return uuid.UUID(scheduled_id)
     except ValueError:
-        raise HTTPException(status_code=422, detail="Invalid ID format")
+        raise api_error(422, "invalid_request", "Invalid ID format")
 
 
 def _item(sj: ScheduledJob) -> ScheduledJobItem:
@@ -110,7 +112,7 @@ async def add_scheduled(
     try:
         job_url = await normalize_job_url(body.job_url)
     except UnsafeURLError as exc:
-        raise HTTPException(status_code=422, detail=f"URL not allowed: {exc}") from exc
+        raise api_error(422, "invalid_url", f"URL not allowed: {exc}") from exc
 
     # Dedup: already in scheduled queue?
     existing = await session.execute(
@@ -120,20 +122,11 @@ async def add_scheduled(
         )
     )
     if existing.scalar_one_or_none() is not None:
-        raise HTTPException(status_code=409, detail="Job already in scheduled queue")
+        raise api_error(409, "already_scheduled", "Job already in scheduled queue")
 
-    # Dedup: already applied to?
-    existing = await session.execute(
-        select(ApplicationRun.id)
-        .join(JobPosting)
-        .where(
-            (JobPosting.url == job_url) | (JobPosting.canonical_url == job_url)
-        )
-        .where(ApplicationRun.status.notin_(["FAILED"]))
-        .limit(1)
-    )
-    if existing.scalar_one_or_none() is not None:
-        raise HTTPException(status_code=409, detail="Job already applied to")
+    # Dedup: already (or possibly) applied to? (contract §5)
+    if blocker := await possibly_applied_url(session, job_url):
+        raise enqueue_refused(AlreadyApplied(blocker))
 
     rt = await get_runtime_settings()
     delay_hours = rt.get(
@@ -234,7 +227,7 @@ async def get_scheduled(
     uid = _sj_id(scheduled_id)
     sj = await session.get(ScheduledJob, uid)
     if sj is None:
-        raise HTTPException(status_code=404, detail="Scheduled job not found")
+        raise api_error(404, "scheduled_not_found", "Scheduled job not found")
     return _item(sj)
 
 
@@ -248,9 +241,9 @@ async def approve_scheduled(
     uid = _sj_id(scheduled_id)
     sj = await session.get(ScheduledJob, uid)
     if sj is None:
-        raise HTTPException(status_code=404, detail="Scheduled job not found")
+        raise api_error(404, "scheduled_not_found", "Scheduled job not found")
     if sj.status not in ("SCHEDULED", "SKIPPED"):
-        raise HTTPException(status_code=409, detail=f"Cannot approve job in {sj.status} state")
+        raise api_error(409, "action_not_allowed", f"Cannot approve job in {sj.status} state")
     sj.status = "APPROVED"
     sj.hold = False
     await session.commit()
@@ -265,9 +258,9 @@ async def reject_scheduled(
     uid = _sj_id(scheduled_id)
     sj = await session.get(ScheduledJob, uid)
     if sj is None:
-        raise HTTPException(status_code=404, detail="Scheduled job not found")
+        raise api_error(404, "scheduled_not_found", "Scheduled job not found")
     if sj.status in ("PROMOTED",):
-        raise HTTPException(status_code=409, detail="Cannot reject an already-promoted job")
+        raise api_error(409, "action_not_allowed", "Cannot reject an already-promoted job")
     sj.status = "SKIPPED"
     await session.commit()
     return ActionResponse(success=True, message="Job rejected")
@@ -281,9 +274,9 @@ async def toggle_hold(
     uid = _sj_id(scheduled_id)
     sj = await session.get(ScheduledJob, uid)
     if sj is None:
-        raise HTTPException(status_code=404, detail="Scheduled job not found")
+        raise api_error(404, "scheduled_not_found", "Scheduled job not found")
     if sj.status not in ("SCHEDULED", "APPROVED"):
-        raise HTTPException(status_code=409, detail=f"Cannot hold job in {sj.status} state")
+        raise api_error(409, "action_not_allowed", f"Cannot hold job in {sj.status} state")
     sj.hold = not sj.hold
     await session.commit()
     action = "held" if sj.hold else "released"
@@ -299,19 +292,21 @@ async def promote_scheduled(
     uid = _sj_id(scheduled_id)
     sj = await session.get(ScheduledJob, uid)
     if sj is None:
-        raise HTTPException(status_code=404, detail="Scheduled job not found")
+        raise api_error(404, "scheduled_not_found", "Scheduled job not found")
     if sj.status == "PROMOTED":
-        raise HTTPException(status_code=409, detail="Job already promoted")
+        raise api_error(409, "action_not_allowed", "Job already promoted")
     if sj.status not in ("SCHEDULED", "APPROVED"):
-        raise HTTPException(status_code=409, detail=f"Cannot promote job in {sj.status} state")
+        raise api_error(409, "action_not_allowed", f"Cannot promote job in {sj.status} state")
 
     try:
         temporal = request.app.state.temporal
-        run_id = await submit_job_for_application(sj.job_url, temporal)
+        run_id = await submit_job_for_application(sj.job_url, temporal, origin="discovered")
     except UnsafeURLError as exc:
-        raise HTTPException(status_code=422, detail=f"URL not allowed: {exc}") from exc
+        raise api_error(422, "invalid_url", f"URL not allowed: {exc}") from exc
+    except (AlreadyApplied, RunInFlight) as exc:
+        raise enqueue_refused(exc) from exc
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Failed to start workflow: {exc}") from exc
+        raise api_error(503, "temporal_unavailable", f"Failed to start workflow: {exc}") from exc
 
     sj.status = "PROMOTED"
     sj.promoted_run_id = uuid.UUID(run_id)
@@ -328,7 +323,7 @@ async def delete_scheduled(
     uid = _sj_id(scheduled_id)
     sj = await session.get(ScheduledJob, uid)
     if sj is None:
-        raise HTTPException(status_code=404, detail="Scheduled job not found")
+        raise api_error(404, "scheduled_not_found", "Scheduled job not found")
     await session.delete(sj)
     await session.commit()
     return ActionResponse(success=True, message="Scheduled job deleted")

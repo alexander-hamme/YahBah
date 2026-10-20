@@ -36,11 +36,12 @@ packages = ["src/yahbah"]
 dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "pytest-xdist==3.8.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
-addopts = "--import-mode=importlib"
+addopts = "--import-mode=importlib"  # parallel by default: test/conftest.py (pytest_cmdline_main)
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "module"
 asyncio_default_test_loop_scope = "module"
@@ -49,4 +50,6 @@ markers = [
     "db: uses the disposable Postgres test database (TEST_DATABASE_URL); skipped if Postgres is down",
     "temporal: runs workflows on a local Temporal dev server (the `temporal` binary on PATH)",
     "live_llm: calls the real local models; opt-in only (-m live_llm or YAHBAH_LIVE_LLM=1)",
+    "slow: waits for a real timeout to expire (seconds of wall-clock time); deselect with -m 'not slow'",
+    "e2e: whole runs through Temporal with the real worker, real activities and Chrome (C7 acceptance gate); not in a bare `pytest` run",
 ]

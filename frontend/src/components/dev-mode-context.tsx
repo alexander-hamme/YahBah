@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useState,
-} from "react";
+import { createContext, useCallback, useContext, useSyncExternalStore } from "react";
 
 interface DevModeContextValue {
   devMode: boolean;
@@ -19,20 +13,36 @@ const DevModeContext = createContext<DevModeContextValue>({
 });
 
 const STORAGE_KEY = "yahbah-dev-mode";
+const CHANGE_EVENT = "yahbah-dev-mode-change";
+
+// localStorage is the store; "storage" covers other tabs, CHANGE_EVENT this one.
+function subscribe(onChange: () => void): () => void {
+  window.addEventListener("storage", onChange);
+  window.addEventListener(CHANGE_EVENT, onChange);
+  return () => {
+    window.removeEventListener("storage", onChange);
+    window.removeEventListener(CHANGE_EVENT, onChange);
+  };
+}
+
+function readDevMode(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEY) === "true";
+  } catch {
+    return false; // storage blocked: dev mode is a convenience, default off
+  }
+}
 
 export function DevModeProvider({ children }: { children: React.ReactNode }) {
-  const [devMode, setDevMode] = useState(false);
-
-  useEffect(() => {
-    setDevMode(localStorage.getItem(STORAGE_KEY) === "true");
-  }, []);
+  const devMode = useSyncExternalStore(subscribe, readDevMode, () => false);
 
   const toggleDevMode = useCallback(() => {
-    setDevMode((prev) => {
-      const next = !prev;
-      localStorage.setItem(STORAGE_KEY, String(next));
-      return next;
-    });
+    try {
+      localStorage.setItem(STORAGE_KEY, String(!readDevMode()));
+    } catch {
+      return;
+    }
+    window.dispatchEvent(new Event(CHANGE_EVENT));
   }, []);
 
   return (

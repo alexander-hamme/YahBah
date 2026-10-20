@@ -14,8 +14,8 @@ import pytest
 
 from harness.browser import load
 from yahbah.agent.boards import detect_board
+from yahbah.agent.controls import SUBMIT_EVENT_GUARD_JS
 from yahbah.agent.fill import (
-    GUARD_SUBMIT_JS,
     FillContext,
     capture_empty_values,
     fill_text,
@@ -96,7 +96,7 @@ async def test_fill_plumbing(session, load_fixture, case, tmp_path) -> None:
         assert any(label in p for p in problems), f"gate missed empty required field {label!r}"
 
 
-async def test_submit_guard_blocks_and_releases(session, load_fixture) -> None:
+async def test_submit_event_guard_blocks_and_releases(session, load_fixture) -> None:
     await load_fixture(session, CASES[0]["file"])
     count_submits = """(() => {
         window.__submits = 0;
@@ -109,9 +109,8 @@ async def test_submit_guard_blocks_and_releases(session, load_fixture) -> None:
         return window.__submits; })()"""
     button_disabled = "document.querySelector('form button[type=submit]').disabled"
 
-    await run_js(session, f"{GUARD_SUBMIT_JS}(true)")
+    await run_js(session, f"{SUBMIT_EVENT_GUARD_JS}(true)")
     assert await run_js(session, submit_form) == 0  # cancelled before the page's handlers see it
-    assert await run_js(session, button_disabled) is True
-    await run_js(session, f"{GUARD_SUBMIT_JS}(false)")
+    assert await run_js(session, button_disabled) is False  # the page itself is left alone
+    await run_js(session, f"{SUBMIT_EVENT_GUARD_JS}(false)")
     assert await run_js(session, submit_form) == 1  # released
-    assert await run_js(session, button_disabled) is False

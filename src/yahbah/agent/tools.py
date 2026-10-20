@@ -351,8 +351,11 @@ async def screenshot_b64(browser_session: BrowserSession, quality: int = 75) -> 
 
 def make_tools(vision_llm=None, fill_ctx=None) -> tuple[Tools, StallTracker]:
     """vision_llm: adds look_at_screen so the text-only driver can ask about the screenshot.
-    fill_ctx (a fill.FillContext): adds the key-based fill tools (fix phase only). There is never a submit tool."""
-    tools = Tools(exclude_actions=["evaluate"])
+    fill_ctx (a fill.FillContext): adds the key-based fill tools (fix phase only). There is never a submit tool,
+    and the generic click / send_keys actions run through the submit-control guard (controls.GuardedTools)."""
+    from yahbah.agent.controls import GuardedTools  # controls imports run_js from this module
+
+    tools = GuardedTools(exclude_actions=["evaluate"])
     stalls = StallTracker()
 
     if vision_llm is not None:

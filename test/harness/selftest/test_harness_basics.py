@@ -87,7 +87,7 @@ async def test_scripted_llm_can_raise_model_errors(llm) -> None:
 
 def test_answer_fits_todays_fallback_schema() -> None:
     got = fit(_FallbackAnswer, answer("Yes", quotes=["q"], basis=["work_authorization"]))
-    assert (got.answer, got.evidence, got.job_specific) == ("Yes", ["q"], False)
+    assert (got.answer, got.basis, got.job_specific) == ("Yes", ["work_authorization"], False)
 
 
 def test_fit_filters_enum_lists_and_reports_unknown_required_fields() -> None:

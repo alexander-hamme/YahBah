@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from harness.api import FakeTemporal, api_client
-from harness.contract import contract_symbol, defect, make
+from harness.contract import contract_symbol, make
 
 NOW = datetime.now(timezone.utc)
 
@@ -36,7 +36,6 @@ async def _possibly_applied(db, posting_id, **kwargs):
         return await possibly_applied(session, posting_id, **kwargs)
 
 
-@defect("contract §5", 3, "possibly_applied() doesn't exist; dedup sites count only COMPLETED (or non-FAILED) runs")
 @pytest.mark.parametrize("case", BLOCKING)
 async def test_possibly_applied_blocks(db, case) -> None:
     contract_symbol("possibly_applied")
@@ -49,7 +48,6 @@ async def test_possibly_applied_blocks(db, case) -> None:
     assert await _possibly_applied(db, posting, exclude_run_id=blocker) is None
 
 
-@defect("contract §5", 3, "possibly_applied() doesn't exist; test runs count as applied today")
 @pytest.mark.parametrize("case", NOT_BLOCKING)
 async def test_possibly_applied_does_not_block(db, case) -> None:
     contract_symbol("possibly_applied")
@@ -58,7 +56,6 @@ async def test_possibly_applied_does_not_block(db, case) -> None:
     assert await _possibly_applied(db, posting) is None
 
 
-@defect("contract §5, §6", 3, "possibly_applied() doesn't exist; no submission_claim table")
 async def test_a_submission_claim_blocks_a_run_that_would_not(db) -> None:
     contract_symbol("possibly_applied")
     posting = await db.seed_posting()
@@ -68,7 +65,6 @@ async def test_a_submission_claim_blocks_a_run_that_would_not(db) -> None:
     assert found is not None and (found.run_id, found.reason) == (cancelled, "claim")
 
 
-@defect("contract §6", 3, "claims don't exist, so deleting a run removes its duplicate protection")
 async def test_a_claim_outlives_its_deleted_run(db) -> None:
     contract_symbol("possibly_applied")
     posting = await db.seed_posting()
@@ -80,7 +76,6 @@ async def test_a_claim_outlives_its_deleted_run(db) -> None:
     assert (found.run_id, found.reason) == (None, "claim")
 
 
-@defect("contract §6", 3, "claim_submission() doesn't exist; mark_submit_attempted is a blind UPDATE")
 async def test_a_second_claim_for_the_same_posting_is_denied(db) -> None:
     claim_submission = contract_symbol("claim_submission")
     posting = await db.seed_posting()
@@ -93,7 +88,6 @@ async def test_a_second_claim_for_the_same_posting_is_denied(db) -> None:
     assert (await db.run(second))["submit_attempted_at"] is None  # rolled back
 
 
-@defect("contract §6", 3, "claim_submission() doesn't exist; any executor can mark the run attempted")
 async def test_a_claim_with_the_wrong_workflow_id_is_denied(db) -> None:
     claim_submission = contract_symbol("claim_submission")
     posting = await db.seed_posting()
@@ -112,7 +106,6 @@ async def _check_duplicate(db, run_id, posting_id):
                                                job_title=None, job_company=None, job_location=None))
 
 
-@defect("contract §5", 3, "check_duplicate_activity counts only COMPLETED runs: a FAILED run that clicked submit is invisible")
 async def test_check_duplicate_sees_a_run_that_attempted_submit(db) -> None:
     posting = await db.seed_posting()
     await db.seed_run(posting, status="FAILED", submit_attempted_at=NOW, completed_at=NOW)
@@ -120,7 +113,6 @@ async def test_check_duplicate_sees_a_run_that_attempted_submit(db) -> None:
     assert (await _check_duplicate(db, current, posting)).is_duplicate
 
 
-@defect("contract §5", 3, "a testing-mode COMPLETED run counts as applied and blocks the real application")
 async def test_check_duplicate_ignores_testing_mode_runs(db) -> None:
     posting = await db.seed_posting()
     await db.seed_run(posting, status="COMPLETED", submission_mode="testing", completed_at=NOW)
@@ -128,7 +120,6 @@ async def test_check_duplicate_ignores_testing_mode_runs(db) -> None:
     assert not (await _check_duplicate(db, current, posting)).is_duplicate
 
 
-@defect("contract §5", 3, "POST /jobs has no dedup: a posting whose submit was attempted is enqueued again")
 async def test_post_jobs_refuses_a_possibly_applied_posting(db, runtime_settings, monkeypatch) -> None:
     import yahbah.api.routes.jobs as jobs_route
 

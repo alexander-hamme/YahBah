@@ -217,29 +217,6 @@ class GmailClient:
                 logger.warning(f"[gmail] Unknown verification code action: {action!r}, treating as 'nothing'")
             await self._add_label(message_id, label_id)
 
-    async def fetch_verification_code(
-        self,
-        recipient_email: str,
-        since_epoch: int | None = None,
-        subject_hint: str | None = None,
-        timeout_seconds: int | None = None,
-        poll_interval: int | None = None,
-        *,
-        code_pattern: str | None = None,
-    ) -> str:
-        """
-        wait_for_verification_code(), then finalize_code_message() straight away,
-        before the page has seen the code. Returns the code.
-
-        Superseded by the two-step form; remove once agent/submit.py uses it.
-        """
-        found = await self.wait_for_verification_code(
-            recipient_email, since_epoch, subject_hint, timeout_seconds, poll_interval,
-            code_pattern=code_pattern,
-        )
-        await self.finalize_code_message(found.message_id)
-        return found.code
-
     # ------------------------------------------------------------------
     # Incremental sync (status + alert pollers)
     # ------------------------------------------------------------------

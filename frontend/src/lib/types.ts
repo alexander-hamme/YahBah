@@ -1,4 +1,90 @@
-export interface ApplicationListItem {
+// Mirrors the API response schemas (docs/wiki/contracts/run-lifecycle.md §8).
+// The run-lifecycle unions below must match src/yahbah/run_state.py; a pytest
+// (test/yahbah/api/test_frontend_contract.py) fails when they drift.
+
+/** What a run means to the user, derived on the server (derive_outcome). Render this, never `status`. */
+export type Outcome =
+  | "queued"
+  | "in_progress"
+  | "awaiting_review"
+  | "test_only"
+  | "email_verified"
+  | "submitted"
+  | "submit_uncertain"
+  | "failed"
+  | "cancelled"
+  | "expired"
+  | "duplicate";
+
+export const OUTCOMES: readonly Outcome[] = [
+  "queued",
+  "in_progress",
+  "awaiting_review",
+  "test_only",
+  "email_verified",
+  "submitted",
+  "submit_uncertain",
+  "failed",
+  "cancelled",
+  "expired",
+  "duplicate",
+];
+
+/** What the user may do with a run, from allowed_actions(). The UI shows exactly these. */
+export type RunAction =
+  | "cancel"
+  | "retry"
+  | "approve"
+  | "reject"
+  | "confirm_submitted"
+  | "confirm_not_submitted"
+  | "delete";
+
+export type FailureReason =
+  | "form_not_found"
+  | "form_unmapped"
+  | "form_changed"
+  | "job_closed"
+  | "login_wall"
+  | "captcha"
+  | "blocked"
+  | "needs_answer"
+  | "fill_failed"
+  | "possibly_submitted"
+  | "submit_button_not_found"
+  | "claim_denied"
+  | "email_code_entry"
+  | "email_code_timeout"
+  | "submit_unverified"
+  | "browser_error"
+  | "llm_error"
+  | "timeout"
+  | "superseded"
+  | "internal_error"
+  | "cancelled"
+  | "review_rejected"
+  | "review_expired"
+  | "duplicate";
+
+/** Batch 2 adds "auto_reviewed" (the reviewer-model pass). */
+export type SubmissionMode = "testing" | "review";
+
+export type Origin = "manual" | "discovered";
+
+/** Run-lifecycle fields carried by both list rows and run detail. */
+export interface RunLifecycle {
+  status: string; // raw, for dev-mode display only
+  outcome: Outcome;
+  actions: RunAction[];
+  failure_reason: FailureReason | null;
+  submission_mode: SubmissionMode | null; // null: a run from before the contract
+  origin: Origin | null;
+  submit_attempted_at: string | null;
+  review_deadline: string | null;
+  retry_of_run_id: string | null;
+}
+
+export interface ApplicationListItem extends RunLifecycle {
   run_id: string;
   job_url: string;
   company: string | null;
@@ -6,10 +92,9 @@ export interface ApplicationListItem {
   location: string | null;
   company_website: string | null;
   ats_type: string;
-  status: string;
   current_state: string | null;
+  review_round: number | null;
   match_score: number | null;
-  is_test_run: boolean;
   error_message: string | null;
   email_confirmed_at: string | null;
   created_at: string;
@@ -25,11 +110,7 @@ export interface ApplicationListResponse {
 }
 
 export interface ApplicationStats {
-  pending: number;
-  running: number;
-  completed: number;
-  failed: number;
-  duplicate: number;
+  counts: Record<Outcome, number>;
   total: number;
 }
 
@@ -51,25 +132,74 @@ export interface JobPostingInfo {
   ats_type: string;
 }
 
-export interface RunDetail {
+export interface RunDetail extends RunLifecycle {
   id: string;
   job_url: string;
-  status: string;
   current_state: string | null;
   temporal_workflow_id: string | null;
   account_email: string | null;
   error_message: string | null;
   match_score: number | null;
   match_rationale: string | null;
-  is_test_run: boolean;
   tracking_url: string | null;
   confirmation_html: string | null;
-  submit_attempted_at: string | null;
   email_confirmed_at: string | null;
+  review_round?: number | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
   job_posting: JobPostingInfo | null;
+}
+
+/** One row of the `submitted_values` fill evidence (§8): what was intended, typed, and read back. */
+export interface FillEvidenceRow {
+  key: string;
+  label: string;
+  type: string;
+  required: boolean;
+  options: string[];
+  answer: string | null;
+  /** known-answer key | profile key | resume | cover_letter | custom | skip; null: not mapped */
+  source: string | null;
+  /** Stored keys / profile fields backing the answer. */
+  basis: string[];
+  /** Model-written prose (open-ended questions), not a stored fact. */
+  generated: boolean;
+  written: string | null;
+  page_value: string | null;
+  ok: boolean;
+}
+
+export interface ReviewPayload {
+  run_id: string;
+  status: string;
+  submission_mode: SubmissionMode | null;
+  review_round: number;
+  review_deadline: string | null;
+  job: { title: string | null; company: string | null; url: string };
+  answers: FillEvidenceRow[];
+  new_fields: FillEvidenceRow[];
+  screenshot_artifact_id: string | null;
+  cover_letter: { text: string | null; artifact_id: string | null } | null;
+}
+
+/** Effective runtime settings: the server fills in fail-closed defaults. */
+export interface RuntimeSettings {
+  submission_mode: SubmissionMode;
+  review_window_hours: number;
+}
+
+/** The §8 error body's `detail`. */
+export interface ApiErrorDetail {
+  code: string;
+  message: string;
+  run_id?: string | null;
+}
+
+export interface ActionResponse {
+  success: boolean;
+  message: string;
+  run_id?: string | null;
 }
 
 export interface Step {
@@ -106,20 +236,6 @@ export interface EnqueueJobResponse {
   job_url: string;
 }
 
-export type ApplicationStatus =
-  | "PENDING"
-  | "RUNNING"
-  | "COMPLETED"
-  | "FAILED"
-  | "DUPLICATE";
-
-export interface FieldMapping {
-  form_label: string;
-  mapped_to: string;
-  value: string;
-  confidence: number;
-}
-
 export interface ScheduledJobItem {
   id: string;
   job_url: string;
@@ -152,10 +268,3 @@ export interface ScheduledStats {
   promoted: number;
   total: number;
 }
-
-export type ScheduledJobStatus =
-  | "SCHEDULED"
-  | "APPROVED"
-  | "SKIPPED"
-  | "PROMOTED"
-  | "EXPIRED";

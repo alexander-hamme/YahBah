@@ -262,7 +262,8 @@ def api(monkeypatch):
 async def test_post_jobs_rejects_unsafe_urls(api, url):
     async with api.client as c:
         r = await c.post("/jobs", json={"job_url": url})
-    assert r.status_code == 422 and "URL not allowed" in r.json()["detail"]
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "invalid_url"
+    assert "URL not allowed" in r.json()["detail"]["message"]
     assert api.submitted == []
 
 
@@ -270,7 +271,8 @@ async def test_post_jobs_rejects_unsafe_urls(api, url):
 async def test_post_scheduled_rejects_unsafe_urls(api, url):
     async with api.client as c:
         r = await c.post("/scheduled", json={"job_url": url})
-    assert r.status_code == 422 and "URL not allowed" in r.json()["detail"]
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "invalid_url"
+    assert "URL not allowed" in r.json()["detail"]["message"]
 
 
 async def test_promoting_a_stored_unsafe_url_is_refused(api):

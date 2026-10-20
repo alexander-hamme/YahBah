@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 import pytest
 
 from harness.api import FakeTemporal, api_client
-from harness.contract import defect
 
 NOW = datetime.now(timezone.utc)
 
@@ -19,7 +18,6 @@ async def _uncertain_with_claim(db):
     return posting, run_id
 
 
-@defect("contract §6", 3, "there is no confirm-submitted route: an uncertain run can't be resolved")
 async def test_confirm_submitted_completes_an_uncertain_run(db) -> None:
     _, run_id = await _uncertain_with_claim(db)
     async with api_client(FakeTemporal()) as client:
@@ -28,7 +26,6 @@ async def test_confirm_submitted_completes_an_uncertain_run(db) -> None:
     assert (await db.run(run_id))["status"] == "COMPLETED"
 
 
-@defect("contract §6", 3, "there is no confirm-not-submitted route: an uncertain posting can never be applied to again")
 async def test_confirm_not_submitted_fails_the_run_and_releases_the_posting(db) -> None:
     posting, run_id = await _uncertain_with_claim(db)
     async with api_client(FakeTemporal()) as client:
@@ -39,7 +36,6 @@ async def test_confirm_not_submitted_fails_the_run_and_releases_the_posting(db) 
     assert await db.fetchall("SELECT * FROM submission_claim WHERE posting_key = :k", k=str(posting)) == []
 
 
-@defect("contract §1, §6", 3, "there are no confirm routes, so nothing fences them on SUBMIT_UNCERTAIN")
 @pytest.mark.parametrize("route", ["confirm-submitted", "confirm-not-submitted"])
 @pytest.mark.parametrize("status", ["RUNNING", "AWAITING_REVIEW", "FAILED"])
 async def test_confirming_a_run_that_is_not_uncertain_changes_nothing(db, route, status) -> None:
@@ -68,7 +64,6 @@ ACTION_CASES = {
 }
 
 
-@defect("contract §8", 3, "run responses carry no `actions`; the UI derives eligibility from status itself")
 @pytest.mark.parametrize("case", ACTION_CASES)
 async def test_run_detail_offers_only_the_allowed_actions(db, case) -> None:
     seed, offered, withheld = ACTION_CASES[case]
@@ -81,7 +76,6 @@ async def test_run_detail_offers_only_the_allowed_actions(db, case) -> None:
     assert offered <= actions and not (withheld & actions), f"actions {sorted(actions)}"
 
 
-@defect("contract §8 / A6", 3, "HTML artifacts download as text/html: job-site markup runs in the dashboard's origin")
 async def test_html_artifacts_download_as_sandboxed_plain_text(db, tmp_path) -> None:
     run_id = await db.seed_run(status="COMPLETED")
     page = tmp_path / "confirmation.html"

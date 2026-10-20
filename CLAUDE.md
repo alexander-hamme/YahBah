@@ -21,8 +21,8 @@ Yahbah is an Autonomous job-application system: job URL in, form filled and subm
 
 
 ## Commands
-- Deps: `uv sync`. Tests: `uv run pytest` (offline, about a minute). Markers `browser` (headless Chrome), `db` (disposable Postgres via `TEST_DATABASE_URL`, default `postgresql+psycopg://yahbah_test@localhost/postgres`), `temporal` (local dev server), `live_llm` (real models, opt-in via `-m live_llm`); skip with e.g. `-m "not browser"`. Shared harness in `test/harness/`, safety invariants in `test/invariants/`.
-- Frontend checks: `cd frontend && npm test && npx tsc --noEmit`; `npm run lint` too (it still reports 2 older errors).
+- Deps: `uv sync`. Tests: `uv run pytest` (offline, parallel via pytest-xdist, about 35 s; leaves out `e2e`, the C7 whole-run gate through Temporal and Chrome). `--complete` includes it; `-n 0` runs serially for debugging. Markers `slow` (real timeouts), `browser` (headless Chrome), `db` (disposable Postgres via `TEST_DATABASE_URL`, default `postgresql+psycopg://yahbah_test@localhost/postgres`), `temporal` (local dev server), `live_llm` (real models, opt-in via `-m live_llm`); skip with e.g. `-m "not browser"`. Shared harness in `test/harness/`, safety invariants in `test/invariants/`.
+- Frontend checks: `cd frontend && npm test && npx tsc --noEmit && npm run lint` (all clean; keep them so).
 - For full app, Ask the user to Run: `temporal server start-dev --db-filename ~/.temporal/yahbah.db` (persistent; `mkdir -p ~/.temporal` first); `uv run uvicorn yahbah.api.main:app --reload --port 8000`; `uv run python -m yahbah.worker`.
 - Debug one URL without Temporal: `uv run python scripts/run_pipeline.py <url>` (does not submit unless `--submit`).
 - Migrations: `uv run alembic upgrade head` (same `.env` role as the app; `yahbah_app` owns the DB and tables).
@@ -31,6 +31,7 @@ Yahbah is an Autonomous job-application system: job URL in, form filled and subm
 - Async-first; psycopg3; no over-engineering.
 - Browser automation: deterministic code first, then one model call, then an agent loop; verify each tier in code.
 - Job Portal / Board-specific logic goes in `src/yahbah/agent/boards.py`, not generic code.
+- Run states, the review gate (`submission_mode`: `review` by default, fail closed), duplicate protection and the submit claim are defined in `docs/wiki/contracts/run-lifecycle.md` (authoritative; main session owns changes) and `src/yahbah/run_state.py`.
 - Never read or copy secrets (`.env`, `config/personal*.yaml`, `credentials/`) into code or docs.
 - Frontend: read `frontend/AGENTS.md` before writing Next.js code.
 - `README.md` is the human-facing setup/run guide (rewritten for the revamp); depth lives in the wiki.

@@ -138,6 +138,7 @@ class MapAnswersInput:
     form_schema_dict: dict   # FormSchema serialized to dict
     job_description: str = ""
     account_email: str | None = None  # alias to use as the form's email
+    job_location: str | None = None   # decides which country unscoped authorization questions are about
 
 
 @dataclass
@@ -169,27 +170,50 @@ class FillInput:
     cover_letter_path: str | None
     cover_letter_text: str | None = None
     account_email: str | None = None
+    job_location: str | None = None
+    review_round: int = 1  # the review round this fill's evidence is for
+    # Re-fill after a review approval: exactly the approved mappings (no new model mapping), and the
+    # browser stays open for SUBMIT unless a required field without an approved answer appeared.
+    refill: bool = False
 
 
 @dataclass
 class FillOutput:
-    testing_mode: bool          # True: filled but not submitted; the run ends here
     form_schema_dict: dict      # including fields that appeared while filling
     field_mappings: list[dict]
     written: dict[str, str]     # key -> what was written/chosen (the submit gate checks the page against it)
+    # Re-fill only: fields that appeared without an approved answer (rows shaped like schema fields)
+    unmapped_new_fields: list[dict] = field(default_factory=list)
+    # Re-fill only: what fields without an approved answer showed after code's fill, before any agent ran
+    # (agent.fill.FillContext.baseline; shape owned by agent/fill.py). SUBMIT checks the page against it.
+    baseline: dict | None = None
+
+
+@dataclass
+class MapNewFieldsInput:
+    """Fields that appeared on a re-fill without an approved answer: mapped for the next review round."""
+    run_id: str
+    fields: list[dict]          # rows shaped like schema fields (FillOutput.unmapped_new_fields)
+    approved_mappings: list[dict]
+    job_description: str
+    review_round: int           # the round they are reviewed in
+    account_email: str | None = None
+    job_location: str | None = None
 
 
 @dataclass
 class SubmitInput:
     run_id: str
     job_url: str
-    form_schema_dict: dict
-    field_mappings: list[dict]
+    form_schema_dict: dict      # as filled (FillOutput.form_schema_dict)
+    field_mappings: list[dict]  # the approved mappings
     written: dict[str, str]
     job_description: str
     cover_letter_path: str | None
     cover_letter_text: str | None
     account_email: str
+    mapped_form_dict: dict | None = None  # the MAP_FORM schema: a re-opened form is re-filled from it
+    baseline: dict | None = None  # FillOutput.baseline of the approved re-fill
 
 
 @dataclass

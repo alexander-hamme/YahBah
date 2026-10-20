@@ -7,7 +7,6 @@ by the server (`submit` events).
 import pytest
 
 from harness.browser import load
-from harness.contract import defect
 from harness.forms import Claim, cap_submit_waits, filled_form, page_count, page_judge, submit
 from harness.llm import verdict
 from yahbah.agent.boards import GENERIC
@@ -39,7 +38,6 @@ async def clicks(browser, fixture_server) -> tuple[int, int]:
     return on_page, await fixture_server.wait_events("submit", on_page, timeout=1.0)
 
 
-@defect("A3", 4, "a slow success is judged needs_fix after the fixed 3 s wait, and submit is clicked again")
 async def test_a_slow_success_gets_exactly_one_click_and_succeeds(browser, fixture_server, llm, mock_ats, monkeypatch) -> None:
     import asyncio
 
@@ -56,7 +54,6 @@ async def test_a_slow_success_gets_exactly_one_click_and_succeeds(browser, fixtu
     assert claim.calls == 1
 
 
-@defect("A3", 4, "'submitted' is accepted while the form, its fields and the submit button are all still there")
 async def test_a_click_that_did_nothing_is_not_success_even_if_the_judge_says_submitted(browser, fixture_server, llm, mock_ats) -> None:
     ctx = await mock_ats("success=never")
     llm.on(*JUDGE, handler=lambda call: verdict("submitted", reasoning="The application appears to be submitted."))
@@ -66,7 +63,6 @@ async def test_a_click_that_did_nothing_is_not_success_even_if_the_judge_says_su
     assert await clicks(browser, fixture_server) == (1, 1)
 
 
-@defect("A3", 4, "a needs_fix verdict re-clicks submit with no code-detected error on the page")
 async def test_needs_fix_without_code_detected_errors_does_not_click_again(browser, fixture_server, llm, mock_ats) -> None:
     ctx = await mock_ats("success=never")
     llm.on(*JUDGE, handler=lambda call: verdict("needs_fix", ["The phone number format looks invalid."]))
@@ -75,7 +71,6 @@ async def test_needs_fix_without_code_detected_errors_does_not_click_again(brows
     assert await clicks(browser, fixture_server) == (1, 1)
 
 
-@defect("A3", 4, "page text ('thank you') decides success: the judge reads it and code doesn't check")
 async def test_thank_you_text_on_an_unsubmitted_form_is_not_success(browser, fixture_server, llm, mock_ats) -> None:
     ctx = await mock_ats("success=never&banner=thanks")
     llm.on(*JUDGE, handler=lambda call: verdict(
@@ -86,7 +81,6 @@ async def test_thank_you_text_on_an_unsubmitted_form_is_not_success(browser, fix
     assert await clicks(browser, fixture_server) == (1, 1)
 
 
-@defect("A3", 4, "the last round's re-click is never checked: submit_unverified is raised without looking")
 async def test_the_final_rounds_click_is_followed_by_an_evidence_pass(browser, fixture_server, llm, mock_ats) -> None:
     """Round 1 sees a code-detected validation error (a legitimate re-click); the second click succeeds."""
     ctx = await mock_ats("success=nth:2&errors=first")
@@ -96,7 +90,6 @@ async def test_the_final_rounds_click_is_followed_by_an_evidence_pass(browser, f
     assert await clicks(browser, fixture_server) == (2, 2)
 
 
-@defect("contract §6", 4, "the submission is recorded before the submit button is located")
 async def test_no_claim_is_made_when_the_submit_button_is_not_found(browser, fixture_server, llm) -> None:
     await load(browser, fixture_server.url("synthetic/no_cta.html"))
     ctx = await filled_form(browser, {"First name": "Jane", "Email": "jane.doe@example.test"})
@@ -108,7 +101,6 @@ async def test_no_claim_is_made_when_the_submit_button_is_not_found(browser, fix
     assert fixture_server.events_named("click") == []
 
 
-@defect("contract §6", 4, "submit_and_verify clicks whether or not the submission claim was granted")
 async def test_a_denied_claim_means_no_click(browser, fixture_server, llm, mock_ats) -> None:
     ctx = await mock_ats("success=instant")
     llm.on(*JUDGE, handler=page_judge(browser))  # only reached if it clicks anyway

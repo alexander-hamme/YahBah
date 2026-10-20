@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import (
-    DateTime, ForeignKey, Index, Integer, JSON, String, Text, Boolean, Float,
+    DateTime, ForeignKey, Index, Integer, JSON, String, Text, Boolean, Float, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -71,20 +71,35 @@ class ApplicationRun(Base):
     )
     job_url: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, default="PENDING")
-    # PENDING | RUNNING | COMPLETED | FAILED
+    # yahbah.run_state.RunStatus (docs/wiki/contracts/run-lifecycle.md §1); written only by the run's
+    # own workflow activities, fenced on temporal_workflow_id (workflows/activities/db_ops.py)
     current_state: Mapped[str | None] = mapped_column(String)
-    # workflow stage: QUEUED | DISCOVER | MAP_FORM | EXTRACT_METADATA | CHECK_DUPLICATE
-    # | MAP_ANSWERS | GENERATE_COVER_LETTER | FILL | SUBMIT | DONE (workflows/application.py)
+    # workflow stage: QUEUED | STARTING | DISCOVER | MAP_FORM | EXTRACT_METADATA | CHECK_DUPLICATE
+    # | MAP_ANSWERS | GENERATE_COVER_LETTER | FILL | REVIEW | SUBMIT | DONE (workflows/application.py)
+    failure_reason: Mapped[str | None] = mapped_column(String)  # run_state.FailureReason; every terminal status but COMPLETED
+    submission_mode: Mapped[str | None] = mapped_column(String)  # run_state.SubmissionMode at creation; NULL = legacy
+    origin: Mapped[str | None] = mapped_column(String)  # run_state.Origin: manual | discovered
+    review_round: Mapped[int | None] = mapped_column(Integer)  # 1, 2, ... per entry into AWAITING_REVIEW
+    review_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retry_of_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("application_run.id", ondelete="SET NULL")
+    )
     temporal_workflow_id: Mapped[str | None] = mapped_column(String)
+    # The attempt lease (contract §7): (workflow, activity sequence, attempt) of the activity attempt that
+    # acts on the run now. Taken at every activity start (workflows/activities/lease.py), never by an
+    # older attempt; fenced writes and the submission claim require it.
+    lease_workflow_id: Mapped[str | None] = mapped_column(String)
+    lease_activity_seq: Mapped[int | None] = mapped_column(Integer)
+    lease_attempt: Mapped[int | None] = mapped_column(Integer)
     account_email: Mapped[str | None] = mapped_column(String)
     account_password: Mapped[str | None] = mapped_column(String)
     error_message: Mapped[str | None] = mapped_column(Text)
     match_score: Mapped[int | None] = mapped_column()
     match_rationale: Mapped[str | None] = mapped_column(Text)
-    is_test_run: Mapped[bool] = mapped_column(default=False)
     tracking_url: Mapped[str | None] = mapped_column(String)
     confirmation_html: Mapped[str | None] = mapped_column(Text)
-    # Set right BEFORE the first submit click: a retry that finds it set only verifies, never re-submits.
+    # Set with the submission claim, right BEFORE the first submit click (run_state.claim_submission),
+    # or by the agent tripwire (run_state.record_possible_submission). Set and unverified = SUBMIT_UNCERTAIN.
     submit_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # A confirmation email ("thank you for applying") arrived at this run's alias.
     email_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -96,6 +111,12 @@ class ApplicationRun(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        # One active run per posting (contract §7)
+        Index("uq_application_run_active_posting", "job_posting_id", unique=True,
+              postgresql_where=text("status IN ('PENDING', 'RUNNING', 'AWAITING_REVIEW')")),
+    )
 
     job_posting: Mapped[JobPosting] = relationship(back_populates="runs")
     steps: Mapped[list["ApplicationStep"]] = relationship(
@@ -217,7 +238,7 @@ class ScheduledJob(Base):
         DateTime(timezone=True), nullable=False
     )
     promoted_run_id: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("application_run.id")
+        PG_UUID(as_uuid=True), ForeignKey("application_run.id", ondelete="SET NULL")
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
@@ -230,6 +251,24 @@ class ScheduledJob(Base):
         Index("ix_scheduled_job_status", "status"),
         Index("ix_scheduled_job_promote_after", "promote_after"),
     )
+
+
+# ---------------------------------------------------------------------------
+# submission_claim — one per posting that may have been submitted (contract §6)
+# ---------------------------------------------------------------------------
+
+class SubmissionClaim(Base):
+    """Taken atomically with submit_attempted_at right before the first submit click
+    (run_state.claim_submission). It outlives its run, so deleting a run never removes duplicate
+    protection; only confirm-not-submitted releases it."""
+
+    __tablename__ = "submission_claim"
+
+    posting_key: Mapped[str] = mapped_column(String, primary_key=True)  # batch 1: str(job_posting_id)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("application_run.id", ondelete="SET NULL")
+    )
+    claimed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 # ---------------------------------------------------------------------------
@@ -254,16 +293,24 @@ class GmailCheckpoint(Base):
 # ---------------------------------------------------------------------------
 
 class AnswerCache(Base):
-    """Answers to custom form questions that don't depend on the specific job
-    (e.g. "Are you willing to relocate?"), so the prose model answers each only once."""
+    """Grounded factual answers to custom form questions with their provenance, reused only while
+    it still holds (yahbah.llm.answer_cache). Debug runs (scripts/run_pipeline.py) use namespace 'debug'."""
 
     __tablename__ = "answer_cache"
 
+    namespace: Mapped[str] = mapped_column(String, primary_key=True, default="live")
     # sha256 of the normalized question + sorted normalized options (first 32 hex chars)
     question_key: Mapped[str] = mapped_column(String, primary_key=True)
     question: Mapped[str] = mapped_column(Text, nullable=False)
     options: Mapped[list[str]] = mapped_column(JSONB, default=list)
     answer: Mapped[str] = mapped_column(Text, nullable=False)
+    basis: Mapped[list[str]] = mapped_column(JSONB, default=list)  # stored-answer keys / profile fields cited
+    basis_hash: Mapped[str] = mapped_column(String, nullable=False)  # their values + the stored-answer key set
+    model: Mapped[str] = mapped_column(String, nullable=False)
+    prompt_hash: Mapped[str] = mapped_column(String, nullable=False)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("application_run.id", ondelete="SET NULL")
+    )
     hits: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow

@@ -1,4 +1,4 @@
-testing_mode: false
+submission_mode: review
 gmail_status_polling_enabled: false
 gmail_status_polling_interval_minutes: 10
 gmail_folder_label: YahBah

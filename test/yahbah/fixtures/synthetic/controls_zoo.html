@@ -1,0 +1,68 @@
+<!doctype html>
+<!--
+  Controls of every kind for the submit/advance classifier (harness fixture; agent/controls.py).
+  Each control carries data-expect="submit|advance|other": what the classifier must say about a click on it
+  (and on anything inside it). It is a form page: three text fields.
+  Nothing here submits; clicks only report GET /__event?name=clicked&id=<id>.
+-->
+<html lang="en"><head><meta charset="utf-8"><title>Controls</title></head>
+<body>
+<main>
+  <h1>Controls</h1>
+  <form id="application" novalidate onsubmit="return false">
+    <div><label for="first">First name *</label> <input id="first" name="first" required></div>
+    <div><label for="last">Last name *</label> <input id="last" name="last" required></div>
+    <div><label for="email">Email *</label> <input id="email" name="email" type="email" required></div>
+    <div><label for="notes">Notes</label> <textarea id="notes" name="notes"></textarea></div>
+    <div>
+      <input id="combo" role="combobox" aria-expanded="false" aria-label="Country">
+      <input id="combo-open" role="combobox" aria-expanded="true" aria-label="Open country list">
+    </div>
+    <div id="menu" role="listbox">
+      <div role="option" id="opt-continue" data-expect="other">Yes, continue</div>
+      <div role="option" id="opt-next" data-expect="other">Next</div>
+    </div>
+    <label for="agree"><input type="checkbox" id="agree" data-expect="other"> I agree to send my data</label>
+    <label for="radio-submit"><input type="radio" id="radio-submit" name="r" data-expect="other"> Submit later</label>
+    <select id="sel" data-expect="other"><option>Submit</option><option>Next</option></select>
+
+    <p>
+      <button type="submit" id="native-submit" data-expect="submit">Submit application</button>
+      <button id="untyped" data-expect="submit">Send</button>
+      <input type="submit" id="input-submit" value="Apply" data-expect="submit">
+      <button type="submit" id="unknown-label" data-expect="submit">Search</button>
+      <button type="submit" id="native-next" data-expect="advance">Next</button>
+      <button type="submit" id="native-save" data-expect="advance">Save and continue</button>
+      <button type="button" id="b-submit" data-expect="submit">Submit</button>
+      <button type="button" id="b-icon" aria-label="Submit application" data-expect="submit"><svg width="8" height="8"></svg></button>
+      <button type="button" id="b-nested" data-expect="submit"><span id="b-nested-span">Submit</span></button>
+      <button type="button" id="b-continue" data-expect="advance">Continue</button>
+      <button type="button" id="b-review" data-expect="advance">Review</button>
+      <button type="button" id="b-skip" data-expect="advance">Skip this step</button>
+      <button type="button" id="b-back" data-expect="other">Back</button>
+      <button type="button" id="b-attach" data-expect="other">Attach</button>
+      <button type="button" id="b-flyout" aria-label="Toggle flyout" data-expect="other">v</button>
+      <button type="button" id="b-cancel" data-expect="other">Cancel</button>
+      <button type="button" id="b-month" aria-label="Next month" data-expect="other">&gt;</button>
+      <button type="button" id="b-add" data-expect="other">Add another</button>
+      <button type="reset" id="b-reset" data-expect="other">Reset</button>
+      <button type="button" id="b-long" data-expect="other">Please read all of the following terms and conditions carefully before you decide whether to submit anything</button>
+      <button type="button" id="b-disabled" disabled data-expect="submit">Submit</button>
+      <div role="button" tabindex="0" id="div-submit" onclick="" data-expect="submit">Submit application</div>
+      <div role="button" tabindex="0" id="div-next" onclick="" data-expect="advance">Next step</div>
+      <div id="onclick-div" onclick="" data-expect="submit">Finish</div>
+      <a href="#" id="link-apply" data-expect="submit">Apply now</a>
+      <a href="job.html" id="link-privacy" data-expect="other">Privacy policy</a>
+      <a href="job.html" id="link-back" data-expect="other">Back to job description</a>
+    </p>
+  </form>
+  <div id="outside"><button type="button" id="out-submit" data-expect="submit">Submit</button></div>
+</main>
+<script>
+document.addEventListener('click', (e) => {
+  const id = e.target.id || (e.target.closest('[id]') || {}).id || '';
+  fetch(`/__event?name=clicked&id=${id}`, { keepalive: true }).catch(() => {});
+  if (e.target.closest('a[href="#"]')) e.preventDefault();
+});
+</script>
+</body></html>

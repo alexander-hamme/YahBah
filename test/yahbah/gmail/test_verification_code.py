@@ -88,8 +88,11 @@ def test_heading_code_with_the_keyword_only_in_the_subject():
 # ── Choosing among emails ────────────────────────────────────────────────────
 
 def message(message_id: str, *, subject: str, html: str, age_seconds: int = 0) -> dict:
+    """`age_seconds` is how old the email is when it is *read* (FakeGmail stamps internalDate then), so a suite
+    that takes minutes to reach a test does not age the module-level messages out of the search window."""
     return {
         "id": message_id,
+        "age_seconds": age_seconds,
         "internalDate": str(int((time.time() - age_seconds) * 1000)),
         "payload": {
             "mimeType": "text/html",
@@ -167,7 +170,8 @@ class FakeGmail(GmailClient):
         return [{"id": m["id"]} for m in self.messages]
 
     async def _get_message(self, message_id):
-        return next(m for m in self.messages if m["id"] == message_id)
+        m = next(m for m in self.messages if m["id"] == message_id)
+        return {**m, "internalDate": str(int((time.time() - m["age_seconds"]) * 1000))}
 
     async def _get_or_create_label(self, label_name):
         return f"id:{label_name}"
@@ -232,17 +236,6 @@ async def test_finalize_applies_the_configured_action_to_that_message_only(code_
     code_action["gmail_verification_code_action"] = "nothing"
     await gmail.finalize_code_message("m-code")
     assert gmail.changes[-1] == ("label", "m-code", "id:YahBah/Parsed")
-
-
-async def test_fetch_keeps_todays_behaviour(llm, no_wait, code_action, logs):
-    gmail = FakeGmail([CONFIRMATION, CODE])
-
-    code = await gmail.fetch_verification_code("me+acme1@example.com", since_epoch=int(time.time()) - 30,
-                                               timeout_seconds=7, poll_interval=7)
-
-    assert code == "739201"
-    assert gmail.changes == [("modify", "m-code", ["id:YahBah/Parsed", "id:YahBah"], ["INBOX"])]
-    assert not any("739201" in line for line in logs)
 
 
 async def test_excluded_message_is_skipped(llm, no_wait):

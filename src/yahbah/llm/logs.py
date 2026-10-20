@@ -20,6 +20,7 @@ from yahbah.config import settings
 LOG_CAP_BYTES = 250 * 1024 * 1024
 
 _current: ContextVar[Path | None] = ContextVar("llm_log_dir", default=None)
+_run_id: ContextVar[str | None] = ContextVar("llm_run_id", default=None)
 _cap_warned = False
 _total_bytes = 0  # running estimate of all LLM log bytes, recomputed on each prune
 
@@ -56,11 +57,17 @@ def use_run_log_dir(run_id: str) -> Path:
         _prune()
         path.mkdir(parents=True)
     _current.set(path)
+    _run_id.set(run_id)
     return path
 
 
 def current_log_dir() -> Path | None:
     return _current.get()
+
+
+def current_run_id() -> str | None:
+    """The run the current task works for (set with its log dir), e.g. for answer-cache provenance."""
+    return _run_id.get()
 
 
 def append(filename: str, rec: dict) -> None:

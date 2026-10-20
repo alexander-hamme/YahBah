@@ -3,15 +3,60 @@
 Running record of architectural, structural, decision-making and workflow-paradigm changes, newest first. Not a commit log: no function- or bug-level detail (`git log` has that).
 
 - **Practice:** every architecturally meaningful change (structure, interfaces, decisions, workflow paradigm) adds an entry when it lands; each batch/wave close-out adds one. Keep entries terse. Maintained by `project-knowledge-maintainer`, reviewed by the main session.
-- **Entry shape:** What / Why / Governs (commit, report or contract) / Supersedes. Short SHAs are as of 2026-10-19; `browser-use` history has been rewritten before (the reflog shows amends; `development.md` cites `d1965aa`, now unreachable, with the same subject as `7f13f32`), so if a SHA does not resolve, search `git log --all` by commit subject.
+- **Entry shape:** What / Why / Governs (commit, report or contract) / Supersedes. Short SHAs are as of 2026-10-20; `browser-use` history has been rewritten before (the reflog shows amends; `development.md` cites `d1965aa`, now unreachable, with the same subject as `7f13f32`), so if a SHA does not resolve, search `git log --all` by commit subject.
 - **Evidence:** entries from 2026-10-17 on are verified against the tree and the docs they cite. Older entries are reconstructed from git history; claims about motive that no commit message or doc states are marked *(inferred)*.
 - **State vs. history:** this page records why things changed. For how things work now, read the module pages; for agreed targets, the contracts.
 
 ---
 
+## 2026-10-20: batch 1, wave 2 + close-out
+
+**State:** wave 1 is committed (`d04bc45`). Wave 2 has landed in the working tree on top of it, **uncommitted**, and is QA-verified. Migrations 0018 and 0019 are in the tree and have not been applied to the dev database. Verified on 2026-10-20: the complete Python suite (`pytest -n auto --dist load --complete`) gives 848 passed, 1 skipped in 43 s (serial default about 4 min); frontend 64 tests, `tsc` and `eslint` clean. All 91 wave-1 strict `xfail`s were flipped, and the C7 acceptance gate passes.
+
+### What changed
+- **Run lifecycle and review gate (task 3).** The contract is implemented: [contracts/run-lifecycle.md](contracts/run-lifecycle.md) is now authoritative, not a target.
+  - **Vocabulary:** statuses `AWAITING_REVIEW`, `SUBMIT_UNCERTAIN`, `EXPIRED`; a `failure_reason` column; `submission_mode` (`testing | review`, failing closed to `review`) replaces `testing_mode`/`is_test_run`; `origin`; server-derived `outcome` and `actions`.
+  - **Review gate:** the workflow fills, saves evidence, closes the browser and waits in `AWAITING_REVIEW` (default 48 h). An approval re-fills exactly the approved answers and submits; a required field nobody approved sends the run back for another review round; rejection and expiry submit nothing.
+  - **Duplicate protection:** `possibly_applied()` at every dedup site, matching by canonical URL; an atomic `claim_submission()` backed by the `submission_claim` table, which outlives its run.
+  - **Durability:** fenced status writes, a DB-level attempt lease (`RunLeaseInterceptor`) and `SessionRegistry` ownership, heartbeats, and resume on restart (no RUNNING-to-FAILED sweep).
+  - **Retry and cancel:** retry creates a new linked run; cancel goes through the workflow, with API reconciliation when the workflow is gone; confirm-submitted and confirm-not-submitted resolve `SUBMIT_UNCERTAIN`.
+  - **Evidence and API:** per-attempt evidence files and a `submit_evidence.jsonl` artifact; one error-body shape; HTML artifacts served as `text/plain` with a CSP sandbox; only `jobs.py` creates runs.
+- **Submit boundary (task 4).**
+  - **Success** is decided by structural page evidence and the model only advises; a pending state replaces fixed sleeps; a re-click happens only on code-detected errors or code inputs; an unproven submit raises `submit_unverified`, never a flagged result.
+  - **The claim** is taken after the submit button is located.
+  - **Agents cannot submit:** `GuardedTools` uses one submit/advance classifier (`agent/controls.py`) for every agent phase, through shadow DOM and frames, covering click, input, keys, focus and coordinate clicks. A post-agent tripwire records a possible submission, also when the agent run is cancelled.
+  - **Fields:** `unmapped_new_fields` feeds the review loop; the §8 evidence rows; a locked, approved re-fill; the `match_option` whole-word fix.
+  - **Verification codes:** `wait_for_verification_code` plus finalize-after-acceptance; `fetch_verification_code` is deleted.
+- **Answer integrity (task 5).** Factual screening questions are answered only from typed stored facts with jurisdiction keys; otherwise `NeedsAnswer`. Open-ended questions are always answered and labelled `generated`. Answers cite keys (`basis`), not quotes, and the job description never counts as evidence. The answer cache holds only grounded facts, with provenance (migration 0019 purged legacy rows). `llm/profile.py` is the one profile and serializer; prompts and stored answers are re-read on file change; a cover letter is generated only when the form asks for one. An opt-in `live_llm` eval (53 items) met every target.
+- **Dashboard and API (task 6b).** A `/review` queue and review panel (approve unlocks only after the user ticks the box); a mode control for new runs; a UI driven entirely by `outcome` and `actions`; an uncertain-run resolution panel and nav count; validated, effective settings; the outcome filter, sort and stats; a test that fails when the TypeScript unions drift from `run_state.py`.
+- **QA and tooling.** An independent review found 10 defects plus 1 follow-up, all fixed (`test/invariants/batch1_review/`). `slow` and `e2e` markers (left out of a bare `pytest`), a `--complete` option and a parallel path; see [development](development.md).
+
+### Decisions recorded (main session)
+1. **Contract amendments:**
+   - the agent tripwire always ends `SUBMIT_UNCERTAIN` and is never retried;
+   - submit evidence is recorded per round;
+   - the attempt lease (§7);
+   - confirm-not-submitted clears `submit_attempted_at`, so FAILED still means "never attempted";
+   - `PENDING` means waiting for a run slot, including after an approval;
+   - run-creation and delete rules, the Temporal end states, and the error-code list.
+2. **Approved-state baseline.** What fields without an approved answer showed after code's fill is carried from fill to submit (`FillOutput.baseline` to `SubmitInput.baseline`); a locked submit without one fails closed. *Why:* otherwise an agent's write is indistinguishable from a starting value.
+3. **Mode control is two-way** (Testing | Review). `auto_reviewed` arrives with the batch-2 reviewer pass.
+4. **Legacy read-side shim kept, and labelled:** the dashboard still reads the 27 pre-0018 `submitted_values` artifacts (`normalizeEvidenceRow` in `frontend/src/components/review/answer-evidence.tsx`; runs without a `submission_mode` show as "Legacy run"). Remove it if those runs are deleted.
+5. **Accepted remaining risks:**
+   - a stale attempt can claim once in the window before its retry takes the lease, but never makes a second click;
+   - the approve-then-reject race (a reject in that moment is ignored; cancel still works);
+   - the run-slot backlog stalls at about 100 or more waiting runs.
+6. **Open risk: invented STAR incidents** in generated behavioural answers. They are labelled `generated` and visible at review. The mitigation is the batch-2 reviewer pass and an eval judge for invented events.
+
+- **Why:** the audit's safety failures sat at the boundaries between agents, tasks and the DB; wave 2 closes them against the contract and the wave-1 harness.
+- **Governs:** the [contract](contracts/run-lifecycle.md) and the updated module pages ([workflows](modules/workflows.md), [data-model](modules/data-model.md), [agent](modules/agent.md), [llm](modules/llm.md), [api-frontend](modules/api-frontend.md)). Status and follow-ups: the roadmap's "Batch 1 status (2026-10-20)".
+- **Supersedes:** `testing_mode`/`is_test_run`; the worker's RUNNING-to-FAILED sweep; retry-in-place; dedup on `status == COMPLETED` only; `mark_attempted`/`mark_submit_attempted`; the quote-evidence answer check and unprovenanced cache rows; the `status`/`exclude_status` list filters and the status, failed-badge and testing-toggle components. The wave-1 harness bridges for these (including `KNOWN_DRIFT`) are deleted.
+
+---
+
 ## 2026-10-19: batch 1 decisions, contract, wave 1
 
-### Wave 1 close-out (landed in the working tree, uncommitted)
+### Wave 1 close-out (committed in `d04bc45`)
 Three parallel tasks plus main-session groundwork, all verified against the tree: `uv run pytest` gives 240 passed and 91 xfailed in about 67 s; frontend `npm test` 7 passed, `npx tsc --noEmit` clean.
 - **QA harness and invariant suite (task 1).**
   - `test/conftest.py` and `test/harness/` form one shared, offline harness:
@@ -22,20 +67,20 @@ Three parallel tasks plus main-session groundwork, all verified against the tree
     - a Temporal `WorkflowEnvironment` running the real worker with stubbed browser and LLM activities.
   - Markers `browser`, `db`, `temporal`, and opt-in `live_llm`.
   - `test/invariants/` holds 95 tests keyed to the contract and roadmap A2-A5/A7: 91 are strict `xfail` that the wave-2 owners flip, 4 are guards that already hold. The pure `run_state` rules are tested in `test/yahbah/test_run_state.py`. Full suite at close-out: 240 passed, 91 xfailed.
-  - Finding: `job_posting.canonical_url` and `location` exist in the ORM and production DB but in no migration; the harness bridges this (`KNOWN_DRIFT`) until migration 0018 repairs it.
+  - Finding: `job_posting.canonical_url` and `location` exist in the ORM and production DB but in no migration; the harness bridged this (`KNOWN_DRIFT`) until migration 0018 repaired it (wave 2).
 - **Discovery gate (task 2).**
   - Both Gmail pollers do nothing unless their flag is exactly `true`, including the first cycle at startup (the unconditional startup polls are gone).
   - Alert admission: only a job that was scored, at or above `job_alert_min_match_score`, becomes `SCHEDULED`; an unscorable job is `SKIPPED`.
   - Promotion is bounded: `job_alert_max_promotions_per_cycle` (default 5) and `job_alert_max_age_days` (default 14); stale alerts are left alone and stale `SCHEDULED` rows expire.
   - URL intake policy (`url_utils.validate_job_url`, `fetch_public`): public http(s) hosts only, checked on every redirect hop, 2 MiB response cap. It applies at `POST /jobs`, `POST /scheduled` (422), alert links, description fetches and `submit_job_for_application`; the browser agent is not subject to it.
   - Identity: `gh_jid` is kept (it is the job id on company-hosted Greenhouse pages) and `imp_id` is stripped on jobright.ai only.
-  - Verification codes: a structural heuristic replaces "first `<h1>`"; boards declare the code shape (`BoardProfile.email_code_pattern`); `GmailClient.wait_for_verification_code` changes nothing in the mailbox and `finalize_code_message` marks it processed once the page accepted the code. `agent/submit.py` still calls the legacy one-step `fetch_verification_code` until task 4 switches.
+  - Verification codes: a structural heuristic replaces "first `<h1>`"; boards declare the code shape (`BoardProfile.email_code_pattern`); `GmailClient.wait_for_verification_code` changes nothing in the mailbox and `finalize_code_message` marks it processed once the page accepted the code. `agent/submit.py` still called the legacy one-step `fetch_verification_code` at this point; task 4 switched it and deleted the wrapper (wave 2).
 - **Main-session groundwork.** `src/yahbah/run_state.py` is the contract's code skeleton (vocabulary, `derive_outcome`, `allowed_actions`; the DB functions raise `NotImplementedError` until task 3). `FieldMapping` gained `basis` and `generated` (nothing populates them yet). `BROWSER_USE_VERSION_CHECK=false` stops a PyPI query at every Agent start.
 - **Dashboard (task 6, security part).**
   - Job-site HTML is rendered only through `frontend/src/components/untrusted-html-frame.tsx`, a sandboxed iframe with a no-network CSP fed by `frontend/src/lib/untrusted-html.ts`. No component uses `dangerouslySetInnerHTML` any more.
   - `next dev` and `next start` bind 127.0.0.1.
   - The API rejects non-loopback `Host` and `X-Forwarded-Host` headers (`TrustedHostMiddleware` plus a small ASGI check in `src/yahbah/api/main.py`; 13 tests).
-  - Frontend tooling: Vitest with Testing Library, ESLint 9 (flat config; the plugins bundled with `eslint-config-next` do not support ESLint 10), and `frontend/scripts/check-untrusted-html-sandbox.mjs`, a real-browser check that the sandboxed frame runs no script and makes no request. A rules-of-hooks bug in `artifact-viewer.tsx` was fixed. The `@types/node` bump (^20 to ^22) awaits the user's OK. `npm run lint` still reports 2 older errors (`react-hooks/set-state-in-effect`) and 6 warnings.
+  - Frontend tooling: Vitest with Testing Library, ESLint 9 (flat config; the plugins bundled with `eslint-config-next` do not support ESLint 10), and `frontend/scripts/check-untrusted-html-sandbox.mjs`, a real-browser check that the sandboxed frame runs no script and makes no request. A rules-of-hooks bug in `artifact-viewer.tsx` was fixed. The `@types/node` bump (^20 to ^22) awaits the user's OK. `npm run lint` then reported 2 older errors (`react-hooks/set-state-in-effect`) and 6 warnings; it has been clean since wave 2.
 - **Why:** untrusted content must not reach trusted sinks (R5) and the unauthenticated API must not be LAN-reachable (A6). The gate lets the worker start without ingesting months of alerts and launching unreviewed runs. The harness and invariant suite give wave 2 an objective acceptance test.
 - **Governs:** [roadmap](../audits/2026-10-18/roadmap.md) (A1, A6, "First batch" tasks 1, 2, 6) and the contract; test setup in [development](development.md).
 - **Supersedes:** unconditional startup polls and the `<h1>`-only code heuristic; raw HTML injection of scraped content; `next dev` on all interfaces.
@@ -54,8 +99,8 @@ Three parallel tasks plus main-session groundwork, all verified against the tree
   - migrations 0018 and 0019;
   - per-task file ownership.
 - **Why:** the audit's safety failures sat at the boundaries between agents, tasks and the DB, so the boundaries are specified once before parallel work starts.
-- **Governs:** the contract itself (owned by the main session; marked TARGET until batch 1 lands). **Source code still shows current behaviour**; the module pages describe current behaviour and point at the contract where it will change.
-- **Supersedes (when implemented):** `testing_mode`/`is_test_run`, the worker's RUNNING→FAILED sweep, retry-in-place, dedup on `status == COMPLETED` only, `mark_attempted` (replaced by `claim_submission`).
+- **Governs:** the contract itself (owned by the main session). *Update 2026-10-20:* implemented by wave 2 and now authoritative; the module pages describe the implemented behaviour.
+- **Superseded (implemented 2026-10-20):** `testing_mode`/`is_test_run`, the worker's RUNNING→FAILED sweep, retry-in-place, dedup on `status == COMPLETED` only, `mark_attempted` (replaced by `claim_submission`).
 
 ### Decisions resolved
 [roadmap](../audits/2026-10-18/roadmap.md), "Conflicting recommendations: decisions" and "Decisions (resolved 2026-10-19)".

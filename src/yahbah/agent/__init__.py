@@ -15,15 +15,16 @@ tier's output in code before accepting it — the agent gets the last word.
   answers           autofill tokens, profile/known   constrained mapping call; prose      — (needs_answer)
                     values resolved in code          model for custom questions
   fill              per-type executors + retry       option pick when code can't match    fix agent (no submit)
-  submit / verify   gate + page signals in code      verdict call (+ vision if it         fix agent for needs_fix
-                                                     contradicts the page)
+  submit / verify   gate, claim, click, structural   model advice, only when code can't    fix agent after validation
+                    page evidence in code (decides)  settle it (never decides alone)       errors (guarded)
 
-  llm.py       browser-use model clients per role, Crew, Escalator, run_agent
+  llm.py       browser-use model clients per role, Crew, Escalator, run_agent (every agent phase goes through it)
   tools.py     our named tools (form schema, dropdowns, look_at_screen, gated JS), StallTracker
+  controls.py  submit/advance control classifier, submit locator, agent guard (GuardedTools), fix-agent tripwire
   boards.py    per-job-board profiles (detection, embeds, stage hooks, model notes)
   discover.py  open → reach the form → map its fields → job info
-  fill.py      code-first filling by key, read-back verification, fix agent
-  submit.py    gated submit, post-submit verification loop (email codes, fixes)
+  fill.py      code-first filling by key, read-back verification, fix agent, fill evidence rows
+  submit.py    gated submit, claim, structural post-submit evidence loop (email codes, fixes)
   session.py   one browser-use BrowserSession per run
 """
 import os

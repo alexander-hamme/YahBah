@@ -35,6 +35,9 @@ import {
   deleteScheduledJob,
 } from "@/lib/api";
 import type { ScheduledJobItem, ScheduledStats } from "@/lib/types";
+import { ApiError } from "@/lib/api";
+import { asApiError, toast } from "@/lib/toast";
+import { ApiErrorMessage } from "@/components/api-error-message";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Pagination } from "@/components/pagination";
@@ -178,25 +181,28 @@ function StatsCards({
 function AddJobForm() {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<ApiError | null>(null);
   const queryClient = useQueryClient();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!url.trim()) return;
     setLoading(true);
+    setError(null);
     try {
       await addScheduledJob(url.trim());
       setUrl("");
       queryClient.invalidateQueries({ queryKey: ["scheduled"] });
       queryClient.invalidateQueries({ queryKey: ["scheduled-stats"] });
-    } catch {
-      // TODO: toast
+    } catch (err) {
+      setError(asApiError(err));
     } finally {
       setLoading(false);
     }
   }
 
   return (
+    <div className="space-y-2">
     <form onSubmit={handleSubmit} className="flex gap-2">
       <div className="relative flex-1">
         <Plus className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -215,6 +221,8 @@ function AddJobForm() {
         {loading ? "Adding..." : "Add"}
       </Button>
     </form>
+    {error && <ApiErrorMessage error={error} title="Couldn't add that job" />}
+    </div>
   );
 }
 
@@ -315,6 +323,8 @@ function RowActions({
     try {
       await fn();
       onAction();
+    } catch (err) {
+      toast.error(err, "The action failed");
     } finally {
       setLoading(null);
     }

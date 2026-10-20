@@ -3,7 +3,7 @@ POST /jobs creates one (yahbah.jobs.submit_job_for_application), with a FakeTemp
 import pytest
 
 from harness.api import FakeTemporal
-from harness.contract import call_with_supported, defect
+from harness.contract import call_with_supported
 
 
 async def _create_run(db):
@@ -15,7 +15,6 @@ async def _create_run(db):
     return await db.run(run_id), temporal.started[0]["arg"]
 
 
-@defect("contract §3", 3, "runs snapshot no submission_mode, and a missing or invalid setting doesn't mean review")
 @pytest.mark.parametrize("setting", [None, "yolo", "auto_reviewed"], ids=["missing", "invalid", "batch2_value"])
 async def test_a_missing_or_invalid_submission_mode_creates_review_runs(db, runtime_settings, setting) -> None:
     if setting is None:
@@ -27,7 +26,6 @@ async def test_a_missing_or_invalid_submission_mode_creates_review_runs(db, runt
     assert getattr(workflow_input, "submission_mode", None) == "review"
 
 
-@defect("contract §3, §4", 3, "the run's mode and review window aren't snapshotted into the workflow input")
 async def test_mode_origin_and_review_window_are_snapshotted_at_creation(db, runtime_settings) -> None:
     runtime_settings.set(submission_mode="testing", review_window_hours=1.5)
     row, workflow_input = await _create_run(db)

@@ -40,12 +40,6 @@ async def test_seeding_a_column_the_schema_lacks_fails_loudly(db) -> None:
         await db.seed_run(no_such_column=1)
 
 
-async def test_testing_mode_is_seeded_in_whichever_form_the_schema_has(db) -> None:
-    run_id = await db.seed_run(status="COMPLETED", submission_mode="testing")
-    row = await db.run(run_id)
-    assert row.get("submission_mode") == "testing" or row.get("is_test_run") is True
-
-
 async def test_session_lookups_are_by_uuid(db) -> None:
     with pytest.raises(AssertionError):
         await db.run(uuid.uuid4())

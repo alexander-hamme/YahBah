@@ -248,12 +248,13 @@ function StageNode({
 
 export function ApplicationStatusPipeline({
   updates,
-  runStatus,
+  submitted,
   completedAt,
   emailConfirmedAt = null,
 }: {
   updates: StatusUpdate[];
-  runStatus: string;
+  /** From the run's outcome (submitted or email_verified), never from its status. */
+  submitted: boolean;
   completedAt: string | null;
   emailConfirmedAt?: string | null;
 }) {
@@ -264,7 +265,6 @@ export function ApplicationStatusPipeline({
   }
 
   const explicitTypes = new Set(Object.keys(byType));
-  const submitted = runStatus === "COMPLETED";
 
   const visibleStages = computeVisibleStages(explicitTypes, submitted);
 

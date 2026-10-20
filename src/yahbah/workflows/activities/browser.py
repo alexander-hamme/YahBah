@@ -3,14 +3,23 @@ Browser activities — thin Temporal wrappers over yahbah.agent.
 
   discover_activity        open the job URL, reach the application form, read job info, create the email alias
   map_form_activity        list every form field, each tagged with a data-ja-field key
-  fill_activity            fill every field by key (code first, fix agent last); stops here in testing mode
-  submit_activity          gated submit + verification loop (email codes, fixes), confirmation artifacts
-  close_session_activity   free the run's browser (failure paths)
+  fill_activity            fill every field by key (code first, fix agent last), save the fill evidence and a
+                           full-page screenshot; a review re-fill fills exactly the approved answers
+  submit_activity          claim the submission, gated submit + verification loop, confirmation artifacts
+  close_session_activity   free the run's browser
 
-Browser state lives in SessionRegistry, keyed by run_id. If the session is gone (worker restart),
-the activity re-opens the job URL, re-discovers the form and checks it still has the same fields.
+Browser state lives in SessionRegistry, keyed by run_id and owned by the current activity attempt
+(a superseded attempt gets no browser: ApplicationError "superseded"). If the session is gone
+(worker restart, or the browser was closed for review), the activity re-opens the job URL,
+re-discovers the form and checks it still has the same fields.
+
+Submission safety (contract §6): the submit click happens only after claim_submission() succeeds;
+if an agent may have submitted (StageFailed "possibly_submitted") the activity records the
+attempt and claim first (record_possible_submission). Either way the run then ends
+SUBMIT_UNCERTAIN unless success was verified.
 """
 import json
+import os
 import uuid
 from dataclasses import asdict
 
@@ -23,15 +32,15 @@ from yahbah.agent import boards
 from yahbah.agent.boards import BoardProfile, detect_board, record_observation
 from yahbah.agent.discover import StageFailed, Trace, beat, discover, map_form
 from yahbah.agent.fill import FillContext, fill_form, read_values, submitted_values
-from yahbah.agent.session import SessionRegistry, artifact_path
+from yahbah.agent.session import SessionRegistry, SessionSuperseded, artifact_path
 from yahbah.agent.submit import submit_and_verify
 from yahbah.agent.tools import get_form_schema, run_js
-from yahbah.config import get_runtime_settings
 from yahbah.credentials import generate_email_alias
 from yahbah.db.models import ApplicantProfile, ApplicationRun
 from yahbah.db.session import AsyncSessionLocal
 from yahbah.llm.field_mapper import FieldMapper, NeedsAnswer
 from yahbah.llm.logs import use_run_log_dir
+from yahbah.run_state import attempt_tag, claim_submission, record_possible_submission
 from yahbah.schemas import (
     DiscoverInput,
     DiscoverOutput,
@@ -45,22 +54,46 @@ from yahbah.schemas import (
     SubmitInput,
     SubmitOutput,
 )
-from yahbah.url_utils import ats_normalize, strip_tracking
+from yahbah.url_utils import canonicalize_url
 from yahbah.workflows.activities.db_ops import (
-    mark_submit_attempted,
+    fenced_update,
     persist_artifact_activity,
     store_credentials_activity,
+    superseded,
 )
+from yahbah.workflows.activities.heartbeat import heartbeating
 
 # Failures that a retry can't fix: fail the run right away with the reason.
-_FINAL = {"job_closed", "login_wall", "captcha", "blocked", "needs_answer", "form_changed",
-          "submit_button_not_found", "email_code_entry", "email_code_timeout", "submit_unverified"}
+_FINAL = {"job_closed", "login_wall", "captcha", "blocked", "needs_answer", "form_changed", "possibly_submitted",
+          "submit_button_not_found", "claim_denied", "email_code_entry", "email_code_timeout", "submit_unverified"}
 
 
 def _app_error(exc: StageFailed | NeedsAnswer) -> ApplicationError:
     if isinstance(exc, NeedsAnswer):
         return ApplicationError(str(exc), type="needs_answer", non_retryable=True)
     return ApplicationError(str(exc), type=exc.reason, non_retryable=exc.reason in _FINAL)
+
+
+async def _run_row(run_id: str) -> ApplicationRun:
+    async with AsyncSessionLocal() as db:
+        run = await db.get(ApplicationRun, uuid.UUID(run_id))
+    if run is None:
+        raise superseded(run_id)
+    return run
+
+
+async def _stage_failed(run_id: str, exc: StageFailed | NeedsAnswer) -> ApplicationError:
+    """The activity's error for a stage failure. An agent that may have submitted the form
+    (possibly_submitted) first gets the run marked attempted and the posting claimed (contract §6).
+    That error is non-retryable even if recording fails: the terminal write records it again."""
+    if isinstance(exc, StageFailed) and exc.reason == "possibly_submitted":
+        try:
+            run = await _run_row(run_id)
+            await record_possible_submission(run_id, activity.info().workflow_id, run.job_posting_id)
+        except Exception as record_exc:
+            activity.logger.error(f"[tripwire] run {run_id}: recording the possible submission failed "
+                                  f"({type(record_exc).__name__}: {record_exc}); the run's ending records it")
+    return _app_error(exc)
 
 
 async def _load_profile() -> ApplicantProfile:
@@ -71,9 +104,13 @@ async def _load_profile() -> ApplicantProfile:
         return profile
 
 
-async def _screenshot(run_id: str, label: str) -> None:
-    if path := await SessionRegistry.instance().screenshot(run_id, label):
-        await persist_artifact_activity(run_id, "screenshot", path, {"step": label})
+async def _screenshot(run_id: str, label: str, **metadata) -> None:
+    """Best effort: a screenshot that can't be taken or registered never hides the stage's own outcome."""
+    try:
+        if path := await SessionRegistry.instance().screenshot(run_id, label):
+            await persist_artifact_activity(run_id, "screenshot", path, {"step": label, **metadata})
+    except Exception as exc:
+        activity.logger.warning(f"[screenshot] {label!r} for run {run_id} not saved: {exc}")
 
 
 def _save_trace(run_id: str, trace: Trace) -> list[dict]:
@@ -86,11 +123,11 @@ def _save_trace(run_id: str, trace: Trace) -> list[dict]:
         return [json.loads(line) for line in f if line.strip()]
 
 
-async def _write_json_artifact(run_id: str, artifact_type: str, filename: str, data) -> None:
+async def _write_json_artifact(run_id: str, artifact_type: str, filename: str, data, metadata=None) -> None:
     path = artifact_path(run_id, filename)
     with open(path, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
-    await persist_artifact_activity(run_id, artifact_type, path)
+    await persist_artifact_activity(run_id, artifact_type, path, metadata)
 
 
 def _schema_from_dict(raw: dict) -> FormSchema:
@@ -112,7 +149,10 @@ async def _session_with_form(run_id: str, job_url: str, schema: FormSchema | Non
     if session := registry.get(run_id):
         return session
     activity.logger.warning(f"[session] no live browser for run {run_id} — re-opening {job_url}")
-    session = await registry.open(run_id, job_url)
+    try:
+        session = await registry.open(run_id, job_url)
+    except SessionSuperseded as exc:
+        raise superseded(run_id) from exc
     await discover(session, trace)
     if schema is not None:
         now = {f["key"]: f["label"] for f in await get_form_schema(session)}
@@ -122,13 +162,14 @@ async def _session_with_form(run_id: str, job_url: str, schema: FormSchema | Non
     return session
 
 
-def _map_new_fields(profile: ApplicantProfile, ctx: FillContext, job_description: str, account_email: str | None):
-    """Mapper for fields that appear while filling/submitting: same profile-based mapping as the rest."""
+def _map_new_fields(profile: ApplicantProfile, ctx: FillContext, job_description: str, account_email: str | None,
+                    job_location: str | None):
+    """Mapper for fields that appear while filling: same profile-based mapping as the rest."""
     async def map_new(new_fields: list[dict]) -> list[dict]:
         fields = [FormField(key=f["key"], label=f["label"], field_type=f["type"], required=bool(f["required"]),
                             options=f.get("options") or [], autocomplete=f.get("autocomplete")) for f in new_fields]
         prior = [FieldMapping(**m) for m in ctx.mappings.values()]
-        mapped = await FieldMapper().map(fields, profile, job_description, prior=prior)
+        mapped = await FieldMapper().map(fields, profile, job_description, prior=prior, job_location=job_location)
         for m in mapped:
             if m.source == "email" and account_email:
                 m.value = account_email
@@ -160,19 +201,27 @@ def _schema_with_ctx_fields(schema: FormSchema, ctx: FillContext) -> dict:
     return asdict(FormSchema(fields=schema.fields + extra, page_url=schema.page_url, board=schema.board))
 
 
+def _required_unmapped(ctx: FillContext) -> list[dict]:
+    return [f for f in ctx.unmapped_new_fields if f.get("required")]
+
+
 # ── Activities ────────────────────────────────────────────────────────────────
 
 @activity.defn
+@heartbeating
 async def discover_activity(input: DiscoverInput) -> DiscoverOutput:
     use_run_log_dir(input.run_id)
     trace = Trace()
-    session = await SessionRegistry.instance().open(input.run_id, input.job_url)
+    try:
+        session = await SessionRegistry.instance().open(input.run_id, input.job_url)
+    except SessionSuperseded as exc:
+        raise superseded(input.run_id) from exc
     try:
         result = await discover(session, trace)
     except StageFailed as exc:
         await _screenshot(input.run_id, "discover_failed")
         _save_trace(input.run_id, trace)
-        raise _app_error(exc) from exc
+        raise await _stage_failed(input.run_id, exc) from exc
     await _screenshot(input.run_id, "form_found")
     _save_trace(input.run_id, trace)
 
@@ -191,7 +240,7 @@ async def discover_activity(input: DiscoverInput) -> DiscoverOutput:
         board=result.board.name,
         account_email=email,
         job_description=job.get("description") or "",
-        canonical_url=ats_normalize(strip_tracking(job.get("url") or result.page_url)),
+        canonical_url=canonicalize_url(job.get("url") or result.page_url),
         job_title=job.get("job_title") or None,
         job_company=job.get("company") or None,
         job_location=job.get("location") or None,
@@ -200,6 +249,7 @@ async def discover_activity(input: DiscoverInput) -> DiscoverOutput:
 
 
 @activity.defn
+@heartbeating
 async def map_form_activity(input: MapFormInput) -> MapFormOutput:
     use_run_log_dir(input.run_id)
     trace = Trace()
@@ -210,7 +260,7 @@ async def map_form_activity(input: MapFormInput) -> MapFormOutput:
     except StageFailed as exc:
         await _screenshot(input.run_id, "map_failed")
         _save_trace(input.run_id, trace)
-        raise _app_error(exc) from exc
+        raise await _stage_failed(input.run_id, exc) from exc
 
     schema = FormSchema(
         fields=[FormField(key=f["key"], label=f["label"], field_type=f["type"], required=f["required"],
@@ -227,67 +277,74 @@ async def map_form_activity(input: MapFormInput) -> MapFormOutput:
 
 
 @activity.defn
+@heartbeating
 async def fill_activity(input: FillInput) -> FillOutput:
+    """Fill the form and save its evidence for review round input.review_round (contract §4, §8):
+    the submitted_values rows and a full-page screenshot.
+
+    First fill: fields that appear while filling are mapped from the profile; the browser is closed
+    afterwards (the run goes to review, or ends in testing mode). Re-fill (input.refill, after an
+    approval): exactly the approved mappings; a field without one is returned in
+    unmapped_new_fields; the browser stays open for SUBMIT unless a required one appeared.
+    """
     use_run_log_dir(input.run_id)
     trace = Trace()
     schema = _schema_from_dict(input.form_schema_dict)
     board = boards.by_name(schema.board)
     profile = await _load_profile()
     ctx = _fill_context(schema, input.field_mappings, profile, input.cover_letter_path, input.cover_letter_text)
+    map_new = None if input.refill else _map_new_fields(profile, ctx, input.job_description, input.account_email,
+                                                         input.job_location)
+    registry = SessionRegistry.instance()
     try:
         session = await _session_with_form(input.run_id, input.job_url, schema, trace)
-        await _screenshot(input.run_id, "before_fill")
-        problems = await fill_form(
-            session, board, ctx,
-            map_new_fields=_map_new_fields(profile, ctx, input.job_description, input.account_email),
-            beat=beat,
-        )
-    except NeedsAnswer as exc:
+        problems = await fill_form(session, board, ctx, map_new_fields=map_new, beat=beat)
+    except (StageFailed, NeedsAnswer) as exc:
         await _screenshot(input.run_id, "fill_failed")
-        raise _app_error(exc) from exc
-    except StageFailed as exc:
-        await _screenshot(input.run_id, "fill_failed")
-        raise _app_error(exc) from exc
+        raise await _stage_failed(input.run_id, exc) from exc
     finally:
         _save_trace(input.run_id, trace)
 
+    # Per attempt: an attempt that lost the lease can't overwrite (or register over) its retry's evidence.
+    evidence = {"review_round": input.review_round}
+    tag = f"{input.review_round}_{attempt_tag()}"
     values = await read_values(session, list(ctx.fields))
-    await _write_json_artifact(input.run_id, "submitted_values", "submitted_values.json",
-                               submitted_values(ctx, values))
-    await _screenshot(input.run_id, "before_submit")
-    if problems:
-        raise _app_error(StageFailed("fill_failed", "; ".join(problems)[:1000]))
-
+    await _write_json_artifact(input.run_id, "submitted_values", f"submitted_values_{tag}.json",
+                               submitted_values(ctx, values), evidence)
+    await _screenshot(input.run_id, f"filled_{tag}", **evidence)
     output = FillOutput(
-        testing_mode=False,
         form_schema_dict=_schema_with_ctx_fields(schema, ctx),
         field_mappings=list(ctx.mappings.values()),
         written=ctx.written,
+        unmapped_new_fields=list(ctx.unmapped_new_fields),
+        baseline=ctx.baseline,
     )
-    if (await get_runtime_settings()).get("testing_mode"):
-        activity.logger.info("[fill] TESTING MODE — form filled, not submitting")
-        async with AsyncSessionLocal() as db:
-            if run := await db.get(ApplicationRun, uuid.UUID(input.run_id)):
-                run.is_test_run = True
-                run.confirmation_html = "<p><strong>Testing mode</strong> — form was filled but not submitted.</p>"
-                await db.commit()
-        await SessionRegistry.instance().close(input.run_id)
-        output.testing_mode = True
+    if input.refill and _required_unmapped(ctx):
+        activity.logger.info(f"[fill] {len(_required_unmapped(ctx))} required field(s) without an approved "
+                             f"answer: back to review")
+        await registry.close(input.run_id)
+        return output
+    if problems:
+        raise _app_error(StageFailed("fill_failed", "; ".join(problems)[:1000]))
+    if not input.refill:
+        await registry.close(input.run_id)
     return output
 
 
 @activity.defn
+@heartbeating
 async def submit_activity(input: SubmitInput) -> SubmitOutput:
     use_run_log_dir(input.run_id)
+    workflow_id = activity.info().workflow_id
     schema = _schema_from_dict(input.form_schema_dict)
     board = boards.by_name(schema.board)
     profile = await _load_profile()
     ctx = _fill_context(schema, input.field_mappings, profile, input.cover_letter_path, input.cover_letter_text)
     ctx.written = dict(input.written)
+    ctx.baseline = input.baseline  # the approved re-fill's (a re-fill below takes its own)
 
-    async with AsyncSessionLocal() as db:
-        run = await db.get(ApplicationRun, uuid.UUID(input.run_id))
-        already = run is not None and run.submit_attempted_at is not None
+    run = await _run_row(input.run_id)
+    already = run.submit_attempted_at is not None
 
     registry = SessionRegistry.instance()
     session = registry.get(input.run_id)
@@ -298,33 +355,59 @@ async def submit_activity(input: SubmitInput) -> SubmitOutput:
                 "submit_unverified: the browser was lost after clicking submit; "
                 "the confirmation email (if any) will mark this run as verified",
                 type="submit_unverified", non_retryable=True)
-        # Lost between fill and submit (worker restart): re-open, re-fill, then submit.
+        # Lost between the approved re-fill and submit (worker restart): re-open and re-fill the same
+        # answers, as fill_activity's re-fill does (from the mapped form, so it can be checked).
         trace = Trace()
+        mapped = _schema_from_dict(input.mapped_form_dict or input.form_schema_dict)
+        ctx = _fill_context(mapped, input.field_mappings, profile, input.cover_letter_path, input.cover_letter_text)
         try:
-            session = await _session_with_form(input.run_id, input.job_url, schema, trace)
-            ctx.written = {}
-            problems = await fill_form(session, board, ctx, beat=beat)
-        except StageFailed as exc:
-            raise _app_error(exc) from exc
+            session = await _session_with_form(input.run_id, input.job_url, mapped, trace)
+            problems = await fill_form(session, board, ctx, map_new_fields=None, beat=beat)
+        except (StageFailed, NeedsAnswer) as exc:
+            raise await _stage_failed(input.run_id, exc) from exc
         finally:
             _save_trace(input.run_id, trace)
+        if new := _required_unmapped(ctx):
+            raise _app_error(StageFailed("form_changed", "required field(s) without an approved answer appeared "
+                                                         f"on re-fill: {[f['label'] for f in new][:5]}"))
         if problems:
             raise _app_error(StageFailed("fill_failed", "; ".join(problems)[:1000]))
+
+    evidence_path = artifact_path(input.run_id, "submit_evidence.jsonl")
+    evidence = {"registered": False}
+
+    async def register_evidence() -> None:
+        """Registers the evidence file as a run artifact once; retried until it succeeds."""
+        if not evidence["registered"] and os.path.exists(evidence_path):
+            await persist_artifact_activity(input.run_id, "submit_evidence", evidence_path)
+            evidence["registered"] = True
+
+    async def record(round_evidence: dict) -> None:
+        """Each verify round's evidence, appended as it arrives so it survives a lost worker."""
+        with open(evidence_path, "a") as f:
+            f.write(json.dumps(round_evidence, ensure_ascii=False, default=str) + "\n")
+        await register_evidence()
 
     try:
         result = await submit_and_verify(
             session, board, ctx,
             email=input.account_email,
             already_attempted=already,
-            mark_attempted=lambda: mark_submit_attempted(input.run_id),
-            map_new_fields=_map_new_fields(profile, ctx, input.job_description, input.account_email),
+            claim=lambda: claim_submission(input.run_id, workflow_id, run.job_posting_id),
+            record=record,
+            map_new_fields=None,  # after the claim nothing new is mapped (contract §4)
             beat=beat,
         )
     except (StageFailed, NeedsAnswer) as exc:
         await _screenshot(input.run_id, "submit_failed")
-        # Never retried once submit may have been clicked; the run fails with the reason.
-        err = _app_error(exc)
+        # Never retried: once submit may have been clicked the run ends SUBMIT_UNCERTAIN (its claim is recorded).
+        err = await _stage_failed(input.run_id, exc)
         raise ApplicationError(err.message, type=err.type, non_retryable=True) from exc
+    finally:
+        try:
+            await register_evidence()  # (if every registration during the rounds failed)
+        except Exception as exc:
+            activity.logger.error(f"[submit] run {input.run_id}: submit evidence not registered: {exc}")
 
     await _screenshot(input.run_id, "confirmation")
     for artifact_type, filename, content in (("confirmation", "confirmation.txt", result.confirmation_text),
@@ -335,10 +418,7 @@ async def submit_activity(input: SubmitInput) -> SubmitOutput:
                 f.write(content)
             await persist_artifact_activity(input.run_id, artifact_type, path)
     if result.confirmation_html:
-        async with AsyncSessionLocal() as db:
-            if run := await db.get(ApplicationRun, uuid.UUID(input.run_id)):
-                run.confirmation_html = result.confirmation_html
-                await db.commit()
+        await fenced_update(input.run_id, confirmation_html=result.confirmation_html)
 
     await registry.close(input.run_id)
     return SubmitOutput(confirmation_url=result.confirmation_url, confirmation_text=result.confirmation_text)
