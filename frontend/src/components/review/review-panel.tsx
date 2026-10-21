@@ -34,12 +34,13 @@ export function httpUrl(url: string | null | undefined): string | null {
   }
 }
 
-interface Notice {
+export interface Notice {
   code: string;
   round: number;
 }
 
-function noticeText(notice: Notice, review: ReviewPayload | undefined): string {
+/** What a 409 on a decision means for the user, given the review as refreshed. */
+export function noticeText(notice: Notice, review: ReviewPayload | undefined): string {
   if (notice.code === "stale_review_round") {
     return review && review.review_round > notice.round
       ? `This application changed while you were reviewing it: it's now round ${review.review_round}. Check the highlighted new fields, then decide again.`
@@ -96,7 +97,8 @@ function Summary({
   );
 }
 
-function CoverLetter({ runId, letter }: { runId: string; letter: NonNullable<ReviewPayload["cover_letter"]> }) {
+/** The generated cover letter, clamped with a control to read it whole. */
+export function CoverLetter({ runId, letter }: { runId: string; letter: NonNullable<ReviewPayload["cover_letter"]> }) {
   const [open, setOpen] = useState(false);
   return (
     <section aria-labelledby={`cover-${runId}`} className="space-y-2">

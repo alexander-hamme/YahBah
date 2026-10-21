@@ -6,22 +6,31 @@ import Lightbox from "yet-another-react-lightbox";
 import Zoom from "yet-another-react-lightbox/plugins/zoom";
 import "yet-another-react-lightbox/styles.css";
 import { artifactDownloadUrl } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 /** The round's full-page capture of the filled form: scrolls in place, opens full size. */
 export function ReviewScreenshot({
   runId,
   artifactId,
   reviewRound,
+  compact = false,
 }: {
   runId: string;
   artifactId: string | null;
   reviewRound: number;
+  /** A short thumbnail of the top of the page (triage preview); still opens full size. */
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
 
   if (!artifactId) {
     return (
-      <div className="flex h-48 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-white/10 text-sm text-muted-foreground">
+      <div
+        className={cn(
+          "flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-white/10 text-sm text-muted-foreground",
+          compact ? "h-24 text-xs" : "h-48"
+        )}
+      >
         <ImageOff className="h-5 w-5" aria-hidden />
         No screenshot was saved for this round.
       </div>
@@ -46,7 +55,10 @@ export function ReviewScreenshot({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="block max-h-[calc(100vh-14rem)] w-full overflow-y-auto rounded-lg border border-white/10 bg-white focus-visible:outline-2 focus-visible:outline-cyan-400"
+        className={cn(
+          "block w-full rounded-lg border border-white/10 bg-white focus-visible:outline-2 focus-visible:outline-cyan-400",
+          compact ? "h-44 overflow-hidden" : "max-h-[calc(100vh-14rem)] overflow-y-auto"
+        )}
         aria-label="Open the screenshot full size"
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}

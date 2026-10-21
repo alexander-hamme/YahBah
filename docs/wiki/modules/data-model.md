@@ -22,7 +22,7 @@ Credentials storage: `src/yahbah/credentials.py` (migration 0002).
 
 ## Migrations (`alembic/versions/`)
 - `0017_agentic_submit_answer_cache.py` (committed in `999f57a`, and applied to the dev DB): adds `application_run.submit_attempted_at`, `email_confirmed_at`, `email_confirmed_message_id` and the `answer_cache` table.
-- `0018_run_lifecycle.py` (batch 1, task 3; in the working tree, not yet applied to the dev DB; [contract §9](../contracts/run-lifecycle.md)):
+- `0018_run_lifecycle.py` (batch 1, task 3; applied to the dev DB on 2026-10-20; [contract §9](../contracts/run-lifecycle.md)):
   - **Drift repair:** `job_posting.canonical_url`, `location` and `ix_job_posting_canonical_url` are added only if missing. The ORM always had them, but no migration created them. Downgrade leaves them.
   - **New columns:** the `application_run` columns above, including the lease columns. Drops `is_test_run`.
   - **Backfill:**
@@ -35,7 +35,7 @@ Credentials storage: `src/yahbah/credentials.py` (migration 0002).
   - **Orphans:** older duplicate active runs of one posting become `FAILED` / `superseded` (or `SUBMIT_UNCERTAIN` if attempted) so the unique index can be created. They are orphans of the in-memory Temporal dev server.
   - **Claims:** creates `submission_claim` with one claim per posting whose run had `submit_attempted_at`.
   - **Downgrade:** restores `is_test_run` and maps the new statuses back to `FAILED`.
-- `0019_answer_cache_provenance.py` (batch 1, task 5; in the working tree, not yet applied to the dev DB): deletes every `answer_cache` row (none has provenance), makes the primary key `(namespace, question_key)` and adds `namespace`, `basis`, `basis_hash`, `model`, `prompt_hash` and `run_id` (`ON DELETE SET NULL`). Downgrade drops the debug-namespace rows and restores the old key; the deleted rows are not restored ([llm](llm.md)).
+- `0019_answer_cache_provenance.py` (batch 1, task 5; applied to the dev DB on 2026-10-20): deletes every `answer_cache` row (none has provenance), makes the primary key `(namespace, question_key)` and adds `namespace`, `basis`, `basis_hash`, `model`, `prompt_hash` and `run_id` (`ON DELETE SET NULL`). Downgrade drops the debug-namespace rows and restores the old key; the deleted rows are not restored ([llm](llm.md)).
 Run with `uv run alembic upgrade head`; `alembic/env.py` uses `settings.database_url`, the same URL and role as the app.
 DB role model: a single role, `yahbah_app`, owns the database (and therefore `public`, Postgres 15+) and every table, so it can run DDL and no GRANTs or default privileges are needed (setup SQL in the root README). Migrations contain no GRANTs and the code assumes no role name. Do not hardcode personal role or user names in code or docs.
 

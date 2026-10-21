@@ -221,7 +221,7 @@ The batch-1 safety work is therefore not a detour. Agentic loops on unfamiliar p
 - **Invented-event judge and reviewer.** Generated behavioural (STAR) answers can invent incidents; they are labelled `generated` and shown at review, but nothing checks them. The reviewer pass needs an eval judge for invented events (LLM).
 - **Alert-time match scoring on `llm.profile.profile_text`** (Gmail owner). `gmail/alert_parser.build_profile_summary` still builds its own profile text from YAML, so alert scores and run-time scores use different profile sources.
 - **Per-answer editing at review.** Batch 1 is all-or-nothing: to change an answer the user rejects, edits the stored answer or profile, and retries.
-- **Bulk approval**, pending the user's answer on whether and how.
+- **Bulk approval**: done 2026-10-20 as keyboard triage in the review queue, with no bulk route and no approve-all (contract §4, "Triage").
 - **The rest of C4:** a `task` and prompt hash on every logged call, a seed, temperature 0, logs for Gmail-side calls. (The 53-item answer eval has landed.)
 - **The slot backlog (Temporal F3).** The run-slot wait is an activity that holds a worker slot, so about 100 or more waiting runs stall admission. Needs the dispatcher design (decision 5).
 - **B7, extended:** a confirmation email arriving at a run's alias should resolve `SUBMIT_UNCERTAIN` to `COMPLETED` (today it only sets `email_confirmed_at`, which keeps blocking the posting). The company-name fallback in the status poller (`_match_by_company`) also looks only at `COMPLETED` and `FAILED` runs.
@@ -229,7 +229,7 @@ The batch-1 safety work is therefore not a detour. Agentic loops on unfamiliar p
 
 ## Batch 1 status (2026-10-20)
 
-**Outcome:** tasks 1–6 are implemented and QA-verified, and the C7 acceptance gate passes. Wave 1 is committed (`d04bc45`); wave 2 is in the working tree, uncommitted.
+**Outcome:** tasks 1–6 are implemented and QA-verified, and the C7 acceptance gate passes. Wave 1 is committed (`d04bc45`) and wave 2 is committed on top of it (`d886823`).
 
 **What landed** (the [changelog](../../wiki/changelog.md) has the detail, the [contract](../../wiki/contracts/run-lifecycle.md) the rules):
 - **A1, A6:** wave 1.
@@ -240,9 +240,9 @@ The batch-1 safety work is therefore not a detour. Agentic loops on unfamiliar p
 - **C1, C7:** the shared harness; the end-to-end gate with the real worker, activities and Chrome against a fixture.
 - **Beyond the plan:** the attempt lease and the approved-state baseline (both from QA's review), the agent tripwire always ending `SUBMIT_UNCERTAIN`, and `slow`/`e2e` markers with a parallel test path. The mode control is two-way (Testing | Review) until `auto_reviewed` exists.
 
-**Verification (2026-10-20):** the complete Python suite gives 848 passed, 1 skipped in 43 s in parallel (about 4 min serial, default selection); frontend 64 tests, `tsc` and `eslint` clean. QA's independent review found 10 defects plus 1 follow-up; all are fixed.
+**Verification (2026-10-20):** the complete Python suite (`pytest --complete`, parallel by default) gives 849 passed, 1 skipped, and the default run takes about 35 s; frontend 64 tests, `tsc` and `eslint` clean. QA's independent review found 10 defects plus 1 follow-up; all are fixed.
 
-**Gate status:** the gate ("no unattended live submission until tasks 1–5 land and C7 passes") is met offline. **Live submission still needs the user to apply migrations 0018 and 0019 (`uv run alembic upgrade head`) and run the app.** The first live runs should stay in `review` mode with a human approving. A leftover `testing_mode` key in `config/settings.yaml` is ignored, and without a `submission_mode` key new runs use `review`.
+**Gate status:** the gate ("no unattended live submission until tasks 1–5 land and C7 passes") is met offline. Migrations 0018 and 0019 were applied to the dev database on 2026-10-20 (338 runs, 0 claims, empty answer cache) and `config/settings.yaml` now has `submission_mode: review`. **No run has yet been made against a live site:** the user still has to run the app. The first live runs should stay in `review` mode with a human approving.
 
 **Accepted remaining risks:**
 - a stale attempt can claim once in the window before its retry takes the lease, but never makes a second click;

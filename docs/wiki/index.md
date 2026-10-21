@@ -1,7 +1,7 @@
 # YahBah Wiki Index
 
 Read this first, then open only the pages you need. Source is the authority; pages note where they may lag.
-State: branch `browser-use`. The agentic revamp is committed (`999f57a`, `2911263`). Batch-1 safety work from the [roadmap](../audits/2026-10-18/roadmap.md) is implemented: wave 1 is committed (`d04bc45`), wave 2 (run lifecycle and review gate, submit boundary, answer integrity, review dashboard) is in the working tree, uncommitted and QA-verified. Migrations 0018 and 0019 are not yet applied to the dev DB, and no run has been made against a live site. See the [changelog](changelog.md) and the [run-lifecycle contract](contracts/run-lifecycle.md).
+State: branch `browser-use`. The agentic revamp is committed (`999f57a`, `2911263`). Batch-1 safety work from the [roadmap](../audits/2026-10-18/roadmap.md) is implemented: wave 1 is committed (`d04bc45`), wave 2 (run lifecycle and review gate, submit boundary, answer integrity, review dashboard) is committed in `d886823` and QA-verified. Migrations 0018 and 0019 are applied to the dev DB (2026-10-20), and no run has been made against a live site. See the [changelog](changelog.md) and the [run-lifecycle contract](contracts/run-lifecycle.md).
 
 | Page | Covers | Read when |
 |---|---|---|
@@ -12,7 +12,7 @@ State: branch `browser-use`. The agentic revamp is committed (`999f57a`, `291126
 | [modules/llm.md](modules/llm.md) | Ollama model roles, `OllamaClient`, applicant profile, prompts (`config/prompts.yaml`), field mapper and screening facts, answer cache, cover letter, live eval, LLM logs | Changing models, prompts, answer mapping, cover letters |
 | [modules/data-model.md](modules/data-model.md) | DB tables, alembic migrations, config/settings files | Schema changes, migrations, config keys |
 | [modules/gmail.md](modules/gmail.md) | Gmail client, verification codes, status poller, job-alert poller | Email-related behaviour |
-| [modules/api-frontend.md](modules/api-frontend.md) | FastAPI routes, error shape and settings; the Next.js frontend (outcome-driven UI, review queue) | Adding endpoints or UI |
+| [modules/api-frontend.md](modules/api-frontend.md) | FastAPI routes, error shape and settings; the Next.js frontend (outcome-driven UI, review queue and keyboard triage) | Adding endpoints or UI |
 | [development.md](development.md) | Setup/run commands, tests, scripts, stale docs | Running, testing, debugging a board |
 | [contracts/run-lifecycle.md](contracts/run-lifecycle.md) | **Implemented, authoritative contract (batch 1, 2026-10-20; main session owns changes):** run statuses and `failure_reason`, `submission_mode`, review gate, `possibly_applied()`, submission claim and uncertain runs, attempt lease, retry/cancel, evidence and API shapes, migrations | Touching run state, submit, dedup, review, API error codes, or proposing a change to any of them |
 

@@ -28,9 +28,11 @@ export const REVIEW_QUEUE_PARAMS: ApplicationsParams = {
   per_page: 100,
 };
 
+export const REVIEW_QUEUE_KEY = ["applications", REVIEW_QUEUE_PARAMS] as const;
+
 export function useReviewQueue({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
-    queryKey: ["applications", REVIEW_QUEUE_PARAMS],
+    queryKey: REVIEW_QUEUE_KEY,
     queryFn: () => getApplications(REVIEW_QUEUE_PARAMS),
     enabled,
     refetchInterval: 30_000,

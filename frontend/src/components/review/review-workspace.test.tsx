@@ -50,11 +50,12 @@ describe("ReviewWorkspace", () => {
     expect(screen.getByText("2")).toBeTruthy();
   });
 
-  it("opens the soonest one and moves to the next after a decision", async () => {
+  it("opens the soonest one and moves to the next after a decision in the full review", async () => {
     api({ "POST /runs/run-soon/approve": { body: { success: true, message: "ok" } } });
     renderWithClient(<ReviewWorkspace />);
 
     expect(await screen.findByRole("heading", { name: /Acme/ })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: /Open full review/ }));
     await userEvent.click(await screen.findByRole("checkbox", { name: /submit this application to Acme/ }));
     await userEvent.click(screen.getByRole("button", { name: "Approve and submit" }));
 

@@ -85,6 +85,13 @@ The workflow ignores, and logs, any signal whose round is not the current round.
 | `POST /runs/{id}/approve` (body `{review_round}`) | `AWAITING_REVIEW` with a matching round, else 409 | Signals approve |
 | `POST /runs/{id}/reject` (body `{review_round, reason?}`) | `AWAITING_REVIEW` with a matching round, else 409 | Signals reject → `CANCELLED` / `review_rejected` |
 
+**Triage (quick decisions from the queue)** (added 2026-10-20). The review queue may approve or reject runs from a compact preview, without opening the full review. There is **no bulk route**: every decision is its own `POST /runs/{id}/approve` or `/reject`, so a stale round is a per-run 409. Rules:
+- The `review_round` sent is the one in the **`GET /runs/{id}/review` payload the preview rendered**, never the list row's `review_round`. If the payload is refetched with a new round, any pending decision for the old round is dropped.
+- A run can be approved only after its own preview has rendered **without an error and stayed on screen for a minimum dwell** (about 800 ms) at its current round. A new round, or a switch to another run, restarts the dwell. Key repeats never count as a decision. No "approve all" or "approve selected" sends approvals for runs the user has not previewed. Holding or double-pressing a key must not carry a decision onto the next run.
+- The preview shows every answer the full review would flag: new fields, page mismatches, required-but-blank fields, answers without a stored basis, and generated answers, with the text of each generated answer.
+- A quick approval is deliberate: it waits through a short, visible undo window before the request is sent. The window replaces the tick box of the full review. Nothing is sent if the user undoes, leaves the page, or the run leaves `AWAITING_REVIEW` first. Every dropped decision is reported visibly, not only to screen readers. A request whose outcome is unknown, such as after a network error, is reported as unknown, never as "not sent".
+- Rejecting needs no reason, and a quick reject gets the same undo window and round guard. Hiding the tab counts as leaving the page. Opening the full review is always one step away, and doing so cancels that run's pending quick decision.
+
 **Timeout:** `EXPIRED` / `review_expired`. Nothing is submitted on timeout, ever.
 
 **Approve path:**

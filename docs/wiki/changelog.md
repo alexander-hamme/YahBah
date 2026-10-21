@@ -9,9 +9,23 @@ Running record of architectural, structural, decision-making and workflow-paradi
 
 ---
 
+## 2026-10-20: review-queue triage
+
+- **What.** `/review` opens the selected run in a compact preview by default; the full review (with its tick box) is one step away. Keys: `j`/`k` move, `y` approve, `n` reject, `o` open the full review, `u`/`Esc` undo. Frontend only: no backend or API change. See [modules/api-frontend.md](modules/api-frontend.md) (Triage).
+- **Why.** The user wanted to triage the queue quickly: eyeball each run, say yes or no, and open only the unsure ones.
+- **Decisions.**
+  1. Main session: no bulk endpoint and no approve-all. Every decision is one approve or reject call carrying the round of the payload the preview rendered, so a stale round is a per-run 409.
+  2. Accepted from the implementer: the 5 s undo window applies to reject too, and hiding the tab cancels pending decisions.
+  3. Adopted from QA: an 800 ms arming dwell, after QA found that holding `y` approved one run after another.
+  4. Drops and unknown outcomes (network error or 5xx) are reported visibly.
+- **Process.** Product & Dashboard implemented; Browser Agent QA reviewed adversarially and found 9 defects that the 75 green tests missed, then 3 more on re-verification (dwell counting hidden-tab time, in-flight outcomes lost after leaving the page or on remount). All are fixed; the frontend suite is now 112 tests.
+- **Governs:** [contracts/run-lifecycle.md](contracts/run-lifecycle.md) §4, "Triage". **Supersedes:** the roadmap's open "bulk approval" follow-up.
+
+---
+
 ## 2026-10-20: batch 1, wave 2 + close-out
 
-**State:** wave 1 is committed (`d04bc45`). Wave 2 has landed in the working tree on top of it, **uncommitted**, and is QA-verified. Migrations 0018 and 0019 are in the tree and have not been applied to the dev database. Verified on 2026-10-20: the complete Python suite (`pytest -n auto --dist load --complete`) gives 848 passed, 1 skipped in 43 s (serial default about 4 min); frontend 64 tests, `tsc` and `eslint` clean. All 91 wave-1 strict `xfail`s were flipped, and the C7 acceptance gate passes.
+**State:** wave 1 is committed (`d04bc45`) and wave 2 is committed on top of it (`d886823`), QA-verified. Migrations 0018 and 0019 were applied to the dev database on 2026-10-20 (alembic at 0019; 338 runs, 0 claims, an empty answer cache), and `config/settings.yaml` now has `submission_mode: review` in place of `testing_mode`. Verified on 2026-10-20: the complete Python suite (`pytest --complete`, parallel by default) gives 849 passed, 1 skipped; the default `pytest` runs in about 35 s and leaves out only `e2e`; frontend 64 tests, `tsc` and `eslint` clean. All 91 wave-1 strict `xfail`s were flipped, and the C7 acceptance gate passes.
 
 ### What changed
 - **Run lifecycle and review gate (task 3).** The contract is implemented: [contracts/run-lifecycle.md](contracts/run-lifecycle.md) is now authoritative, not a target.

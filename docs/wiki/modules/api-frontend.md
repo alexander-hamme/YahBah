@@ -42,7 +42,7 @@ Run: `uv run uvicorn yahbah.api.main:app --reload --port 8000` (binds 127.0.0.1)
 |---|---|
 | `/applications` | The attention strip: uncertain runs to resolve, and the review count with the next deadline. Counts by outcome. The job form. The outcome filter (in the URL as `?filter=`: a single outcome or `hide_failed`/`all`/`needs_you`/`sent`). The list. |
 | `/applications/[id]` | Detail. It shows the review panel when the run lists `approve`/`reject`, the uncertain-run resolution panel (`#resolve`) when it lists `confirm_*`, then info, fill evidence and screenshots. |
-| `/review` | The review queue: `awaiting_review` runs, soonest deadline first, each with a countdown (and "Round N · new fields" after the first round), beside the selected run's review panel (`?run=`). After a decision it moves to the next run. |
+| `/review` | The review queue: `awaiting_review` runs, soonest deadline first, each with a countdown (and "Round N · new fields" after the first round), beside the selected run's review panel (`?run=`). After a decision it moves to the next run. By default the selected run opens in the compact **triage preview** (see Triage below); the full review is one step away. |
 | `/scheduled` | The scheduled job queue. |
 
 **Rule: the UI never derives run state.**
@@ -65,6 +65,13 @@ Run: `uv run uvicorn yahbah.api.main:app --reload --port 8000` (binds 127.0.0.1)
   - reject takes an optional reason;
   - a 409 `stale_review_round`, `not_awaiting_review` or `action_not_allowed` refetches the review and explains; the box resets, because the bar is keyed by the round.
 
+**Triage** (`/review`; added 2026-10-20). Quick approve/reject from the queue: eyeball a run, decide, open the full review only for the unsure ones. The rules (no bulk route, round from the rendered payload, dwell, undo window, visible drops) are in [run-lifecycle §4, "Triage"](../contracts/run-lifecycle.md); this section is the implementation.
+- **Preview** (`triage-preview.tsx`): a compact view of `GET /runs/{id}/review` for the selected run. It shows every flagged answer (the same flags as the full review, including the text of generated answers). **O** or the button opens the full `ReviewPanel` with its tick box.
+- **Keys** (ignored in inputs and with modifiers, via `isShortcutBlocked`): `j`/`k` next/previous run (arrows too, from the queue list); `y` approve; `n` reject; `o` (or `Enter`, unless focus is on a button or link) open the full review; `u` or `Esc` undo the newest pending decision. A held `y`/`n` (`event.repeat`) never decides. `y`/`n` act only once the preview has been on screen for `DWELL_MS` (800 ms) at its current round.
+- **Decisions** (`use-triage-decisions.ts`): each one is a single `approveRun`/`rejectRun` call carrying the round of the payload the preview rendered. It waits `UNDO_MS` (5 s) in an undo bar, for reject as well as approve. Before sending, `pendingDropReason` re-checks the query cache; a decision is dropped (and reported) if the round changed, the run left the queue or the payload is stale. Hiding the tab or leaving the page cancels pending decisions (`left_page`).
+- **Problems are shown, not swallowed** (`TriageProblem`): `dropped`, `conflict` (409 codes, refetch), `error` (4xx, nothing recorded) and `unknown` (no response or 5xx: the decision may have been recorded). Notes outlive the row they concern (`TriageNote`).
+- **Tests:** `review-triage.test.tsx` and `review-triage.qa.test.tsx` (the latter is the adversarial QA suite).
+
 **Mode control:**
 - `SubmissionModeControl` is a radiogroup in the header labelled "New runs" (Testing | Review).
 - It shows **Mode unknown**, never a mode, when settings fail to load.
@@ -77,7 +84,7 @@ Run: `uv run uvicorn yahbah.api.main:app --reload --port 8000` (binds 127.0.0.1)
 - A failed query shows an inline error and keeps the last data.
 
 **Frontend checks** (`frontend/`, run from there; state on 2026-10-20):
-- `npm test`: Vitest 5 with React Testing Library in jsdom, setup `vitest.setup.ts`, tests colocated as `src/**/*.test.ts(x)` (11 files, 64 tests, passing). `npm run test:watch` for watch mode.
+- `npm test`: Vitest 5 with React Testing Library in jsdom, setup `vitest.setup.ts`, tests colocated as `src/**/*.test.ts(x)` (13 files, 112 tests, passing). `npm run test:watch` for watch mode.
   - **Helpers:** `src/test/render.tsx` provides `renderWithClient` (the app's real QueryClient setup, no retries) and `mockApi` (stubs `fetch` per `"METHOD /path"`, records calls). `src/test/fixtures.ts` builds §8-shaped runs, rows and reviews.
   - **Navigation:** `vitest.setup.ts` mocks `next/navigation` with `src/test/navigation.ts`, since the app router isn't mounted in jsdom.
   - **Clean-up:** the setup resets toasts and stubbed globals after each test.

@@ -131,7 +131,8 @@ function ExpandableText({ text, lines }: { text: string; lines: 2 | 3 }) {
   );
 }
 
-function AnswerValue({ row }: { row: FillEvidenceRow }) {
+/** The answer as filled. `full` never clamps: the triage preview shows generated text whole. */
+export function AnswerValue({ row, full = false }: { row: FillEvidenceRow; full?: boolean }) {
   if (row.source === "skip") {
     return <p className="italic text-muted-foreground">Left blank</p>;
   }
@@ -145,7 +146,35 @@ function AnswerValue({ row }: { row: FillEvidenceRow }) {
     );
   }
   if (!row.answer) return <p className="italic text-muted-foreground">No answer</p>;
+  if (full) return <p className="whitespace-pre-wrap break-words">{row.answer}</p>;
   return <ExpandableText text={row.answer} lines={3} />;
+}
+
+/** Every flag on one row as chips, in one line (the triage preview's compact rows). */
+export function FlagChips({ flags }: { flags: EvidenceFlags }) {
+  return (
+    <>
+      {flags.isNew && (
+        <Chip className="border-cyan-400/40 bg-cyan-500/15 text-cyan-200" title="Added in this review round">
+          New
+        </Chip>
+      )}
+      {flags.mismatch && (
+        <Chip className="border-amber-400/40 bg-amber-500/15 text-amber-200" title="The page didn't keep this value">
+          Differs on the page
+        </Chip>
+      )}
+      {flags.blankRequired && (
+        <Chip className="border-amber-400/40 bg-amber-500/15 text-amber-200">Required, blank</Chip>
+      )}
+      {flags.unbacked && (
+        <Chip className="border-amber-400/40 bg-amber-500/15 text-amber-200" title="Factual answers should come from a stored fact">
+          No stored basis
+        </Chip>
+      )}
+      {flags.generated && <GeneratedChip />}
+    </>
+  );
 }
 
 function ReadBack({ row, isNew }: { row: FillEvidenceRow; isNew: boolean }) {

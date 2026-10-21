@@ -145,9 +145,9 @@ Runs discover → map → answers → fill without Temporal or a run record. It 
 ## Tests
 
 ```bash
-uv run pytest                    # offline; leaves out the slow and e2e tests (about 4 minutes)
-uv run pytest --complete         # everything, including slow (real timeouts) and e2e (whole runs through Temporal and Chrome)
-uv run --with pytest-xdist==3.8.0 pytest -n auto --dist load --complete   # the same, in parallel (under a minute)
+uv run pytest                    # offline, parallel (about 35 s); leaves out the e2e tests
+uv run pytest --complete         # everything, including e2e (whole runs through Temporal and Chrome)
+uv run pytest -n 0               # serially, for debugging
 uv run pytest -m "not browser"   # skip tests that launch headless Chrome
 uv run pytest -m "not db"        # skip tests that need the test Postgres (also "not temporal")
 
@@ -162,7 +162,7 @@ Tests live in `test/`; the shared harness is `test/harness/` and the safety-inva
 - `db`: a disposable Postgres database created and dropped per session through `TEST_DATABASE_URL` (default `postgresql+psycopg://yahbah_test@localhost/postgres`). Create that role once, with passwordless local access: `CREATE ROLE yahbah_test WITH LOGIN CREATEDB;`. The tests skip if Postgres is unreachable.
 - `temporal`: workflows on a local Temporal dev server (the `temporal` binary on PATH).
 - `live_llm`: the real local models; skipped unless selected with `-m live_llm` or `YAHBAH_LIVE_LLM=1`.
-- `slow` and `e2e`: set by hand; a bare `pytest` leaves them out and `--complete`, a path or any `-m` expression runs them.
+- `slow` (waits for a real timeout) and `e2e` (whole runs) are set by hand. A bare `pytest` leaves out `e2e`; `--complete`, a path or any `-m` expression runs it.
 
 Tests cannot reach the real database, the network beyond localhost, or Ollama (outside `live_llm`). `scripts/save_fixture.py <url> <name>` saves a live page as a new fixture. `scripts/manual/` holds hand-run live checks (Gmail, metadata extraction), not part of pytest. Details: [docs/wiki/development.md](docs/wiki/development.md).
 
