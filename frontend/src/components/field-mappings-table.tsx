@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "@/lib/queries";
 import { AnswerEvidenceList, normalizeEvidenceRow } from "@/components/review/answer-evidence";
 import { artifactDownloadUrl } from "@/lib/api";
 import type { Artifact, FillEvidenceRow, Outcome } from "@/lib/types";

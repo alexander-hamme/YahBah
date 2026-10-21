@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@/lib/queries";
 import { Download, ExternalLink, Info, RefreshCw } from "lucide-react";
 import { ApiErrorMessage } from "@/components/api-error-message";
 import { DeadlineCountdown } from "@/components/deadline-countdown";

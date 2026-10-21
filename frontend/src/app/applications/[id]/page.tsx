@@ -2,7 +2,7 @@
 
 import { use } from "react";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "@/lib/queries";
 import { ArrowLeft, Bug } from "lucide-react";
 import { RunActions } from "@/components/run-actions";
 import { getRunDetail, getRunSteps, getRunArtifacts, getRunStatusUpdates } from "@/lib/api";

@@ -5,6 +5,25 @@ import nextTs from "eslint-config-next/typescript";
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
+  // useQuery comes from @/lib/queries: it renders as the server did while hydrating.
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/lib/queries.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@tanstack/react-query",
+              importNames: ["useQuery", "useSuspenseQuery", "useQueries"],
+              message: "Use useQuery from @/lib/queries: it matches the server's render while hydrating.",
+            },
+          ],
+        },
+      ],
+    },
+  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:

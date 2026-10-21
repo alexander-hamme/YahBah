@@ -2,7 +2,8 @@
 
 import { Suspense, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@/lib/queries";
 import { bulkDeleteRuns, getApplications } from "@/lib/api";
 import { DEFAULT_FILTER, filterByValue } from "@/lib/outcomes";
 import { asApiError, toast } from "@/lib/toast";

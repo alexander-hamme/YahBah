@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery } from "@/lib/queries";
 import Link from "next/link";
 import { Check, CheckCircle2, ExternalLink, HelpCircle, Info, Loader2, Maximize2, RefreshCw, ThumbsDown, Undo2 } from "lucide-react";
 import { ApiErrorMessage } from "@/components/api-error-message";
