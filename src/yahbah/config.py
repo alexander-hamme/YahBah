@@ -1,11 +1,16 @@
 from pathlib import Path
 
 import yaml
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Repo root (src/yahbah/config.py → ../..). Relative config paths resolve against it, not the
+# process's working directory, so the API and worker read the same files wherever they start.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=PROJECT_ROOT / ".env", extra="ignore")
 
     # Database
     database_url: str = "postgresql+psycopg://localhost/yahbah"
@@ -84,6 +89,11 @@ class Settings(BaseSettings):
     app_env: str = "dev"
     log_level: str = "INFO"
 
+    @field_validator("artifacts_dir", "prompts_path", "personal_path")
+    @classmethod
+    def _from_project_root(cls, value: str) -> str:
+        return str(PROJECT_ROOT / Path(value).expanduser())
+
 
 settings = Settings()
 
@@ -92,7 +102,7 @@ import asyncio as _asyncio
 from datetime import date
 from typing import get_args
 
-_SETTINGS_PATH = Path("config/settings.yaml")
+_SETTINGS_PATH = PROJECT_ROOT / "config" / "settings.yaml"
 
 
 def _read_settings_sync() -> dict:
