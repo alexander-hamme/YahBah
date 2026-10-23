@@ -142,18 +142,21 @@ async def _detect(session: BrowserSession) -> BoardProfile:
     return await detect_board(lambda c: run_js(session, c), await session.get_current_page_url())
 
 
-async def _session_with_form(run_id: str, job_url: str, schema: FormSchema | None, trace: Trace) -> BrowserSession:
+async def _session_with_form(run_id: str, job_url: str, schema: FormSchema | None, trace: Trace, *,
+                             headed: bool) -> BrowserSession:
     """The run's live session, or a fresh one re-discovered up to the form. With a schema, the
-    re-read form must have the same keys and labels, or the stored mapping can't be trusted."""
+    re-read form must have the same keys and labels, or the stored mapping can't be trusted.
+    A run that discover moved to the headed fallback re-opens headed; the re-discover never
+    falls back itself, so the browser mode only changes where the workflow learns of it (contract §2)."""
     registry = SessionRegistry.instance()
     if session := registry.get(run_id):
         return session
     activity.logger.warning(f"[session] no live browser for run {run_id} — re-opening {job_url}")
     try:
-        session = await registry.open(run_id, job_url)
+        session = await registry.open(run_id, job_url, headed=headed)
+        await discover(session, trace)  # (never falls back, so never swaps; guarded all the same)
     except SessionSuperseded as exc:
         raise superseded(run_id) from exc
-    await discover(session, trace)
     if schema is not None:
         now = {f["key"]: f["label"] for f in await get_form_schema(session)}
         changed = [f.label for f in schema.fields if now.get(f.key) != f.label]
@@ -217,12 +220,14 @@ async def discover_activity(input: DiscoverInput) -> DiscoverOutput:
     except SessionSuperseded as exc:
         raise superseded(input.run_id) from exc
     try:
-        result = await discover(session, trace)
+        result = await discover(session, trace, headed_fallback=input.headed_fallback)
+    except SessionSuperseded as exc:  # from the headed swap: the run is a newer attempt's, record nothing
+        raise superseded(input.run_id) from exc
     except StageFailed as exc:
         await _screenshot(input.run_id, "discover_failed")
         _save_trace(input.run_id, trace)
         raise await _stage_failed(input.run_id, exc) from exc
-    await _screenshot(input.run_id, "form_found")
+    await _screenshot(input.run_id, "form_found", headed=result.headed)
     _save_trace(input.run_id, trace)
 
     # A trackable alias per application: company replies are matched back to this run by it.
@@ -232,7 +237,8 @@ async def discover_activity(input: DiscoverInput) -> DiscoverOutput:
 
     job = result.job
     activity.logger.info(
-        f"[discover] board={result.board.name} page={result.page_url} job info from {job.get('source')}: "
+        f"[discover] board={result.board.name} page={result.page_url} headed={result.headed} "
+        f"job info from {job.get('source')}: "
         f"{job.get('job_title')!r} @ {job.get('company')!r}"
     )
     return DiscoverOutput(
@@ -245,6 +251,7 @@ async def discover_activity(input: DiscoverInput) -> DiscoverOutput:
         job_company=job.get("company") or None,
         job_location=job.get("location") or None,
         posted_date=job.get("posted_date") or None,
+        headed=result.headed,
     )
 
 
@@ -254,7 +261,7 @@ async def map_form_activity(input: MapFormInput) -> MapFormOutput:
     use_run_log_dir(input.run_id)
     trace = Trace()
     try:
-        session = await _session_with_form(input.run_id, input.job_url, None, trace)
+        session = await _session_with_form(input.run_id, input.job_url, None, trace, headed=input.headed)
         board = await _detect(session)
         fields = await map_form(session, board, trace)
     except StageFailed as exc:
@@ -297,7 +304,7 @@ async def fill_activity(input: FillInput) -> FillOutput:
                                                          input.job_location)
     registry = SessionRegistry.instance()
     try:
-        session = await _session_with_form(input.run_id, input.job_url, schema, trace)
+        session = await _session_with_form(input.run_id, input.job_url, schema, trace, headed=input.headed)
         problems = await fill_form(session, board, ctx, map_new_fields=map_new, beat=beat)
     except (StageFailed, NeedsAnswer) as exc:
         await _screenshot(input.run_id, "fill_failed")
@@ -306,7 +313,7 @@ async def fill_activity(input: FillInput) -> FillOutput:
         _save_trace(input.run_id, trace)
 
     # Per attempt: an attempt that lost the lease can't overwrite (or register over) its retry's evidence.
-    evidence = {"review_round": input.review_round}
+    evidence = {"review_round": input.review_round, "headed": input.headed}  # (contract §2: the user sees it)
     tag = f"{input.review_round}_{attempt_tag()}"
     values = await read_values(session, list(ctx.fields))
     await _write_json_artifact(input.run_id, "submitted_values", f"submitted_values_{tag}.json",
@@ -361,7 +368,7 @@ async def submit_activity(input: SubmitInput) -> SubmitOutput:
         mapped = _schema_from_dict(input.mapped_form_dict or input.form_schema_dict)
         ctx = _fill_context(mapped, input.field_mappings, profile, input.cover_letter_path, input.cover_letter_text)
         try:
-            session = await _session_with_form(input.run_id, input.job_url, mapped, trace)
+            session = await _session_with_form(input.run_id, input.job_url, mapped, trace, headed=input.headed)
             problems = await fill_form(session, board, ctx, map_new_fields=None, beat=beat)
         except (StageFailed, NeedsAnswer) as exc:
             raise await _stage_failed(input.run_id, exc) from exc
@@ -379,7 +386,7 @@ async def submit_activity(input: SubmitInput) -> SubmitOutput:
     async def register_evidence() -> None:
         """Registers the evidence file as a run artifact once; retried until it succeeds."""
         if not evidence["registered"] and os.path.exists(evidence_path):
-            await persist_artifact_activity(input.run_id, "submit_evidence", evidence_path)
+            await persist_artifact_activity(input.run_id, "submit_evidence", evidence_path, {"headed": input.headed})
             evidence["registered"] = True
 
     async def record(round_evidence: dict) -> None:

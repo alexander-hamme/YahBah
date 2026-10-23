@@ -1,22 +1,22 @@
 # Development
 
 ## Run (three processes + deps)
-`mkdir -p ~/.temporal` once, then `temporal server start-dev --db-filename ~/.temporal/yahbah.db` (without `--db-filename` the dev server is in-memory and loses queued and running workflows when it stops; the CLI does not create the directory); `uv run uvicorn yahbah.api.main:app --reload --port 8000`; `uv run python -m yahbah.worker`. Needs Postgres, Ollama with the configured models pulled, and a Chrome/Chromium for browser-use (it looks for system Chrome or Playwright's Chromium cache, `~/Library/Caches/ms-playwright` or `PLAYWRIGHT_BROWSERS_PATH`, and otherwise runs `uvx playwright install chromium` itself; pre-install with that command if you like). Full setup is in the root `README.md`. Setup: `uv sync`, `uv run alembic upgrade head` (as DB owner, see [data-model](modules/data-model.md)), `uv run python scripts/seed_profile.py`.
+`mkdir -p ~/.temporal` once, then `temporal server start-dev --db-filename ~/.temporal/yahbah.db` (without `--db-filename` the dev server is in-memory and loses queued and running workflows when it stops; the CLI does not create the directory); `uv run uvicorn yahbah.api.main:app --reload --port 8000`; `uv run python -m yahbah.worker`. Needs Postgres, Ollama with the configured models pulled, and a Chrome/Chromium for browser-use (it looks for system Chrome or Playwright's Chromium cache, `~/Library/Caches/ms-playwright` or `PLAYWRIGHT_BROWSERS_PATH`, and otherwise runs `uvx playwright install chromium` itself; pre-install with that command if you like). A run in the headed fallback opens a visible Chrome window, so the worker needs a GUI session for that (without one the run ends `blocked`). Full setup is in the root `README.md`. Setup: `uv sync`, `cp config/settings.example.yaml config/settings.yaml` (the runtime settings file is gitignored and machine-local; the code defaults apply without it, see [data-model](modules/data-model.md#configuration)), `uv run alembic upgrade head` (as DB owner, see [data-model](modules/data-model.md)), `uv run python scripts/seed_profile.py`.
 
 ## Tests (`test/`, pytest, asyncio_mode=auto; config in `pyproject.toml`)
 Everything runs offline (guards below). Which run to use:
 
-| Command | Runs | Time (2026-10-20) |
+| Command | Runs | Time |
 |---|---|---|
-| `uv run pytest` | the default selection, in parallel: everything except the `e2e` tests (C7) | ~35 s |
-| `uv run pytest --complete` | everything, including `e2e`, in parallel | ~35 s |
-| `uv run pytest -n 0` (or `-p no:xdist`) | serially, for debugging; combines with `--complete`, paths and `-m` | ~280 s with `--complete` |
-| `uv run pytest -m e2e` (or the path `test/invariants/c7_acceptance`) | only the C7 acceptance gate | ~21 s |
+| `uv run pytest` | the default selection, in parallel: everything except the `e2e` tests (C7) | ~80 s (2026-10-23: 1094 passed, 2 skipped) |
+| `uv run pytest --complete` | everything, including `e2e`, in parallel | not re-measured since 2026-10-20 (~35 s then, when the default run took the same) |
+| `uv run pytest -n 0` (or `-p no:xdist`) | serially, for debugging; combines with `--complete`, paths and `-m` | not re-measured since 2026-10-20 (~280 s with `--complete` then) |
+| `uv run pytest -m e2e` (or the path `test/invariants/c7_acceptance`) | only the C7 acceptance gate | not re-measured since 2026-10-20 (~21 s then) |
 
 Runs are parallel by default: pytest-xdist (dev dependency) with `-n auto --dist load`, applied by `test/conftest.py` whenever no `-n` is given (not in `addopts`, so that `-p no:xdist` still parses). The suite is wait-bound (about 30% CPU serially), and `-n auto` measured clearly faster than a fixed `-n 8` here. The harness is per-process: each worker gets its own test database, fixture server, Temporal dev server and artifacts dir, and the offline-guard summary collects every worker's hits. Naming paths or node ids, or giving any `-m` expression, also runs the `e2e` tests it selects; only a bare run deselects them (`test/conftest.py`).
 
 Layout:
-- `test/yahbah/<area>/`: each module's own tests. Saved board pages are in `test/yahbah/fixtures/` (cases in `cases.json`; add one whenever a page is verified by hand). Synthetic ATS pages with scripted behaviour are in `fixtures/synthetic/`; each page documents its query parameters in a header comment.
+- `test/yahbah/<area>/`: each module's own tests. Saved board pages are in `test/yahbah/fixtures/` (cases in `cases.json`; add one whenever a page is verified by hand). Synthetic ATS pages with scripted behaviour are in `fixtures/synthetic/`; each page documents its query parameters in a header comment. `fixtures/discover/` holds 18 pages for discover's dead-end classification (vendor bot walls, a 403 that says "not found", a soft 404, an SPA deep link, a closed-job text page with a working form, Greenhouse's closed-job and not-found pages, login and captcha walls, and so on). They are served with their own HTTP status and headers (below) and used by `test/yahbah/agent/test_discover_classification.py` (the pure `classify_page`), `test_discover_blocks.py` (discover end to end), `test_headed_fallback.py` and `test_headed_fallback_rules.py` (the headed fallback; its "headed" browser is a second headless Chrome injected through `SessionRegistry._start`, so no window opens), and `test/yahbah/workflows/test_headed_flag.py`.
 - `test/harness/`: the shared harness (the package docstrings are the reference). Its own tests are in `harness/selftest/`.
 - `test/invariants/task<N>_*/`: the safety invariants of the [run-lifecycle contract](contracts/run-lifecycle.md) and roadmap A2–A5/A7, grouped by owning task. `batch1_review/`: defects found by QA's close-out review of tasks 3 and 4 (2026-10-20), each test naming its owning task.
 - `test/invariants/c7_acceptance/`: roadmap C7, the acceptance gate before any unattended live submission (below).
@@ -30,6 +30,7 @@ Layout:
 Set by hand:
 - `slow`: waits for a real timeout to expire (no time-skipping Temporal server is available offline). In the default run; `-m "not slow"` skips them.
 - `e2e`: whole runs through Temporal with the real worker, every real activity and Chrome (C7). Left out of a bare run.
+- An opt-in live check opens a real headed Chrome window: `YAHBAH_LIVE_BROWSER=1` (end of `test/yahbah/agent/test_headed_fallback.py`); skipped otherwise.
 
 Deselect with `-m "not browser"`, `-m "not db"`, `-m "not temporal"`.
 
@@ -47,7 +48,7 @@ Deselect with `-m "not browser"`, `-m "not db"`, `-m "not temporal"`.
 | Fixture | Scope | Gives |
 |---|---|---|
 | `fixture_server` | session | stdlib HTTP server on 127.0.0.1 serving `test/yahbah/fixtures/`. `events_named("submit")` returns what pages reported via `fetch('/__event?name=…')`. |
-| `pages` | test | A per-test page directory on that server: `pages.write(name, html) -> url`. |
+| `pages` | test | A per-test page directory on that server: `pages.write(name, html, status=200, headers=None) -> url` (a non-200 status or extra headers make the server answer with them, for a WAF interstitial or a 404; a `Server` header is honoured) and `pages.redirect(name, to, status=302) -> url`. `FixtureServer.respond`, `.redirect` and `.forget` do the same per path; `unmount` clears them. |
 | `browser` | module | browser-use session; load pages with `harness.browser.load(session, url)`. browser-use doesn't index `about:blank`, so pages are always served over HTTP. |
 | `llm` | test | `ScriptedLLM` on `OllamaClient`: `llm.on(role, schema, replies=[…] / handler=…)`. Calls are recorded; an unscripted call raises, and a swallowed one fails the test. |
 | `agent_llm` | test | `AgentScript` as every browser-use chat model: `.click(id=…)`, `.send_keys(…)`, `.done()`. Drives `run_agent` and `fix_with_agent` for real. |
@@ -79,7 +80,7 @@ The harness's bridges for pre-contract interfaces (`testing_mode`, `is_test_run`
 **Frontend.** Its own checks (`npm test`, `npm run lint`, `npx tsc --noEmit`, the real-browser sandbox check) are in [api-frontend](modules/api-frontend.md).
 
 ## Scripts (`scripts/`)
-- `run_pipeline.py <url>`: run discover -> map -> answers -> fill without Temporal/run record; never submits without `--submit`; flags `--force-tier`, `--cover-letter`, `--headed`, `--keep-open`; output `artifacts/debug-<ts>/`.
+- `run_pipeline.py <url>`: run discover -> map -> answers -> fill without Temporal/run record; never submits without `--submit`; flags `--force-tier`, `--cover-letter`, `--headed`, `--headed-fallback` (enable discover's headed fallback for a page that blocks headless, contract §2), `--keep-open`; output `artifacts/debug-<ts>/`.
 - `save_fixture.py <url> <name>`: save a live page as an offline fixture.
 - `seed_profile.py`: seed applicant profile from the `profile` key of gitignored `config/personal.yaml` (merged by `load_prompts_config`; template: `config/personal.example.yaml`).
 - `manual/gmail_verification.py <email>`: hand-run live check of verification-code retrieval, not collected by pytest.

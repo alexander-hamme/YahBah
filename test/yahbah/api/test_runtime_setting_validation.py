@@ -10,6 +10,8 @@ from yahbah.config import RUNTIME_SETTINGS, effective_runtime_settings, validate
     ("submission_mode", "review", "review"),
     ("review_window_hours", 0.5, 0.5),
     ("review_window_hours", 48, 48.0),
+    ("browser_headed_fallback", False, False),
+    ("browser_headed_fallback", True, True),
     ("job_alert_polling_enabled", True, True),
     ("job_alert_max_promotions_per_cycle", 0, 0),
     ("job_alert_backfill_since", "2026-04-16", "2026-04-16"),
@@ -26,6 +28,8 @@ def test_valid_values_are_stored(key, value, stored) -> None:
     ("review_window_hours", -1),
     ("review_window_hours", "48"),
     ("review_window_hours", True),
+    ("browser_headed_fallback", "false"),
+    ("browser_headed_fallback", 0),
     ("job_alert_polling_enabled", "true"),
     ("job_alert_min_match_score", 50.5),
     ("job_alert_sender_patterns", "*@jobright.ai"),
@@ -38,13 +42,16 @@ def test_invalid_values_and_unknown_keys_are_refused(key, value) -> None:
         validate_runtime_setting(key, value)
 
 
-def test_every_key_in_the_shipped_settings_file_is_known_except_the_removed_one() -> None:
+def test_the_shipped_settings_example_is_valid_as_is() -> None:
+    """config/settings.example.yaml is copied to the gitignored settings.yaml: every key must be
+    writable and every value one the API would store."""
     import yaml
 
     from harness.env import REPO
 
-    shipped = yaml.safe_load((REPO / "config" / "settings.yaml").read_text()) or {}
-    assert set(shipped) - set(RUNTIME_SETTINGS) <= {"testing_mode"}
+    example = yaml.safe_load((REPO / "config" / "settings.example.yaml").read_text())
+    for key, value in example.items():
+        assert validate_runtime_setting(key, value) == value, key
 
 
 @pytest.mark.parametrize("raw, mode, window", [
@@ -56,3 +63,12 @@ def test_every_key_in_the_shipped_settings_file_is_known_except_the_removed_one(
 def test_effective_settings_fail_closed(raw, mode, window) -> None:
     effective = effective_runtime_settings(raw)
     assert (effective["submission_mode"], effective["review_window_hours"]) == (mode, window)
+
+
+@pytest.mark.parametrize("raw, fallback", [
+    ({}, True),
+    ({"browser_headed_fallback": False}, False),
+    ({"browser_headed_fallback": "no"}, True),  # invalid: the default
+])
+def test_effective_headed_fallback_defaults_to_true(raw, fallback) -> None:
+    assert effective_runtime_settings(raw)["browser_headed_fallback"] is fallback

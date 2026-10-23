@@ -187,6 +187,8 @@ export interface ReviewPayload {
 export interface RuntimeSettings {
   submission_mode: SubmissionMode;
   review_window_hours: number;
+  /** Contract §2 "Headed fallback": reopen a blocked page once in a visible Chrome window. */
+  browser_headed_fallback: boolean;
 }
 
 /** The §8 error body's `detail`. */

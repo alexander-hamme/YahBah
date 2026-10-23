@@ -9,6 +9,34 @@ Running record of architectural, structural, decision-making and workflow-paradi
 
 ---
 
+## 2026-10-23: runtime settings file is machine-local
+
+- **What.** `config/settings.yaml` is gitignored and no longer tracked. A committed template, `config/settings.example.yaml`, lists every writable runtime key with its code default (`submission_mode: review`); setup is `cp config/settings.example.yaml config/settings.yaml`. The code does not create the file: a missing file reads as `{}` (all code defaults, pollers off), and `PUT /settings/{key}` creates or rewrites it with `yaml.dump`, which drops comments. The shipped-file test in `test/yahbah/api/test_runtime_setting_validation.py` now checks the example (every key validates as it stands).
+- **Why.** The file holds machine-local runtime state, such as the mode toggle, which the dashboard rewrites; committing it leaked local choices into the repo.
+- **Governs:** `.gitignore` and `config/settings.example.yaml`; [modules/data-model.md](modules/data-model.md) (Configuration), README (setup). **Supersedes:** the tracked `config/settings.yaml`.
+
+---
+
+## 2026-10-21: discover classification, board route, headed fallback
+
+- **What.** Discover's dead ends are now decided by code from page evidence, never by what a page or a model says.
+  - **Classification.** One pure function, `classify_page(PageEvidence, board)` in `agent/discover.py`, returns `blocked`, `job_closed`, `captcha`, `login_wall`, `browser_error` or nothing, from the main document's HTTP status (Navigation Timing), vendor bot-wall markup (Akamai, Cloudflare, PerimeterX, DataDome, Imperva), the board's closure URL and the count of visible controls. `blocked`, `job_closed` and `browser_error` are checked before any model tier and again after each click that led nowhere; `captcha` and `login_wall` only after the tiers fail (a guest-apply path may exist). A visible application form always wins. The navigation agent's `job_closed`/`login_required`/`captcha` answers are advice in the detail; an uncertain one is `form_not_found`. Precedence: [contract §2](contracts/run-lifecycle.md).
+  - **Board route.** A wrapper page that names a board's job (`gh_jid`, or a job-id-shaped number in the path) is swapped for the board's own form (`BoardProfile.application_routes`, `route_verified`, `closed_url_patterns`; Greenhouse only), loaded and verified in the browser, before the wrapper's own evidence decides.
+  - **Headed fallback.** If the early verdict is `blocked` and no board route verifies, discover reopens the URL once in a fresh, throwaway, headed Chromium (`SessionRegistry.reopen_headed`); the run stays headed for its life, through review and the approved re-fill and submit. Gated by the runtime setting `browser_headed_fallback` (default `true`, snapshotted at run creation) with a dashboard switch beside the mode control. Threaded as `DiscoverInput.headed_fallback`, `DiscoverOutput.headed` and `headed` on `MapFormInput`/`FillInput`/`SubmitInput`; fill and submit evidence record it.
+  - **Tooling.** `scripts/run_pipeline.py --headed-fallback`; the test fixture server can answer a page with its own status, headers or a redirect; 18 saved pages in `test/yahbah/fixtures/discover/`.
+- **Why.** Live run `83a0efc2` (rubrik.com behind Akamai) was labelled `job_closed` by the model on a 403 "Access Denied" wall: a bot wall read as a closed job, which the dashboard then reported as "no longer accepts applications". Per the agent's background notes (not re-verified here), headless gets a request-level 403 there and headed on the same IP is served.
+- **Decisions (user, 2026-10-21; contract §2).**
+  1. **Board route first, browser-only:** no Greenhouse API or other side-channel HTTP. Every candidate is loaded and verified in the page (host, job id, form signature); another job's form is never accepted.
+  2. **Then the headed fallback:** one attempt, setting default `true`.
+  3. **Else `blocked`.** browser-use's default launch flags (including disabling `AutomationControlled`) are accepted as they are; YahBah adds no masking, and never uses stealth, captcha solving, retry loops or proxies.
+  4. Main session: every `blocked` is also appended to `_observations.jsonl` with whether the URL named a board job, to show how often a walled page has no board route.
+- **Process.** Browser navigation, QA and dashboard specialists, judging by the tree *(inferred; nothing authoritative records who built which part)*.
+- **Verification (main session, 2026-10-23).** `uv run pytest` (default, leaves out `e2e`): 1094 passed, 2 skipped in 82 s; frontend `npm test` 120 passed (15 files), `npx tsc --noEmit` and `npm run lint` clean. No `e2e` result is recorded for this work. No application has been submitted against a live site; run `83a0efc2` only reached discover.
+- **State.** Committed on top of `7b46619`.
+- **Governs:** [contracts/run-lifecycle.md](contracts/run-lifecycle.md) §2 (amended through 2026-10-21) and the module pages ([agent](modules/agent.md), [workflows](modules/workflows.md), [data-model](modules/data-model.md), [api-frontend](modules/api-frontend.md)). **Supersedes:** model-decided `job_closed`/`captcha`/`login_wall` at discover (the `_NAV_FAILURES` mapping is deleted; the answers are advice); `form_not_found` as the label for a walled page (now `blocked`, or `job_closed` for a 404/410 on an inert page); the unused `resolve_application_url` profile hook (replaced by `application_routes`); headless-only browser sessions; the dashboard's old `job_closed`/`blocked` wording.
+
+---
+
 ## 2026-10-20: review-queue triage
 
 - **What.** `/review` opens the selected run in a compact preview by default; the full review (with its tick box) is one step away. Keys: `j`/`k` move, `y` approve, `n` reject, `o` open the full review, `u`/`Esc` undo. Frontend only: no backend or API change. See [modules/api-frontend.md](modules/api-frontend.md) (Triage).

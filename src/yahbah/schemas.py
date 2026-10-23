@@ -52,6 +52,9 @@ class FieldMapping:
 class DiscoverInput:
     run_id: str
     job_url: str
+    # The run's browser_headed_fallback snapshot (contract §2). Missing in inputs from before the
+    # setting existed: no fallback, as those runs were created without one.
+    headed_fallback: bool = False
 
 
 @dataclass
@@ -65,12 +68,15 @@ class DiscoverOutput:
     job_company: str | None = None
     job_location: str | None = None
     posted_date: str | None = None
+    # The run continued in the headed fallback browser (contract §2): every later browser stage is headed too.
+    headed: bool = False
 
 
 @dataclass
 class MapFormInput:
     run_id: str
     job_url: str
+    headed: bool = False  # DiscoverOutput.headed: a re-opened browser is headed too
 
 
 @dataclass
@@ -175,6 +181,7 @@ class FillInput:
     # Re-fill after a review approval: exactly the approved mappings (no new model mapping), and the
     # browser stays open for SUBMIT unless a required field without an approved answer appeared.
     refill: bool = False
+    headed: bool = False  # DiscoverOutput.headed
 
 
 @dataclass
@@ -214,6 +221,7 @@ class SubmitInput:
     account_email: str
     mapped_form_dict: dict | None = None  # the MAP_FORM schema: a re-opened form is re-filled from it
     baseline: dict | None = None  # FillOutput.baseline of the approved re-fill
+    headed: bool = False  # DiscoverOutput.headed
 
 
 @dataclass

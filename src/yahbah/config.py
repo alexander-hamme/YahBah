@@ -138,6 +138,7 @@ async def set_runtime_setting(key: str, value) -> dict:
 # ── Runtime-setting validation (contract §3, §8) ─────────────────────────────
 
 DEFAULT_REVIEW_WINDOW_HOURS = 48.0
+DEFAULT_BROWSER_HEADED_FALLBACK = True
 
 
 def _submission_mode(value):
@@ -206,6 +207,7 @@ def _iso_date(value):
 RUNTIME_SETTINGS = {
     "submission_mode": _submission_mode,
     "review_window_hours": _positive_hours,
+    "browser_headed_fallback": _flag,
     "gmail_status_polling_enabled": _flag,
     "gmail_status_polling_interval_minutes": _whole(1),
     "gmail_folder_label": _text,
@@ -236,13 +238,15 @@ def validate_runtime_setting(key: str, value):
 
 
 def effective_runtime_settings(raw: dict) -> dict:
-    """`raw` with submission_mode and review_window_hours as new runs use them: a missing or invalid
-    submission_mode means review (fail closed); a missing or invalid window means 48 hours."""
+    """`raw` with the settings new runs snapshot, as they use them: a missing or invalid submission_mode
+    means review (fail closed); a missing or invalid window means 48 hours; a missing or invalid
+    browser_headed_fallback means true (contract §2)."""
     from yahbah.run_state import DEFAULT_SUBMISSION_MODE
 
     out = dict(raw)
     for key, default in (("submission_mode", DEFAULT_SUBMISSION_MODE),
-                         ("review_window_hours", DEFAULT_REVIEW_WINDOW_HOURS)):
+                         ("review_window_hours", DEFAULT_REVIEW_WINDOW_HOURS),
+                         ("browser_headed_fallback", DEFAULT_BROWSER_HEADED_FALLBACK)):
         try:
             out[key] = validate_runtime_setting(key, raw[key])
         except (KeyError, ValueError):

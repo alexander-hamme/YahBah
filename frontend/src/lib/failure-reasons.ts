@@ -24,7 +24,7 @@ export const FAILURE_REASON_INFO: Record<FailureReason, FailureReasonInfo> = {
   },
   job_closed: {
     title: "Job closed",
-    detail: "The posting no longer accepts applications.",
+    detail: "The job board says this posting is gone or no longer accepts applications. Nothing to do: move on.",
   },
   login_wall: {
     title: "Login required",
@@ -35,8 +35,9 @@ export const FAILURE_REASON_INFO: Record<FailureReason, FailureReasonInfo> = {
     detail: "The site asked for human verification.",
   },
   blocked: {
-    title: "Blocked by the site",
-    detail: "The site refused automated access.",
+    title: "Blocked by the site's bot protection",
+    detail:
+      "The site's security check refused automated access; this says nothing about the job, which may still be open. Open it yourself, use the company's direct application link (for example its Greenhouse or Lever page), or retry later.",
   },
   needs_answer: {
     title: "Needs an answer from you",
@@ -72,7 +73,7 @@ export const FAILURE_REASON_INFO: Record<FailureReason, FailureReasonInfo> = {
   },
   browser_error: {
     title: "Browser error",
-    detail: "The browser session crashed or lost the page.",
+    detail: "The browser crashed, or the site didn't load (server or network error).",
   },
   llm_error: {
     title: "Model error",

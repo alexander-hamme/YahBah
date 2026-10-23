@@ -7,6 +7,10 @@ Discover (get to the application form):
   3. short navigation agent                                                     -- driver (+ escalation)
   Every tier's result is checked in code (read_form_schema) before it's accepted; anything short of
   a visible form — even a model's "job closed" — falls through to the next tier.
+  Before the tiers: a wrapper page is swapped for the board's own form when the board can confirm
+  it (Greenhouse ?gh_jid=), and evidence in code ends discover with no model asked: an anti-bot
+  interstitial or a refusing HTTP status (blocked), the board's closed-job page (job_closed).
+  The same check runs after every click that led nowhere.
 Map (list every field, each tagged with a data-ja-field key for filling later):
   1. read_form_schema                                      -- code
   2. one-shot: cleaned form HTML -> JSON with a selector per field; every selector is
@@ -20,8 +24,10 @@ the page has it, else the page's main text is handed to the metadata model unpar
 """
 import asyncio
 import json
+import re
 import time
 from dataclasses import dataclass
+from html import unescape
 from typing import Literal
 
 from browser_use.browser import BrowserSession
@@ -31,8 +37,19 @@ from loguru import logger
 from pydantic import BaseModel
 from temporalio import activity
 
-from yahbah.agent.boards import BoardProfile, detect_board, embedded_form_url, with_notes
+from yahbah.agent.boards import (
+    GENERIC,
+    BoardProfile,
+    BoardRoute,
+    board_id_in_url,
+    board_routes,
+    detect_board,
+    embedded_form_url,
+    record_blocked,
+    with_notes,
+)
 from yahbah.agent.fill import capture_empty_values
+from yahbah.agent.session import SessionRegistry, SessionSuperseded
 from yahbah.agent.llm import chat_model, make_crew, run_agent
 from yahbah.agent.tools import get_form_schema, node_for_key, read_dropdown_by_key, run_js
 from yahbah.config import load_prompts_config
@@ -118,7 +135,7 @@ TAG_SELECTOR_JS = r"""
 
 
 class StageFailed(Exception):
-    """A stage could not complete. reason is a short code (job_closed, login_wall, captcha,
+    """A stage could not complete. reason is a short code (job_closed, login_wall, captcha, blocked,
     form_not_found, form_unmapped, needs_answer, fill_failed, submit_unverified, ...)."""
 
     def __init__(self, reason: str, detail: str = "") -> None:
@@ -148,6 +165,158 @@ def beat(note: str) -> None:
 
 async def settle(secs: float = 2.0) -> None:
     await asyncio.sleep(secs)
+
+
+# ── Dead ends: decided by evidence in code (contract §2, discover-stage classification) ─────────
+# Anti-bot interstitials, by vendor: markers of the vendor's block or challenge page itself, not of
+# the ordinary pages it protects (Cloudflare's challenge-platform script, DataDome's tags.js and the
+# reCAPTCHA v3 badge are on normal pages too). Every marker is anchored in markup (the title, an id or
+# class, an iframe/script src, the vendor's inline config), never in prose: a live job page quoting a
+# WAF page is not one. Matched against the HTML, entities decoded.
+BLOCK_SIGNATURES: dict[str, str] = {
+    "akamai": r"<title>\s*Access Denied\s*</title>[\s\S]*(Reference\s*#\d+\.[0-9a-f]+\.|errors\.edgesuite\.net/)",
+    "cloudflare": r"<title>\s*(Just a moment\.\.\.|Attention Required! \| Cloudflare)\s*</title>"
+                  r"|window\._cf_chl_opt|id=\"challenge-(running|form|error-text)\"|(id|class)=\"cf-error-details",
+    "perimeterx": r"id=\"px-captcha\"|<title>\s*Access to this page has been denied",
+    "datadome": r"src=\"https?://(geo|ct)\.captcha-delivery\.com/",
+    "imperva": r"src=\"[^\"]*/_Incapsula_Resource\?",
+}
+# A status alone decides, whatever the page says (a 403 page titled "Job not found" is still a 403),
+# but only on an inert page (next to nothing to click): single-page apps on static hosting answer
+# deep links with a 403/404 and then render normally. INERT_MAX_CONTROLS is named in the contract.
+BLOCK_STATUSES = {401, 403, 407, 429}
+GONE_STATUSES = {404, 410}
+INERT_MAX_CONTROLS = 5
+# How long a status-only verdict must keep holding before it's trusted (a slow app renders late).
+STATUS_RECHECK_SECS = 3.0
+# Visible human-verification widgets on the site's own page (not the invisible reCAPTCHA v3 badge).
+CAPTCHA_WIDGETS = ", ".join([
+    'iframe[src*="/recaptcha/api2/anchor"]:not([src*="size=invisible"])',
+    'iframe[src*="/recaptcha/enterprise/anchor"]:not([src*="size=invisible"])',
+    'iframe[src*="hcaptcha.com"][src*="checkbox"]', ".h-captcha iframe",
+    'iframe[src*="challenges.cloudflare.com"]', ".cf-turnstile",
+])
+# Advisory only: decided after the tiers fail, since a guest-apply path may exist.
+LATE_REASONS = {"captcha", "login_wall"}
+
+# The evidence (PageEvidence): the main document's HTTP status (Navigation Timing; 0 for file:// and
+# error pages), the real document.title, rendered text and HTML (heads of them), visible controls.
+PAGE_EVIDENCE_JS = r"""
+(() => {
+  const vis = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const count = (sel) => [...document.querySelectorAll(sel)].filter(vis).length;
+  return JSON.stringify({
+    url: location.href,
+    status: (performance.getEntriesByType('navigation')[0] || {}).responseStatus || null,
+    title: document.title,
+    text: ((document.body && document.body.innerText) || '').slice(0, 5000),
+    html: document.documentElement.outerHTML.slice(0, 200000),
+    controls: count('a[href], button, input:not([type=hidden]), select, textarea, [role=button], [role=link]'),
+    captcha_widgets: count(__CAPTCHA__),
+    password_fields: count('input[type=password]'),
+  });
+})()
+""".replace("__CAPTCHA__", json.dumps(CAPTCHA_WIDGETS))
+
+
+@dataclass(frozen=True)
+class PageEvidence:
+    url: str
+    status: int | None  # the main document's HTTP status, None when unknown
+    title: str
+    text: str  # rendered (entities decoded), head of it
+    html: str  # head of it
+    controls: int  # visible clickable/fillable elements
+    captcha_widgets: int = 0  # visible CAPTCHA_WIDGETS
+    password_fields: int = 0  # visible password inputs
+
+
+@dataclass(frozen=True)
+class PageVerdict:
+    reason: str  # a contract §2 failure reason
+    signal: str  # what decided it: the vendor (akamai, ...), http_<status>, greenhouse:closed, ...
+    detail: str  # for the user and triage: the signal, the status and the URL
+    url: str = ""  # the page judged
+
+
+def classify_page(ev: PageEvidence, board: BoardProfile) -> PageVerdict | None:
+    """Whether this page is a dead end, from evidence alone (no model, no session, no page words);
+    None when nothing here settles it. Precedence as in contract §2 (rule 1, a visible application
+    form, is the caller's: see raise_if_dead_end)."""
+    def verdict(reason: str, signal: str) -> PageVerdict:
+        return PageVerdict(reason, signal, f"{signal} (HTTP {ev.status or '?'}) at {ev.url}", ev.url)
+
+    inert = ev.controls <= INERT_MAX_CONTROLS
+    page = f"<title>{ev.title}</title>\n{unescape(ev.html)}"
+    for vendor, pattern in BLOCK_SIGNATURES.items():
+        if re.search(pattern, page, re.I):
+            return verdict("blocked", vendor)                         # 2
+    if ev.status in BLOCK_STATUSES and inert:
+        return verdict("blocked", f"http_{ev.status}")                # 3
+    if ev.status in GONE_STATUSES and inert:
+        return verdict("job_closed", f"http_{ev.status}")             # 4
+    if board.closed_at(ev.url):
+        return verdict("job_closed", f"{board.name}:closed")          # 5
+    if ev.captcha_widgets:
+        return verdict("captcha", "captcha_widget")                   # 6
+    if ev.password_fields:
+        return verdict("login_wall", "password_field")                # 7
+    if ev.url.startswith("chrome-error://"):
+        return verdict("browser_error", "net_error")                  # 8
+    if ev.status and ev.status >= 500:
+        return verdict("browser_error", f"http_{ev.status}")
+    return None
+
+
+async def read_page_evidence(session: BrowserSession) -> PageEvidence:
+    return PageEvidence(**json.loads(await run_js(session, PAGE_EVIDENCE_JS)))
+
+
+async def page_verdict(session: BrowserSession, board: BoardProfile) -> PageVerdict | None:
+    try:
+        ev = await read_page_evidence(session)
+    except Exception as exc:  # a page mid-navigation; the next check sees the settled one
+        logger.warning(f"[discover] reading page evidence failed: {exc}")
+        return None
+    return classify_page(ev, board)
+
+
+async def raise_if_dead_end(session: BrowserSession, board: BoardProfile, late: bool = False,
+                            note: str = "") -> None:
+    """Stop on evidence in code that no form is reachable here (contract §2)."""
+    if verdict := await dead_end_verdict(session, board, late):
+        raise dead_end(verdict, board, note)
+
+
+async def dead_end_verdict(session: BrowserSession, board: BoardProfile, late: bool = False) -> PageVerdict | None:
+    """The verdict that ends discover here, or None. Before and between the tiers (late=False) only
+    the reasons that need no guest-apply check (blocked, job_closed, browser_error); after them
+    (late=True) captcha and login_wall too. A visible application form always wins, and a status-only
+    verdict must keep holding while a slow app gets time to render."""
+    verdict = await page_verdict(session, board)
+    if verdict and verdict.signal.startswith("http_") and verdict.reason != "browser_error":
+        deadline = time.monotonic() + STATUS_RECHECK_SECS
+        while verdict and time.monotonic() < deadline:
+            await asyncio.sleep(0.5)
+            verdict = await page_verdict(session, board)
+    if not verdict or (verdict.reason in LATE_REASONS and not late):
+        return None
+    if looks_like_form(await get_form_schema(session)):
+        return None
+    return verdict
+
+
+def dead_end(verdict: PageVerdict, board: BoardProfile, note: str = "") -> StageFailed:
+    """The StageFailed for a verdict. A blocked one also says whether its URL named a board job, in the
+    detail and in _observations.jsonl (how often a walled page names no board job)."""
+    if verdict.reason != "blocked":
+        return StageFailed(verdict.reason, verdict.detail + note)
+    url = verdict.url
+    try:
+        record_blocked(url, board, verdict.signal)
+    except OSError as exc:
+        logger.warning(f"[discover] could not record the blocked observation: {exc}")
+    return StageFailed("blocked", f"{verdict.detail}{note}; board id in URL: {'yes' if board_id_in_url(url) else 'no'}")
 
 
 def looks_like_form(fields: list[dict]) -> bool:
@@ -180,14 +349,12 @@ class NavOutcome(BaseModel):
     explanation: str
 
 
-_NAV_FAILURES = {"job_closed": "job_closed", "login_required": "login_wall", "captcha": "captcha"}
-
-
 @dataclass
 class DiscoverResult:
     board: BoardProfile
     page_url: str
     job: dict
+    headed: bool = False  # the run continued in the headed fallback browser (contract §2)
 
 
 async def _follow_embed(session: BrowserSession, trace: Trace) -> None:
@@ -260,40 +427,116 @@ async def oneshot_navigate(session: BrowserSession, board: BoardProfile, trace: 
                                               f"form found ({len(fields)} fields)")
             return True
         trace.add("discover", "model", t, f"one-shot: clicked [{decision.element_index}], no form yet")
+        await raise_if_dead_end(session, await _detect(session))
     return False
 
 
-async def discover(session: BrowserSession, trace: Trace) -> DiscoverResult:
-    """From the job URL's page to a page showing the application form. Raises StageFailed."""
+async def _open_board_route(session: BrowserSession, routes: list[tuple[BoardProfile, BoardRoute]], trace: Trace
+                           ) -> tuple[BoardProfile | None, str]:
+    """Open each candidate board form in turn: (its board, "") for the first verified one, else
+    (None, the detail note). A closed-job page at an explicit candidate ends the run job_closed."""
+    closed: list[str] = []  # tokens whose real board answered "no such job" (a 200 closed-job page)
+    unverified = False
+    for board, route in routes:
+        t = time.time()
+        try:
+            await session.navigate_to(route.url)
+            await settle(3)
+            ev = await read_page_evidence(session)
+        except Exception as exc:  # a load that failed or never settled is just no route
+            trace.add("discover", "code", t, f"{board.name} {route.label}: unreadable ({exc})")
+            continue
+        if board.closed_at(ev.url):
+            trace.add("discover", "code", t, f"{board.name} {route.label}: closed-job page (HTTP {ev.status})")
+            if ev.status == 200:  # a real board without this job (404: not this board)
+                if route.explicit:
+                    raise StageFailed("job_closed", f"{board.name}:closed (HTTP 200) at {ev.url}; "
+                                                    f"board route: closed on {route.label}")
+                closed.append(route.label)
+            continue
+        if board.route_verified(ev.url, ev.html, route.job_id) and looks_like_form(await get_form_schema(session)):
+            trace.add("discover", "code", t, f"{board.name}: opened its own form {ev.url[:100]}")
+            return board, ""
+        trace.add("discover", "code", t, f"{board.name} {route.label}: {ev.url[:100]} is not job {route.job_id}'s form")
+        unverified = True
+    outcome = f"closed on {', '.join(closed)}" if closed else "unverified" if unverified else "none"
+    return None, f"; board route: {outcome}"
+
+
+async def _headed_fallback(session: BrowserSession, url: str, verdict: PageVerdict, board: BoardProfile,
+                           note: str, trace: Trace) -> BrowserSession:
+    """The run's browser swapped for a headed one on the same URL (one attempt, no retry). Raises
+    blocked ("headed: unavailable") when no headed browser can be had."""
+    t = time.time()
+    try:
+        headed = await SessionRegistry.instance().reopen_headed(session, url)
+    except SessionSuperseded:
+        raise
+    except Exception as exc:  # no GUI session, a locked screen, the worker under launchd, not a run's browser
+        trace.add("discover", "code", t, f"headed fallback unavailable ({type(exc).__name__}: {exc})"[:300])
+        raise dead_end(verdict, board, note + "; headed: unavailable") from exc
+    trace.add("discover", "code", t, f"headed fallback: reopened {url[:100]} headed "
+                                     f"(headless was {verdict.reason}: {verdict.signal})")
+    return headed
+
+
+async def discover(session: BrowserSession, trace: Trace, *, headed_fallback: bool = False) -> DiscoverResult:
+    """From the job URL's page to a page showing the application form. Raises StageFailed.
+    headed_fallback: a page that walls off this (headless) browser, with no board route around it, is
+    reopened once in a headed browser, which the run then keeps (contract §2); result.headed says so."""
+    headed = False
     # Job info first: the page we were given usually holds the description; the form may not.
-    job = await read_job_info(session)
+    # A block page holds none, so then it's read from wherever the form turns up.
+    job = {} if await page_verdict(session, GENERIC) else await read_job_info(session)
     await _follow_embed(session, trace)
     board = await _detect(session)
 
-    if board.resolve_application_url:
-        t = time.time()
-        if real := await board.resolve_application_url(lambda c: run_js(session, c)):
-            await session.navigate_to(real)
+    # Board route first (contract §2): a wrapper naming a board's job is swapped for the board's own
+    # form before the wrapper's evidence (rules 2-4) decides anything.
+    url = await session.get_current_page_url()
+    verdict = await page_verdict(session, board)
+    walled = bool(verdict and (verdict.reason == "blocked" or verdict.signal in ("http_404", "http_410")))
+    route_note = ""
+    if routes := await board_routes(board, url, lambda c: run_js(session, c), dead_end=walled):
+        route_board, route_note = await _open_board_route(session, routes, trace)
+        if route_board:
+            board = route_board
+        else:  # back to the job's own page (never left on a candidate), judged on its live evidence
+            await session.navigate_to(url)
             await settle(3)
-            trace.add("discover", "code", t, f"{board.name}: resolved application URL {real[:80]}")
             await _follow_embed(session, trace)
             board = await _detect(session)
+
+    if verdict := await dead_end_verdict(session, board):
+        if verdict.reason != "blocked" or not headed_fallback:
+            raise dead_end(verdict, board, route_note)
+        session = await _headed_fallback(session, url, verdict, board, route_note, trace)
+        headed = True
+        await _follow_embed(session, trace)
+        board = await _detect(session)
+        if verdict := await dead_end_verdict(session, board):
+            raise dead_end(verdict, board, route_note + f"; headed: {'blocked' if verdict.reason == 'blocked' else 'yes'}")
+        route_note += "; headed: yes"  # every later failure says the run was headed
+    if not job:
+        job = await read_job_info(session)
 
     t = time.time()
     if looks_like_form(fields := await get_form_schema(session)):
         trace.add("discover", "code", t, f"form already on page ({len(fields)} fields)")
-        return DiscoverResult(board, await session.get_current_page_url(), job)
+        return DiscoverResult(board, await session.get_current_page_url(), job, headed)
 
     t = time.time()
     clicked = await click_apply(session, board)
     await _follow_embed(session, trace)
     if looks_like_form(fields := await get_form_schema(session)):
         trace.add("discover", "code", t, f"clicked {clicked!r}, form found ({len(fields)} fields)")
-        return DiscoverResult(await _detect(session), await session.get_current_page_url(), job)
+        return DiscoverResult(await _detect(session), await session.get_current_page_url(), job, headed)
     trace.add("discover", "code", t, f"clicked {clicked!r}, no form" if clicked else "no apply button found")
+    if clicked:
+        await raise_if_dead_end(session, await _detect(session))
 
     if await oneshot_navigate(session, board, trace):
-        return DiscoverResult(await _detect(session), await session.get_current_page_url(), job)
+        return DiscoverResult(await _detect(session), await session.get_current_page_url(), job, headed)
 
     t = time.time()
     history = await run_agent(
@@ -307,10 +550,11 @@ async def discover(session: BrowserSession, trace: Trace) -> DiscoverResult:
                                       f"{len(fields)} fields")
     if looks_like_form(fields):
         # Navigation may have landed on a different board (e.g. company site -> Greenhouse).
-        return DiscoverResult(await _detect(session), await session.get_current_page_url(), job)
-    if outcome and outcome.state in _NAV_FAILURES:
-        raise StageFailed(_NAV_FAILURES[outcome.state], outcome.explanation)
-    raise StageFailed("form_not_found", outcome.explanation if outcome else "navigation agent gave no result")
+        return DiscoverResult(await _detect(session), await session.get_current_page_url(), job, headed)
+    # Evidence in code decides; the agent's answer (job closed, login, captcha, ...) is only advice.
+    await raise_if_dead_end(session, await _detect(session), late=True, note=route_note)
+    advice = f"{outcome.state}: {outcome.explanation}" if outcome else "navigation agent gave no result"
+    raise StageFailed("form_not_found", f"no application form reached{route_note}; model advice: {advice}")
 
 
 # ── Map form ──────────────────────────────────────────────────────────────────

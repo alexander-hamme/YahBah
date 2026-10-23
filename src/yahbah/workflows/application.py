@@ -10,6 +10,9 @@ Stages (current_state):
     answers (FILL), and SUBMITs; a required field without an approved answer is mapped
     (MAP_ANSWERS) and sent back to REVIEW as a new round instead.
 
+A run that DISCOVER moved to the headed fallback browser (DiscoverOutput.headed, contract §2) passes
+headed=True to every later browser stage, the approved re-fill and SUBMIT included.
+
 QUEUED waits for a run slot (settings.max_concurrent_runs); only RUNNING holds one. Every status
 write is an activity fenced on this workflow's id (activities/db_ops.py). Cancellation closes the
 browser and ends the run CANCELLED; a run whose submit was attempted ends SUBMIT_UNCERTAIN
@@ -83,6 +86,8 @@ class ApplicationWorkflowInput:
     submission_mode: str = "review"
     origin: str = "manual"
     review_window_hours: float = 48.0
+    # Missing in inputs from before the setting existed: no headed fallback (contract §2).
+    browser_headed_fallback: bool = False
 
 
 def failure_reason(exc: ActivityError) -> str:
@@ -149,11 +154,14 @@ class ApplicationWorkflow:
 
         # ── DISCOVER: open the URL, reach the application form ────────────────
         await self._state("DISCOVER")
-        discovered = await self._long(discover_activity, DiscoverInput(run_id=run_id, job_url=job_url))
+        discovered = await self._long(discover_activity, DiscoverInput(
+            run_id=run_id, job_url=job_url, headed_fallback=input.browser_headed_fallback))
+        # Headed for the rest of the run, across reviews (contract §2). From history, so replay keeps it.
+        headed = discovered.headed
 
         # ── MAP_FORM: every field, tagged with a key ──────────────────────────
         await self._state("MAP_FORM")
-        form = await self._long(map_form_activity, MapFormInput(run_id=run_id, job_url=job_url))
+        form = await self._long(map_form_activity, MapFormInput(run_id=run_id, job_url=job_url, headed=headed))
 
         # ── EXTRACT_METADATA (driver) ─────────────────────────────────────────
         await self._state("EXTRACT_METADATA")
@@ -230,6 +238,7 @@ class ApplicationWorkflow:
                 job_location=job_location,
                 review_round=review_round,
                 refill=refill,
+                headed=headed,
             )
 
         # ── FILL: evidence and screenshot saved, browser closed ───────────────
@@ -283,6 +292,7 @@ class ApplicationWorkflow:
             account_email=discovered.account_email,
             mapped_form_dict=form.form_schema_dict,
             baseline=filled.baseline,  # what the approved re-fill left in fields nobody approved
+            headed=headed,
         ))
         await self._complete()
         return "COMPLETED"

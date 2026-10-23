@@ -23,13 +23,13 @@ Run: `uv run uvicorn yahbah.api.main:app --reload --port 8000` (binds 127.0.0.1)
 - **`GET /applications/stats`** returns `{"counts": {<every outcome>: n}, "total": n}`.
 - **Errors.** Every 4xx raised by a route has the body `{"detail": {"code", "message", "run_id"?}}` (build them with `api/errors.py`'s `api_error()`). FastAPI's own request-validation failures get the same shape from a handler in `main.py`: 422 `invalid_request`, with the errors summarized in `message`. The harness's bare `make_app()` doesn't install that handler.
 
-**Runtime settings** (`config/settings.yaml`):
-- **`GET /settings`** returns the *effective* values (`config.get_effective_runtime_settings()`): `submission_mode` is `review` when missing or invalid, and `review_window_hours` is 48 when missing or invalid. Only keys in `config.RUNTIME_SETTINGS` are returned, so the legacy `testing_mode` no longer appears.
+**Runtime settings** (`config/settings.yaml`, machine-local; template `config/settings.example.yaml`, see [data-model](data-model.md#configuration)):
+- **`GET /settings`** returns the *effective* values (`config.get_effective_runtime_settings()`): `submission_mode` is `review` when missing or invalid, `review_window_hours` is 48 and `browser_headed_fallback` is `true` when missing or invalid. Only keys in `config.RUNTIME_SETTINGS` are returned, so the legacy `testing_mode` no longer appears.
 - **`PUT /settings/{key}`** takes `{"value": …}`:
   - an unknown key gets 404 `unknown_setting`;
   - the value is validated by `config.validate_runtime_setting()`, and an invalid one gets 422 `invalid_setting`;
   - on success it returns the effective settings.
-- Runs snapshot `submission_mode` and `review_window_hours` at creation, so a change affects new runs only.
+- Runs snapshot `submission_mode`, `review_window_hours` and `browser_headed_fallback` at creation, so a change affects new runs only. `browser_headed_fallback` must be a JSON boolean (`"false"` or `0` gets 422 `invalid_setting`).
 
 **Local-only, no auth.** `main.py` rejects any request whose `Host`, or `X-Forwarded-Host` when present, is not `localhost`/`127.0.0.1` (400; blunts DNS rebinding). The Next `/api` rewrite sends `Host: localhost:8000` and the browser's host in `X-Forwarded-Host`, so both are checked. IPv6 literals (`[::1]`) are not accepted. API test clients must use `base_url="http://localhost"`. Do not expose either port beyond loopback without adding auth first.
 
@@ -51,7 +51,7 @@ Run: `uv run uvicorn yahbah.api.main:app --reload --port 8000` (binds 127.0.0.1)
   - in list rows, approve/reject become a **Review** link, and the `confirm_*` actions a **Resolve** link;
   - retry confirms with the mode the new run gets, then navigates to the new run id;
   - delete and cancel confirm inline.
-- `failure_reason` is shown in words (`lib/failure-reasons.ts`, with a fallback for unknown codes).
+- `failure_reason` is shown in words (`lib/failure-reasons.ts`, with a fallback for unknown codes). Wording changed 2026-10-21: `blocked` is "Blocked by the site's bot protection" and says it tells nothing about the job (open it yourself, use the company's direct application link, or retry later); `job_closed` is the job board saying the posting is gone ("move on"); `browser_error` also covers a site that didn't load (server or network error).
 - `test/yahbah/api/test_frontend_contract.py` fails when the TypeScript unions in `lib/types.ts` (`Outcome`, `RunAction`, `FailureReason`, `SubmissionMode`, `Origin`) drift from `run_state.py`. A batch-2 `auto_reviewed` mode therefore also needs `MODE_OPTIONS` in `submission-mode-control.tsx`.
 
 **Review** (`components/review/`):
@@ -77,14 +77,16 @@ Run: `uv run uvicorn yahbah.api.main:app --reload --port 8000` (binds 127.0.0.1)
 - It shows **Mode unknown**, never a mode, when settings fail to load.
 - After a change it toasts that started runs keep their mode.
 
+**Headed-fallback control** (`components/headed-fallback-control.tsx`, `setHeadedFallback` in `lib/api.ts`; added 2026-10-21). A switch beside the mode control in the layout header, "Visible browser on/off", writing `browser_headed_fallback` with `PUT /settings/browser_headed_fallback` (`{value: boolean}`). It shows the server's value only: a loading placeholder (no switch) until settings arrive, and **Visible browser unknown** (click to retry) when settings fail to load or an older server lacks the key. An info popover says a Chrome window may open on this Mac during such runs; the success toast says started runs keep their setting. `RuntimeSettings.browser_headed_fallback` in `lib/types.ts` is required.
+
 **Errors:**
 - `lib/api.ts` throws `ApiError` (`status`, `code`, `message`, `runId`), parsed from the §8 body. Other bodies get `http_<status>`; no response gets `network_error`.
 - Every mutation error is toasted by the `MutationCache` in `providers.tsx` (`lib/toast.ts` store, `<Toaster>`), unless the mutation sets `meta.inlineErrors` and renders `ApiErrorMessage` itself. The job form, the review decision, the resolution panel and the scheduled add form do this.
 - `already_applied` and `run_in_flight` errors link to `detail.run_id`.
 - A failed query shows an inline error and keeps the last data.
 
-**Frontend checks** (`frontend/`, run from there; state on 2026-10-20):
-- `npm test`: Vitest 5 with React Testing Library in jsdom, setup `vitest.setup.ts`, tests colocated as `src/**/*.test.ts(x)` (13 files, 112 tests, passing). `npm run test:watch` for watch mode.
+**Frontend checks** (`frontend/`, run from there; state on 2026-10-23):
+- `npm test`: Vitest 5 with React Testing Library in jsdom, setup `vitest.setup.ts`, tests colocated as `src/**/*.test.ts(x)` (15 files, 120 tests, passing as of 2026-10-23). `npm run test:watch` for watch mode.
   - **Helpers:** `src/test/render.tsx` provides `renderWithClient` (the app's real QueryClient setup, no retries) and `mockApi` (stubs `fetch` per `"METHOD /path"`, records calls). `src/test/fixtures.ts` builds §8-shaped runs, rows and reviews.
   - **Navigation:** `vitest.setup.ts` mocks `next/navigation` with `src/test/navigation.ts`, since the app router isn't mounted in jsdom.
   - **Clean-up:** the setup resets toasts and stubbed globals after each test.

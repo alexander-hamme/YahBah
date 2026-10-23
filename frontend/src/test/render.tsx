@@ -54,4 +54,8 @@ export function mockApi(handlers: Record<string, Handler>) {
   return { calls, fetchMock };
 }
 
-export const SETTINGS_REVIEW = { submission_mode: "review", review_window_hours: 48 } as const;
+export const SETTINGS_REVIEW = {
+  submission_mode: "review",
+  review_window_hours: 48,
+  browser_headed_fallback: true,
+} as const;

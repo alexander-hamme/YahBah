@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jobs at Acme</title>
+</head>
+<body>
+  <!-- The board root a closed Greenhouse job redirects to: /<company>?error=true, with a flash message. -->
+  <div class="flash-wrapper" role="alert">
+    <div class="flash flash--error">The job you are looking for is no longer open.</div>
+  </div>
+  <main class="main">
+    <h1 class="section-header">Current openings at Acme</h1>
+    <form class="filters" action="/acme" method="get">
+      <label for="department">Department</label>
+      <select id="department" name="departments[]"><option value="">All</option><option>Engineering</option></select>
+      <label for="office">Office</label>
+      <select id="office" name="offices[]"><option value="">All</option><option>Berlin</option></select>
+    </form>
+    <section class="level-0">
+      <h3>Engineering</h3>
+      <table class="job-posts"><tbody>
+        <tr class="job-post"><td><a href="/acme/jobs/2000001"><p class="body">Backend Engineer</p><p class="body body--metadata">Berlin</p></a></td></tr>
+        <tr class="job-post"><td><a href="/acme/jobs/2000002"><p class="body">Data Engineer</p><p class="body body--metadata">Remote</p></a></td></tr>
+      </tbody></table>
+    </section>
+  </main>
+</body>
+</html>

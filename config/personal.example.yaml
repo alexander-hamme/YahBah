@@ -18,6 +18,8 @@ known_answers:
   # Compensation
   salary_expectation: "Open to discussion"
 
+  start_date: "Within 2 weeks of an offer"
+
   # Location & contact
   currently_located_near_job: "Yes"
   willing_to_relocate: "Yes, willing to relocate"

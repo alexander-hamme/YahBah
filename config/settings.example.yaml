@@ -1,0 +1,45 @@
+# Runtime settings template. Copy to config/settings.yaml (gitignored, machine-local):
+#   cp config/settings.example.yaml config/settings.yaml
+# A missing file or key falls back to the code defaults (src/yahbah/config.py); a missing or invalid
+# submission_mode means review (fail closed). PUT /settings/{key} (the dashboard) rewrites
+# settings.yaml, creating it if needed; comments are not kept.
+
+# Runs (snapshotted when a run is created; changes affect new runs only)
+submission_mode: review            # review | testing (testing fills and never submits)
+review_window_hours: 48
+browser_headed_fallback: true      # a page that blocks the headless browser is retried once in a visible Chrome
+
+# Gmail status polling
+gmail_status_polling_enabled: false
+gmail_status_polling_interval_minutes: 10
+gmail_folder_label: YahBah
+gmail_status_label: YahBah/Status
+gmail_verification_code_action: archive   # archive | delete | nothing
+gmail_auto_archive:
+  UNDER_REVIEW: true
+  ONLINE_ASSESSMENT: false
+  INTERVIEW_REQUEST: false
+  INTERVIEW_SCHEDULED: false
+  OFFER: false
+  REJECTED: true
+  WITHDRAWN: true
+  OTHER: true
+
+# Job-alert polling and admission
+job_alert_polling_enabled: false
+job_alert_polling_interval_minutes: 30
+job_alert_label: YahBah/Alerts
+job_alert_auto_archive: true
+job_alert_sender_patterns:
+- '*@linkedin.com'
+- '*@indeed.com'
+- '*@glassdoor.com'
+- '*@greenhouse.io'
+- '*@ziprecruiter.com'
+- '*@handshake.com'
+- '*@jobright.ai'
+job_alert_promotion_delay_hours: 24
+job_alert_min_match_score: 0
+job_alert_max_promotions_per_cycle: 5
+job_alert_max_age_days: 14
+# job_alert_backfill_since: '2026-01-01'   # first alert-poll run only: backfill alerts since this date

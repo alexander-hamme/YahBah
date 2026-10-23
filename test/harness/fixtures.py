@@ -67,9 +67,16 @@ class Pages:
         self.server, self.dir, self.prefix = server, directory, prefix
         self.base = server.mount(prefix, directory)
 
-    def write(self, name: str, html: str) -> str:
+    def write(self, name: str, html: str, status: int = 200, headers: dict[str, str] | None = None) -> str:
+        """The page's URL. A status or headers make the server answer with them (a 403 interstitial, a 404)."""
         (self.dir / name).write_text(html)
+        if status != 200 or headers:
+            self.server.respond(f"{self.prefix}/{name}", status, headers)
         return self.url(name)
+
+    def redirect(self, name: str, to: str, status: int = 302) -> str:
+        """A URL that redirects to `to` (another page's URL, or a path relative to this one)."""
+        return self.server.redirect(f"{self.prefix}/{name}", to, status)
 
     def url(self, name: str) -> str:
         return self.base + name

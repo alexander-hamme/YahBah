@@ -3,6 +3,7 @@ import { DM_Sans, Sora, Bungee, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import { Providers } from "@/components/providers";
 import { NavLinks } from "@/components/nav-links";
+import { HeadedFallbackControl } from "@/components/headed-fallback-control";
 import { SubmissionModeControl } from "@/components/submission-mode-control";
 import "./globals.css";
 
@@ -56,7 +57,8 @@ export default function RootLayout({
                 YahBah
               </Link>
               <NavLinks />
-              <div className="ml-auto">
+              <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-2">
+                <HeadedFallbackControl />
                 <SubmissionModeControl />
               </div>
             </div>

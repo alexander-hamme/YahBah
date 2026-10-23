@@ -5,6 +5,7 @@ Run the agentic pipeline on one job URL without Temporal or a run record — for
   uv run python scripts/run_pipeline.py <job-url> --force-tier oneshot # start form mapping at a fallback tier
   uv run python scripts/run_pipeline.py <job-url> --cover-letter       # also generate + attach a cover letter
   uv run python scripts/run_pipeline.py <job-url> --headed --keep-open # watch it, leave the browser open
+  uv run python scripts/run_pipeline.py <job-url> --headed-fallback    # a page walled off headless: retry it headed
   uv run python scripts/run_pipeline.py <job-url> --submit             # really submit (gated + verified)
 
 Never submits without --submit. Uses the applicant profile from the DB (read-only) and its real
@@ -43,6 +44,8 @@ async def main() -> None:
     ap.add_argument("--submit", action="store_true", help="really submit the application")
     ap.add_argument("--headed", action="store_true")
     ap.add_argument("--keep-open", action="store_true", help="leave the browser open at the end")
+    ap.add_argument("--headed-fallback", action="store_true",
+                    help="reopen a page that walls off the headless browser once in a headed window (contract §2)")
     args = ap.parse_args()
 
     if args.headed:
@@ -55,7 +58,10 @@ async def main() -> None:
     registry = SessionRegistry.instance()
     session = await registry.open(run_id, args.url)
     try:
-        result = await discover(session, trace)
+        result = await discover(session, trace, headed_fallback=args.headed_fallback)
+        session = registry.get(run_id)  # the headed fallback swaps the run's browser
+        if result.headed:
+            print("\nheaded fallback: the run continues in a headed browser")
         board = await detect_board(lambda c: run_js(session, c), await session.get_current_page_url())
         job = result.job
         print(f"\nboard: {board.name}   job info ({job.get('source')}): "

@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head><title>Acme Careers</title></head>
+<body>
+  <!-- A single-page app on static hosting: every deep link gets index.html with a 403 or 404, then the
+       client renders the route. ?view=job renders the job page with an Apply link, ?view=form the form
+       itself; ?delay=<ms> renders that late (a slow bundle). -->
+  <div id="app"></div>
+  <script>
+    const q = new URLSearchParams(location.search);
+    const delay = Number(q.get('delay') || 0);
+    const nav = '<nav><a href="/">Home</a> <a href="/teams">Teams</a> <a href="/benefits">Benefits</a> '
+      + '<a href="/locations">Locations</a> <a href="/blog">Blog</a> <a href="/faq">FAQ</a></nav>';
+    const job = '<main><h1>Senior Engineer</h1><p>Build the platform with us. Berlin or remote.</p>'
+      + '<a id="apply" href="spa_form.html">Apply</a></main>';
+    const form = '<main><h1>Apply: Senior Engineer</h1><form onsubmit="event.preventDefault()">'
+      + '<div><label for="first">First name</label> <input id="first" required></div>'
+      + '<div><label for="last">Last name</label> <input id="last" required></div>'
+      + '<div><label for="email">Email</label> <input id="email" type="email" required></div>'
+      + '<div><label for="resume">Resume</label> <input id="resume" type="file"></div>'
+      + '<button type="submit">Submit application</button></form></main>';
+    const render = () => { document.getElementById('app').innerHTML = q.get('view') === 'form' ? form : nav + job; };
+    delay ? setTimeout(render, delay) : render();
+  </script>
+</body>
+</html>

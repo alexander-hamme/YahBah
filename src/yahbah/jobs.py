@@ -113,6 +113,7 @@ async def submit_job_for_application(
                 submission_mode=runtime["submission_mode"],
                 origin=origin,
                 review_window_hours=runtime["review_window_hours"],
+                browser_headed_fallback=runtime["browser_headed_fallback"],
             ),
             id=workflow_id,
             task_queue=settings.temporal_task_queue,

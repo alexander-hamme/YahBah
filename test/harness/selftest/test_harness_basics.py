@@ -64,6 +64,19 @@ def test_fixture_server_serves_fixtures_pages_and_events(fixture_server, pages) 
         urllib.request.urlopen(pages.base + "../../conftest.py", timeout=2)
 
 
+def test_fixture_server_serves_a_page_with_its_own_status_headers_or_redirect(fixture_server, pages) -> None:
+    denied = pages.write("denied.html", "<h1>Access Denied</h1>", status=403, headers={"Server": "AkamaiGHost"})
+    with pytest.raises(urllib.error.HTTPError) as err:
+        urllib.request.urlopen(denied, timeout=2)
+    assert (err.value.code, err.value.headers["Server"], err.value.read()) == (403, "AkamaiGHost", b"<h1>Access Denied</h1>")
+    root = pages.write("board.html", "<p>board</p>")
+    moved = urllib.request.urlopen(pages.redirect("jobs/1", "../board.html?error=true"), timeout=2)
+    assert (moved.status, moved.url, moved.read()) == (200, root + "?error=true", b"<p>board</p>")
+    prefix = pages.prefix
+    fixture_server.unmount(prefix)  # (the fixture's own teardown unmounts again: harmless)
+    assert not [p for p in fixture_server.responses if p.startswith(f"/{prefix}/")]
+
+
 # ── scripted models ───────────────────────────────────────────────────────────
 
 async def test_scripted_llm_replies_in_order_and_records_calls(llm) -> None:

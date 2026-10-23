@@ -6,6 +6,9 @@ map), so every page that needs clicks or agent actions is loaded from here.
 
 Pages report what happened with `fetch('/__event?name=submit&...')`; the server records each
 request in `events`, which survives page navigation (unlike a window counter).
+
+A path can be given its own response (`respond(path, status=403, headers={...})`: the file's body with
+that status, as a WAF interstitial or a 404 page is served) or made a redirect (`redirect(path, to)`).
 """
 import asyncio
 import functools
@@ -19,6 +22,14 @@ from urllib.parse import parse_qs, urlsplit
 FIXTURES = Path(__file__).resolve().parents[1] / "yahbah" / "fixtures"
 
 
+@dataclass(frozen=True)
+class Response:
+    status: int = 200
+    headers: tuple[tuple[str, str], ...] = ()
+    location: str | None = None  # a redirect: no body
+    body: bytes | None = None      # served instead of a file (a page at a path no mount holds)
+
+
 @dataclass
 class Event:
     name: str
@@ -30,6 +41,7 @@ class Event:
 class FixtureServer:
     def __init__(self, root: Path = FIXTURES) -> None:
         self.mounts: dict[str, Path] = {"/": root}
+        self.responses: dict[str, Response] = {}  # URL path -> its own status/headers, or a redirect
         self.events: list[Event] = []
         self._lock = threading.Lock()
         handler = functools.partial(_Handler, self)
@@ -57,7 +69,27 @@ class FixtureServer:
         return f"{self.base}{prefix}"
 
     def unmount(self, prefix: str) -> None:
-        self.mounts.pop("/" + prefix.strip("/") + "/", None)
+        prefix = "/" + prefix.strip("/") + "/"
+        self.mounts.pop(prefix, None)
+        for path in [p for p in self.responses if p.startswith(prefix)]:
+            del self.responses[path]
+
+    def respond(self, path: str, status: int = 200, headers: dict[str, str] | None = None,
+                body: str | bytes | None = None) -> str:
+        """Serve the file at `path` (or `body`, if given) with this status and these extra headers; returns
+        its URL. `path` excludes any query: the response is the same whatever the query."""
+        if isinstance(body, str):
+            body = body.encode()
+        self.responses["/" + path.lstrip("/")] = Response(status, tuple((headers or {}).items()), body=body)
+        return self.url(path)
+
+    def forget(self, path: str) -> None:
+        self.responses.pop("/" + path.lstrip("/"), None)
+
+    def redirect(self, path: str, to: str, status: int = 302) -> str:
+        """Answer `path` with a redirect to `to` (absolute, or relative to `path`); returns its URL."""
+        self.responses["/" + path.lstrip("/")] = Response(status, location=to)
+        return self.url(path)
 
     def record(self, event: Event) -> None:
         with self._lock:
@@ -120,8 +152,37 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         return True
 
+    def version_string(self) -> str:  # the Server header: a response may name its own (AkamaiGHost, cloudflare)
+        return getattr(self, "_server_header", None) or super().version_string()
+
+    def _own_response(self) -> bool:
+        response = self.state.responses.get(urlsplit(self.path).path)
+        if response is None:
+            return False
+        headers = [(k, v) for k, v in response.headers if k.lower() != "server"]
+        self._server_header = next((v for k, v in response.headers if k.lower() == "server"), None)
+        if response.location is not None:
+            self.send_response(response.status)
+            self.send_header("Location", response.location)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return True
+        target = self.state.resolve(urlsplit(self.path).path)
+        body = response.body if response.body is not None else (
+            target.read_bytes() if target and target.is_file() else b"")
+        self.send_response(response.status)
+        if not any(k.lower() == "content-type" for k, _ in headers):  # a response's own type wins
+            inline = response.body is not None
+            self.send_header("Content-Type", "text/html" if inline or not target else self.guess_type(str(target)))
+        self.send_header("Content-Length", str(len(body)))
+        for name, value in headers:
+            self.send_header(name, value)
+        self.end_headers()
+        self.wfile.write(body)
+        return True
+
     def do_GET(self) -> None:
-        if not self._event():
+        if not self._event() and not self._own_response():
             super().do_GET()
 
     def do_POST(self) -> None:

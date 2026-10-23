@@ -11,6 +11,7 @@ files
 config/personal.yaml
 config/personal.*.yaml
 !config/personal.example.yaml
+config/settings.yaml
 backups/
 .next/
 Next Steps.rtf

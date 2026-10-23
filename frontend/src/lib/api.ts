@@ -206,6 +206,14 @@ export function setSubmissionMode(mode: SubmissionMode): Promise<RuntimeSettings
   });
 }
 
+export function setHeadedFallback(enabled: boolean): Promise<RuntimeSettings> {
+  return fetchJSON(`${BASE}/settings/browser_headed_fallback`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ value: enabled }),
+  });
+}
+
 // ── Scheduled queue ──────────────────────────────────────────────────────
 
 export interface ScheduledParams {

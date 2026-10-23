@@ -2,7 +2,7 @@
 
 Give it a job URL; it fills out the application form, waits for you to review the filled answers, submits it once you approve, and records artifacts, job metadata, and logs. It also watches Gmail for verification codes and post-submission status emails (confirmations, rejections, interview requests) and links them back to the application.
 
-Everything runs locally: local Ollama models, a local Chrome driven by [browser-use](https://github.com/browser-use/browser-use) (pinned in `pyproject.toml`), Postgres, and Temporal. The agentic revamp is in place on branch `browser-use`; the first batch of safety hardening from the 2026-10-18 audit (review gate, duplicate protection, guarded submit) is implemented and tested offline, but no run has yet been made against a live site. The wiki's [changelog](docs/wiki/changelog.md) records what changed and why.
+Everything runs locally: local Ollama models, a local Chrome driven by [browser-use](https://github.com/browser-use/browser-use) (pinned in `pyproject.toml`), Postgres, and Temporal. The agentic revamp is in place on branch `browser-use`; the first batch of safety hardening from the 2026-10-18 audit (review gate, duplicate protection, guarded submit) is implemented and tested offline. A live run has reached the discover stage (it exposed a bot-wall misclassification, since fixed), but no application has yet been submitted against a live site. The wiki's [changelog](docs/wiki/changelog.md) records what changed and why.
 
 ## Architecture
 
@@ -24,7 +24,7 @@ QUEUED → DISCOVER → MAP_FORM → EXTRACT_METADATA → CHECK_DUPLICATE
   → MAP_ANSWERS → GENERATE_COVER_LETTER → FILL → (REVIEW → FILL → SUBMIT) → DONE
 ```
 
-Each stage is a Temporal activity with its own retries and timeouts. What happens after FILL depends on the runtime setting `submission_mode`, which each run records when it is created:
+Each stage is a Temporal activity with its own retries and timeouts. DISCOVER ends a run early, from page evidence in code, when the page is a dead end (`blocked` by bot protection, `job_closed`, `captcha`, `login_wall`); a model's opinion of the page never decides that. A page that blocks the headless browser is first tried through the job board's own form (Greenhouse), then once in a visible Chrome window if `browser_headed_fallback` is on, else the run ends `blocked`. What happens after FILL depends on the runtime setting `submission_mode`, which each run records when it is created:
 - `review` (the default, and what a missing or invalid value means): the run saves the filled form's evidence and waits as `AWAITING_REVIEW` for up to `review_window_hours` (default 48). You approve or reject it in the dashboard (`/review`) or through the API. An approval re-fills exactly the approved answers and submits; a rejection or an expired window submits nothing.
 - `testing`: the run stops after FILL and never submits.
 
@@ -44,7 +44,7 @@ For module-level detail, start at [docs/wiki/index.md](docs/wiki/index.md).
 | PostgreSQL | `brew install postgresql@15` (version not pinned by the code) |
 | Temporal CLI | `brew install temporal` (dev server) |
 | Ollama | `brew install ollama` |
-| Chrome/Chromium | launched locally by browser-use (headless unless `BROWSER_HEADLESS=false`); see setup step 1 |
+| Chrome/Chromium | launched locally by browser-use (headless unless `BROWSER_HEADLESS=false`; a visible window also opens for a run in the headed fallback, see Runtime settings); see setup step 1 |
 | Node.js + npm | frontend only |
 
 The default Ollama models are large: `config.py` notes that the two default models stay loaded together (~71 GB). Pick smaller models via env vars if your machine needs it.
@@ -72,6 +72,14 @@ Edit `.env`. Every setting, its default, and the env var it maps to (the upper-c
 Ollama models are chosen by two roles, not by one model name: `MODEL_DRIVER` / `CTX_DRIVER` (agent loops, DOM/HTML work, JSON mapping) and `MODEL_PROSE_VISION` / `CTX_PROSE_VISION` (cover letters, free-text answers, screenshots). Defaults are in `config.py`.
 
 Personal data goes in `config/personal.yaml` (gitignored; copy `config/personal.example.yaml`). It holds your applicant `profile`, `known_answers`, and the cover-letter prompt, and is merged with `config/prompts.yaml` at load time. Never commit it or put secrets in docs.
+
+Runtime settings (run mode, review window, headed fallback, Gmail polling) live in `config/settings.yaml`, which is gitignored and machine-local. Copy the template once:
+
+```bash
+cp config/settings.example.yaml config/settings.yaml
+```
+
+The code does not create the file. Without it every setting takes its code default (review mode, 48 h window, headed fallback on, pollers off), and the first `PUT /settings/{key}` (the dashboard's controls) creates it; that write drops the template's comments. See Runtime settings.
 
 ### 3. Pull the Ollama models
 
@@ -140,12 +148,12 @@ There is no separate poller process: the status and job-alert pollers run inside
 uv run python scripts/run_pipeline.py <url>
 ```
 
-Runs discover → map → answers → fill without Temporal or a run record. It does not submit unless `--submit` is passed. Output goes to `artifacts/debug-<timestamp>/`. See `--help` for the other flags.
+Runs discover → map → answers → fill without Temporal or a run record. It does not submit unless `--submit` is passed. `--headed-fallback` enables the headed fallback for a page that blocks headless. Output goes to `artifacts/debug-<timestamp>/`. See `--help` for the other flags.
 
 ## Tests
 
 ```bash
-uv run pytest                    # offline, parallel (about 35 s); leaves out the e2e tests
+uv run pytest                    # offline, parallel (about 80 s); leaves out the e2e tests
 uv run pytest --complete         # everything, including e2e (whole runs through Temporal and Chrome)
 uv run pytest -n 0               # serially, for debugging
 uv run pytest -m "not browser"   # skip tests that launch headless Chrome
@@ -202,8 +210,15 @@ WHERE technologies @> '["PyTorch"]'::jsonb;
 - Each application uses a unique email alias (`user+job-<hash>@gmail.com`); the hash comes from the ATS, company, and job ID and extends in length if a collision occurs.
 - The status poller (in the worker) reads Gmail history incrementally, keeps messages sent to a `+alias`, classifies them with the LLM (UNDER_REVIEW, ONLINE_ASSESSMENT, INTERVIEW_REQUEST, INTERVIEW_SCHEDULED, OFFER, REJECTED, WITHDRAWN, OTHER), links them to the run, and optionally archives them into a Gmail folder per status. A history checkpoint is kept in the database.
 - The job-alert poller reads alert emails (LinkedIn, Indeed, etc., by sender pattern), scores jobs, queues them in `scheduled_job`, and promotes them to runs after a delay. Only a job that was actually scored, at or above `job_alert_min_match_score`, is queued; one that could not be scored is skipped. At most `job_alert_max_promotions_per_cycle` (default 5) jobs are promoted per cycle, alerts older than `job_alert_max_age_days` (default 14) are ignored, and queued jobs older than that expire. Alert links and job pages are fetched only from public hosts (the same URL policy as above).
-- Polling loops are off by default and toggled at runtime in `config/settings.yaml` (`gmail_status_polling_enabled`, `job_alert_polling_enabled`, auto-archive toggles), via `PUT /settings/{key}`; `submission_mode` and `review_window_hours` are set the same way and apply to new runs only. A poller does nothing when its flag is not exactly `true`, including the first cycle at worker startup (it makes no Gmail calls, label changes or promotions). The alert limits above default from `config.py` and can be overridden in `config/settings.yaml`.
+- Polling loops are off by default and toggled at runtime in `config/settings.yaml` (`gmail_status_polling_enabled`, `job_alert_polling_enabled`, auto-archive toggles), via `PUT /settings/{key}`. A poller does nothing when its flag is not exactly `true`, including the first cycle at worker startup (it makes no Gmail calls, label changes or promotions). The alert limits above default from `config.py` and can be overridden in `config/settings.yaml`.
 - Trigger a cycle manually: `POST /gmail/poll` (status) or `POST /gmail/alert-poll` (alerts).
+
+## Runtime settings
+
+`config/settings.yaml` (template: `config/settings.example.yaml`, which lists every writable key with its code default) is read fresh on every use and written by `PUT /settings/{key}` and the dashboard. Values are validated; a missing or invalid `submission_mode` means `review` (fail closed). Three keys are snapshotted into each run when it is created, so a change affects new runs only:
+- `submission_mode`: `review` or `testing` (see above).
+- `review_window_hours`: how long a run waits for review (default 48).
+- `browser_headed_fallback` (`true` or `false`, default `true`): a job page that refuses the headless browser, and cannot be reached through the board's own form, is reopened once in a visible Chrome window with a throwaway profile, and that run stays visible until it ends. **A Chrome window may open on this Mac during such runs**; it needs a GUI session, and if none is available the run ends `blocked`. YahBah adds no stealth, captcha solving or proxy of its own. Switch it off in the dashboard header ("Visible browser") or with `PUT /settings/browser_headed_fallback`.
 
 ## API overview
 

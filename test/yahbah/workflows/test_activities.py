@@ -248,7 +248,7 @@ async def test_a_refill_with_a_new_required_field_returns_it_and_closes_the_brow
     assert [f["key"] for f in out.unmapped_new_fields] == ["9", "10"]
     assert registry.get(str(run_id)) is None
     [row] = await db.fetchall("SELECT artifact_metadata FROM application_artifact WHERE artifact_type = 'submitted_values'")
-    assert row["artifact_metadata"] == {"review_round": 2}
+    assert row["artifact_metadata"] == {"review_round": 2, "headed": False}
 
 
 async def test_a_clean_refill_keeps_the_browser_open_for_submit(
@@ -448,3 +448,92 @@ async def test_a_lost_browser_is_refilled_and_submit_uses_that_fills_own_baselin
     submit.baseline = {"7": "from the lost browser"}
     await activity_env(workflow_id=f"application-{run_id}").call(browser_activities.submit_activity, submit)
     assert seen["baseline"] == {"7": "after this re-fill"}
+
+
+# ── the headed flag (contract §2, "Headed fallback") ──────────────────────────
+
+@pytest.fixture
+def opened(registry, monkeypatch) -> list[bool]:
+    """The `headed` of every SessionRegistry.open the activities make (sessions are fakes)."""
+    calls = []
+
+    async def open_(run_id, url, *, headed=False):
+        calls.append(headed)
+        return FakeBrowserSession()
+
+    monkeypatch.setattr(registry, "open", open_)
+    return calls
+
+
+@pytest.mark.parametrize("fallback", [True, False])
+async def test_discover_opens_headless_and_returns_whether_it_fell_back_to_headed(
+        db, activity_env, browser_activities, opened, monkeypatch, fallback) -> None:
+    from yahbah.agent.boards import GENERIC
+    from yahbah.schemas import DiscoverInput
+
+    _, run_id = await running_run(db)
+    seen = {}
+
+    async def discover(session, trace, *, headed_fallback=False):
+        seen["headed_fallback"] = headed_fallback
+        return SimpleNamespace(board=GENERIC, page_url="https://jobs.harness.example/acme/1", job={},
+                               headed=headed_fallback)  # as if the page was walled
+
+    async def alias(email, url):
+        return "jane+1@example.test"
+
+    monkeypatch.setattr(browser_activities, "discover", discover)
+    monkeypatch.setattr(browser_activities, "generate_email_alias", alias)
+    out = await activity_env(workflow_id=f"application-{run_id}").call(
+        browser_activities.discover_activity,
+        DiscoverInput(run_id=str(run_id), job_url="https://jobs.harness.example/acme/1", headed_fallback=fallback))
+    assert opened == [False], "discover's first browser is always headless"
+    assert seen["headed_fallback"] is fallback
+    assert out.headed is fallback
+
+
+@pytest.mark.parametrize("headed", [True, False])
+@pytest.mark.parametrize("stage", ["fill", "submit"])
+async def test_a_lost_browser_reopens_in_the_runs_mode_and_never_falls_back_on_its_own(
+        db, activity_env, browser_activities, opened, monkeypatch, stage, headed) -> None:
+    _, run_id = await running_run(db)
+    rediscovers = []
+
+    async def discover(session, trace, **kwargs):
+        rediscovers.append(kwargs)
+
+    async def fill_form(session, board, ctx, map_new_fields=None, beat=None):
+        return []
+
+    async def submit_and_verify(session, board, ctx, *, claim, **kwargs):
+        assert await claim()
+        return SimpleNamespace(confirmation_url="u", confirmation_text="Thanks", confirmation_html="")
+
+    monkeypatch.setattr(browser_activities, "discover", discover)
+    monkeypatch.setattr(browser_activities, "fill_form", fill_form)
+    monkeypatch.setattr(browser_activities, "submit_and_verify", submit_and_verify)
+    env = activity_env(workflow_id=f"application-{run_id}")
+    if stage == "fill":
+        await env.call(browser_activities.fill_activity, fill_input(run_id, review_round=2, refill=True,
+                                                                    headed=headed))
+    else:
+        submit = submit_input(run_id)
+        submit.headed = headed
+        await env.call(browser_activities.submit_activity, submit)
+    assert opened == [headed]
+    assert rediscovers == [{}], "a re-open must not launch the headed fallback (the workflow wouldn't know)"
+
+
+async def test_a_headed_runs_fill_evidence_says_so(db, activity_env, browser_activities, registry, monkeypatch) -> None:
+    _, run_id = await running_run(db)
+    env = activity_env(workflow_id=f"application-{run_id}")
+    await env.call(registry.open, str(run_id), "https://jobs.harness.example/acme/1")
+
+    async def fill_form(session, board, ctx, map_new_fields=None, beat=None):
+        return []
+
+    monkeypatch.setattr(browser_activities, "fill_form", fill_form)
+    await env.call(browser_activities.fill_activity, fill_input(run_id, headed=True))
+    rows = await db.fetchall("SELECT artifact_type, artifact_metadata FROM application_artifact ORDER BY created_at")
+    assert [(r["artifact_type"], r["artifact_metadata"].get("headed")) for r in rows] == [
+        ("submitted_values", True), ("screenshot", True)]

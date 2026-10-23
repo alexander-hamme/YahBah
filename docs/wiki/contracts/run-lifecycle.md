@@ -1,6 +1,6 @@
 # Contract: Run Lifecycle, Review Gate & Submission Safety
 
-**Status: IMPLEMENTED and authoritative** (agreed 2026-10-19; implemented by batch 1 of the [2026-10-18 roadmap](../../audits/2026-10-18/roadmap.md), amended through 2026-10-20 and verified against the code that day).
+**Status: IMPLEMENTED and authoritative** (agreed 2026-10-19; implemented by batch 1 of the [2026-10-18 roadmap](../../audits/2026-10-18/roadmap.md), amended through 2026-10-21; verified against the code on 2026-10-20).
 - **Source of truth:** this page and `src/yahbah/run_state.py` agree. A difference between this page and the code is a defect to report to the main session, not a licence to pick one.
 - **Owner:** the main session. Changing any name, value or semantic here needs main-session approval first; agents report proposed changes, they don't make them unilaterally.
 - **History:** the decisions behind the amendments are in the [changelog](../changelog.md), "Batch 1, wave 2 + close-out (2026-10-20)".
@@ -48,6 +48,43 @@ Set on every terminal status except `COMPLETED`. `error_message` keeps the human
 | User/policy | `cancelled`, `review_rejected`, `review_expired`, `duplicate` |
 
 The single source of these values is `src/yahbah/run_state.py` (§10). An owning task may add a value only by reporting it to the main session.
+
+**Discover-stage classification** (added 2026-10-21, after run `83a0efc2` labelled an Akamai 403 wall `job_closed`). **Code decides.** Only page evidence (main-document HTTP status, vendor markup, board URL markers, visible controls) sets these reasons; text on a page is never evidence. One pure entry point, `classify_page(PageEvidence, board) -> PageVerdict | None` in `agent/discover.py`, covers every reason. Its `signal` and `detail` (for example `http_403`, vendor, host) go into `error_message`.
+
+Precedence, highest first:
+1. **A visible application form** wins over any status or text: no failure.
+2. **A vendor bot-wall signature** at any status → `blocked`. The signatures are Akamai, Cloudflare challenge or error, PerimeterX/HUMAN, DataDome and Imperva, and they cover vendor captcha walls too.
+3. **Main-document 401/403/407/429 on an inert page** → `blocked`. A page is inert when it has **at most 5 visible controls** (`INERT_MAX_CONTROLS`, the same gate as rule 4; changing it is a contract change), so an SPA that answers a deep link with 403 or 404 and then renders isn't caught.
+4. **404/410 on an inert page** → `job_closed`.
+
+   **Board route first** (applies to rules 2–4): when a wrapper page carries a board id, the board's own form is tried before rules 2–4 decide. The id comes from `gh_jid`, or from a job-id-shaped number in the URL path (for example `job.8274601` or `/jobs/8274601`). Either way, the (board, id) pair is confirmed **in the browser**: the board's own form page is loaded and must pass the checks below. No side-channel HTTP or API calls are made (user decision, 2026-10-21). An unknown pair lands on the board's closure marker and counts as no route. The one exception is when **both** halves are explicit: the id comes from `gh_jid`, the token is named by the page itself (not guessed from the domain), and the board's marker page loads (HTTP 200). Then the board itself says the job is gone, and the run ends `job_closed`. Every other miss records `board route: closed on <token>` in the detail and leaves the reason to rules 2–4, because a guessed token or a path number can't prove closure. If it yields the verified form, the run proceeds. If it yields nothing, rules 2–4 decide on the wrapper's evidence, and the detail records `board route: none`, so a board-token miss can be told apart from a gone job. A resolved page is used only if its host is the board's, the job id appears in its URL or page, and the form signature is present. Otherwise discover returns to the wrapper and the detail records `board route: unverified`. Opening another job's form is never acceptable.
+5. **The board's closure marker** (in `boards.py`; Greenhouse: a `greenhouse.io` board root or `embed/job_board` URL with `error=true`) → `job_closed`.
+6. **A visible captcha widget on the site's own page** → `captcha`: a reCAPTCHA anchor iframe not sized invisible, an hCaptcha checkbox, or Turnstile. reCAPTCHA v3 badges don't count.
+7. **A visible password field with no application form** → `login_wall`.
+8. **Plain 5xx with no vendor signature**, or a browser net error or crash → `browser_error`. A `chrome-error://` document has no HTTP status, so discover maps it explicitly.
+9. **Otherwise** → `form_not_found`.
+
+Rules 2–5 and 8 run before any model tier, with zero model calls. Rules 6–7 run only after the tiers fail, since a guest-apply path may exist. A model's `job_closed`, `captcha` or `login_required` answer is **advisory**: it goes in the detail and is never the reason, and an uncertain or "other" answer is `form_not_found`. `job_closed` therefore always rests on positive evidence; soft-404 pages and "no longer accepting" text are not enough.
+
+**Retryability:**
+- `blocked`, `job_closed`, `captcha` and `login_wall` are non-retryable activity errors. Retrying within seconds only hammers a WAF. The user can still retry the FAILED run later (§7).
+- `form_not_found` and `browser_error` are retryable, with the existing bounded retries.
+
+**No new value:** a 429 stays `blocked`, and its signal says so.
+
+**Never evade:** YahBah does not use stealth, fingerprint spoofing, captcha solving or proxy rotation. A protected page is reached only through a legitimate route, such as the board's own public form, or the run ends `blocked`.
+- **Default launch flags:** browser-use's defaults, which include disabling Blink's `AutomationControlled`, are accepted as they are. This is the user's decision of 2026-10-21. YahBah adds no masking of its own.
+- **Headed fallback** (the user's decision, 2026-10-21; order: board route, then headed, then `blocked`). When discover's early verdict is `blocked` (rules 2–3) and no board route verifies, discover reopens the URL once in a **fresh, throwaway, headed Chromium**. It has no saved profile: a temporary user-data-dir, deleted when the session closes. It uses the same launch flags as the main session (browser-use's defaults, see above) and adds no masking of its own. If that page passes rules 1–3, the run continues **headed for the rest of its life**, with the normal workflow: navigation tiers, map, fill, review, and the approved re-fill and submit. If the headed page is also walled, the run ends `blocked` with `headed: blocked`.
+  - It never fires for `job_closed`, `captcha`, `login_wall` or `browser_error`. There is no captcha solving and no retry loop: one headed attempt per discover.
+  - If headed Chromium can't launch (no GUI session, a locked screen, the worker under launchd), the run ends `blocked` with `headed: unavailable`.
+  - It is gated by the runtime setting `browser_headed_fallback` (default `true`), which is snapshotted at run creation like `submission_mode`.
+  - **Interface** (`src/yahbah/schemas.py`):
+    - `DiscoverOutput.headed: bool = False`. The workflow keeps it in its state and passes `headed` on every later activity input that opens a browser (`MapFormInput`, `FillInput` and `SubmitInput`; `map_new_fields` is model-only and opens no browser). The snapshotted setting reaches discover as `DiscoverInput.headed_fallback: bool = False`. Re-opens in later stages use the run's mode and never fall back themselves, so only discover changes it.
+    - `SessionRegistry.open(run_id, url, *, headed: bool = False)`.
+    - `headed=True` always uses a fresh temporary profile. Cookies never carry over between sessions or runs.
+    - The flag lives in workflow history, not the DB.
+    - A retry (§7) starts headless again.
+  - The run's evidence and trace record `headed` so the user can see it. Every `blocked` verdict also records its signal and whether the URL carried a board id.
 
 ## 3. `submission_mode` and `origin`
 

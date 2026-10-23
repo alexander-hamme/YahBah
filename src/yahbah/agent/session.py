@@ -7,6 +7,11 @@ with its own temporary profile, so concurrent runs never share cookies or state.
 A session only survives across activities within the same worker process; activities
 re-open the job URL when it's gone (e.g. after a worker restart).
 
+Headed sessions (contract §2, "Headed fallback"): a run whose page walls off the headless browser
+may continue in a headed Chrome window. Its profile is a fresh temporary directory, deleted when the
+session closes, so cookies never carry over between sessions or runs. Launch flags are browser-use's
+defaults, the same as headless; YahBah adds no masking of its own.
+
 Ownership (contract §7): inside a Temporal activity, a session belongs to the activity attempt
 that opened or last took it, identified by (workflow_id, activity sequence number, attempt). The
 run's activities execute one at a time, so a later activity or a later attempt of the same one
@@ -16,6 +21,7 @@ activity (scripts/run_pipeline.py) there is no owner and no check.
 """
 import asyncio
 import shutil
+import tempfile
 from pathlib import Path
 
 from browser_use import BrowserProfile, BrowserSession
@@ -67,23 +73,63 @@ class SessionRegistry:
         self._sessions[run_id] = (session, caller or owner)
         return session
 
-    async def open(self, run_id: str, url: str) -> BrowserSession:
-        """Start a fresh browser for the run and load the URL (replacing any session it had)."""
+    async def open(self, run_id: str, url: str, *, headed: bool = False) -> BrowserSession:
+        """Start a fresh browser for the run and load the URL (replacing any session it had).
+        headed: a visible Chrome window with its own temporary profile (the headed fallback)."""
         caller = activity_owner()
         if run_id in self._sessions:
             if not _may_take(self._sessions[run_id][1], caller):
                 raise SessionSuperseded(f"run {run_id}'s browser belongs to a newer attempt")
             logger.warning(f"Session already open for run {run_id} — closing old one")
             await self._kill(run_id)
-        session = BrowserSession(browser_profile=BrowserProfile(
-            headless=settings.browser_headless,
-            keep_alive=True,
-            # No user_data_dir: browser-use creates a fresh temp profile per session.
-        ))
-        await session.start()
+        session = await self._start(headed)
         self._sessions[run_id] = (session, caller)
         await session.navigate_to(url)
         await asyncio.sleep(3)  # let client-side apps render; discover re-checks the page anyway
+        return session
+
+    def run_of(self, session: BrowserSession) -> str | None:
+        return next((run_id for run_id, (s, _) in self._sessions.items() if s is session), None)
+
+    async def reopen_headed(self, session: BrowserSession, url: str) -> BrowserSession:
+        """The run's browser replaced by a headed one on the same URL. The headed browser is started
+        first: if it can't launch (no GUI session, a locked screen), the run keeps its headless
+        browser and the error propagates. KeyError if the session belongs to no run."""
+        run_id = self.run_of(session)
+        if run_id is None:
+            raise KeyError("session is not a run's browser")
+        caller = activity_owner()
+        if not _may_take(self._sessions[run_id][1], caller):
+            raise SessionSuperseded(f"run {run_id}'s browser belongs to a newer attempt")
+        headed = await self._start(headed=True)  # seconds: the run may change hands meanwhile
+        try:
+            entry = self._sessions.get(run_id)
+            if entry is None or entry[0] is not session or not _may_take(entry[1], caller):
+                raise SessionSuperseded(f"run {run_id}'s browser changed during the headed launch")
+            self._sessions[run_id] = (headed, caller)  # registered first: close/close_all reach it from here
+        except BaseException:
+            await _discard(headed, run_id)
+            raise
+        await asyncio.shield(_discard(session, run_id))  # a cancellation mid-kill still finishes the old one
+        await headed.navigate_to(url)
+        await asyncio.sleep(3)
+        return headed
+
+    @staticmethod
+    async def _start(headed: bool) -> BrowserSession:
+        if headed:
+            # Our own fresh temporary profile (prefix: _kill deletes it), never a saved or default one.
+            profile = BrowserProfile(headless=False, keep_alive=True,
+                                     user_data_dir=tempfile.mkdtemp(prefix=HEADED_PROFILE_PREFIX))
+        else:
+            # No user_data_dir: browser-use creates a fresh temp profile per session.
+            profile = BrowserProfile(headless=settings.browser_headless, keep_alive=True)
+        session = BrowserSession(browser_profile=profile)
+        try:
+            await session.start()
+        except BaseException:
+            await _discard(session)
+            raise
         return session
 
     async def screenshot(self, run_id: str, label: str, full_page: bool = True) -> str | None:
@@ -111,10 +157,18 @@ class SessionRegistry:
 
     async def _kill(self, run_id: str) -> None:
         session, _ = self._sessions.pop(run_id)
-        profile_dir = session.browser_profile.user_data_dir
-        try:
-            await session.kill()
-        except Exception as exc:
-            logger.warning(f"[session] kill failed for run {run_id}: {exc}")
-        if profile_dir and "browser-use-user-data-dir-" in str(profile_dir):
-            shutil.rmtree(profile_dir, ignore_errors=True)
+        await _discard(session, run_id)
+
+
+HEADED_PROFILE_PREFIX = "browser-use-user-data-dir-yahbah-headed-"
+
+
+async def _discard(session: BrowserSession, run_id: str = "?") -> None:
+    """Kill the browser and delete its temporary profile."""
+    profile_dir = session.browser_profile.user_data_dir
+    try:
+        await session.kill()
+    except Exception as exc:
+        logger.warning(f"[session] kill failed for run {run_id}: {exc}")
+    if profile_dir and "browser-use-user-data-dir-" in str(profile_dir):
+        shutil.rmtree(profile_dir, ignore_errors=True)
