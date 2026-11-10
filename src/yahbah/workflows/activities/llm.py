@@ -4,14 +4,14 @@ LLM activities — stateless, retryable.
   map_answers_activity            answer every form field (llm/answers.py) and score the match
   map_new_fields_activity         answer fields that appeared on a review re-fill, for the next review round
   generate_cover_letter_activity  cover letter text + PDF
-  extract_job_metadata_activity   title, company, salary, technologies, ...
+  extract_job_metadata_activity   title, company, salary, technologies, the job's offers (C9), ...
 """
 import json
 from dataclasses import asdict
 from pathlib import Path
 from fpdf import FPDF
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
@@ -20,6 +20,7 @@ from yahbah.config import load_prompts_config
 from yahbah.llm.answers import AnswerEngine, AnswerPlan, JobContext, NeedsAnswer
 from yahbah.llm.client import OllamaClient
 from yahbah.llm.cover_letter import CoverLetterGenerator
+from yahbah.llm.job_offers import JobOffersReply, stated, validate_offers
 from yahbah.llm.facts import FactCatalog, FactsConfigError, load_facts
 from yahbah.llm.logs import use_run_log_dir
 from yahbah.llm.match_score import compute_match_score
@@ -80,7 +81,7 @@ def load_catalog(profile, account_email: str | None) -> FactCatalog:
 def job_context(input_: MapAnswersInput | MapNewFieldsInput | FillInput) -> JobContext:
     """What the answer engine is told about the job (untrusted page data, context only)."""
     return JobContext(location=input_.job_location, description=input_.job_description,
-                      company=input_.job_company, title=input_.job_title)
+                      company=input_.job_company, title=input_.job_title, offers=input_.job_offers)
 
 
 async def persist_answer_plan(run_id: str, plan: AnswerPlan, stage: str, review_round: int | None) -> None:
@@ -203,7 +204,14 @@ async def generate_cover_letter_activity(input: CoverLetterInput) -> CoverLetter
     )
 
 
+def _require_offers(schema: dict) -> None:
+    schema.setdefault("required", []).append("offers")
+
+
 class _JobMetadata(BaseModel):
+    # offers is always decoded, so the model says "unknown" rather than leaving claims out; its default
+    # only serves validation.
+    model_config = ConfigDict(json_schema_extra=_require_offers)
     title: str | None = None
     company: str | None = None
     location: str | None = None
@@ -217,6 +225,7 @@ class _JobMetadata(BaseModel):
     seniority_level: str | None = None
     experience_required: str | None = None
     posted_date: str | None = None
+    offers: JobOffersReply | None = None  # contract C9 before the code checks (llm/job_offers.py)
 
 
 class _JobTechExtraction(BaseModel):
@@ -225,13 +234,29 @@ class _JobTechExtraction(BaseModel):
 
 
 async def _extract_metadata(llm: OllamaClient, job_description: str) -> _JobMetadata:
-    """Extract title, company, location, salary, summary from the full posting."""
+    """Extract title, company, location, salary, summary and the job's offers (C9) from the full posting."""
     prompts = load_prompts_config()["prompts"]
     return await llm.generate_structured(
         system_prompt=prompts["job_metadata"],
         user_prompt=f"Job posting text:\n\n{job_description}",
         response_model=_JobMetadata,
     )
+
+
+def _too_short(job_description: str) -> bool:
+    return not job_description or len(job_description.strip()) < 50
+
+
+def _offers(metadata: _JobMetadata, job_description: str) -> dict | None:
+    return validate_offers(metadata.offers.model_dump(), job_description) if metadata.offers else None
+
+
+async def extract_job_offers(llm: OllamaClient, description: str) -> dict | None:
+    """The job's validated offers (C9): the job_metadata call, then the code checks against `description`.
+    For callers without the metadata activity (scripts/run_pipeline.py, the extraction eval)."""
+    if _too_short(description):
+        return None
+    return _offers(await _extract_metadata(llm, description), description)
 
 
 async def _extract_tech(llm: OllamaClient, job_description: str) -> _JobTechExtraction:
@@ -255,7 +280,7 @@ async def extract_job_metadata_activity(input: JobMetadataInput) -> JobMetadataO
     separate Temporal activities.
     """
     use_run_log_dir(input.run_id)
-    if not input.job_description or len(input.job_description.strip()) < 50:
+    if _too_short(input.job_description):
         activity.logger.warning("[metadata] Job description too short — skipping LLM extraction")
         return JobMetadataOutput()
 
@@ -263,10 +288,11 @@ async def extract_job_metadata_activity(input: JobMetadataInput) -> JobMetadataO
 
     # Call 1: metadata
     metadata = await _extract_metadata(llm, input.job_description)
+    job_offers = _offers(metadata, input.job_description)
     activity.logger.info(
         f"[metadata] Extracted: title={metadata.title!r}, company={metadata.company!r}, "
         f"location={metadata.location!r}, summary={metadata.description_summary!r}, "
-        f"salary={metadata.salary_min}–{metadata.salary_max}"
+        f"salary={metadata.salary_min}–{metadata.salary_max}, job offers: {list(stated(job_offers))}"
     )
 
     # Call 2: tech extraction
@@ -291,6 +317,7 @@ async def extract_job_metadata_activity(input: JobMetadataInput) -> JobMetadataO
         posted_date=metadata.posted_date,
         technologies=tech.technologies,
         specialties=tech.specialties,
+        job_offers=job_offers,
     )
 
 

@@ -208,6 +208,7 @@ class ApplicationWorkflow:
         job_location = discovered.job_location or metadata.location  # scopes authorization questions
         job_company = discovered.job_company or metadata.company      # the job's identity for the answer engine
         job_title = discovered.job_title or metadata.title
+        job_offers = metadata.job_offers  # C9: the verifier's claims about the job (untrusted page data)
         answers = await self._long(map_answers_activity, MapAnswersInput(
             run_id=run_id,
             form_schema_dict=form.form_schema_dict,
@@ -216,6 +217,7 @@ class ApplicationWorkflow:
             job_location=job_location,
             job_company=job_company,
             job_title=job_title,
+            job_offers=job_offers,
         ))
 
         # ── GENERATE_COVER_LETTER (prose), only if the form asks for one ──────
@@ -242,6 +244,7 @@ class ApplicationWorkflow:
                 job_location=job_location,
                 job_company=job_company,
                 job_title=job_title,
+                job_offers=job_offers,
                 review_round=review_round,
                 refill=refill,
                 headed=headed,
@@ -284,6 +287,7 @@ class ApplicationWorkflow:
                 job_location=job_location,
                 job_company=job_company,
                 job_title=job_title,
+                job_offers=job_offers,
             ))
             approved = list({m["key"]: m for m in approved + mapped.field_mappings}.values())
 

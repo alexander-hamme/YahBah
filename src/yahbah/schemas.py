@@ -108,6 +108,7 @@ class JobMetadataOutput:
     posted_date: str | None = None
     technologies: list[str] | None = None
     specialties: list[str] | None = None
+    job_offers: dict | None = None  # contract C9: what the posting says it offers, validated (llm/job_offers.py)
 
 
 @dataclass
@@ -148,6 +149,7 @@ class MapAnswersInput:
     job_location: str | None = None   # decides which country unscoped authorization questions are about
     job_company: str | None = None    # the job's identity for the answer engine (untrusted page data)
     job_title: str | None = None
+    job_offers: dict | None = None    # contract C9, untrusted page data: the verifier's claims about the job
 
 
 @dataclass
@@ -182,6 +184,7 @@ class FillInput:
     job_location: str | None = None
     job_company: str | None = None
     job_title: str | None = None
+    job_offers: dict | None = None
     review_round: int = 1  # the review round this fill's evidence is for
     # Re-fill after a review approval: exactly the approved mappings (no new model mapping), and the
     # browser stays open for SUBMIT unless a required field without an approved answer appeared.
@@ -214,6 +217,7 @@ class MapNewFieldsInput:
     job_location: str | None = None
     job_company: str | None = None
     job_title: str | None = None
+    job_offers: dict | None = None
 
 
 @dataclass

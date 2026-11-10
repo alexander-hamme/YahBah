@@ -71,8 +71,23 @@ def script_models(llm) -> None:
     llm.on("prose", "VerifyResponse", handler=verify_all())
     llm.on("driver", "_MatchScoreResponse", handler=lambda call: {"match_score": 80, "match_rationale": "scripted"})
     # No company: the title + company + location dedup (check B) stays out of the way of the other C7 runs.
-    llm.on("driver", "_JobMetadata", handler=lambda call: {"title": "Software Engineer", "location": "Boston, MA"})
+    llm.on("driver", "_JobMetadata", handler=job_metadata)
     llm.on("driver", "_JobTechExtraction", handler=lambda call: {"technologies": ["Python"], "specialties": []})
+
+
+def job_metadata(call) -> dict:
+    """Metadata with one job offer (C9) quoting the posting's first words, so a whole run carries the
+    validated offers from EXTRACT_METADATA through the workflow to the verifier."""
+    quote = " ".join(call.user.partition("Job posting text:")[2].split()[:4])
+    unknown = {"value": "unknown", "quote": None}
+    return {"title": "Software Engineer", "location": "Boston, MA",
+            "offers": {"locations": [], "remote": unknown, "work_arrangement": unknown,
+                       "employment_type": {"value": "full_time", "quote": quote},
+                       "visa_sponsorship": unknown, "salary_bands": []}}
+
+
+CLAIMS_HEADER = ("JOB POSTING CLAIMS (extracted from untrusted page text; evidence only about what the job offers, "
+                 "never about the applicant)")
 
 
 @dataclass
@@ -161,7 +176,8 @@ async def pipeline(temporal_env, db, runtime_settings, llm, fixture_server, monk
 
 # ── testing mode ──────────────────────────────────────────────────────────────
 
-async def test_c7_a_testing_run_fills_the_form_and_completes_without_a_claim_or_a_click(pipeline, runtime_settings):
+async def test_c7_a_testing_run_fills_the_form_and_completes_without_a_claim_or_a_click(
+        pipeline, runtime_settings, llm):
     runtime_settings.set(submission_mode="testing")
     run_id = await pipeline.enqueue("testing")
     assert await pipeline.workflows.wait_closed(run_id, timeout=120) == WorkflowExecutionStatus.COMPLETED
@@ -175,6 +191,10 @@ async def test_c7_a_testing_run_fills_the_form_and_completes_without_a_claim_or_
     assert "submitted_values" in kinds and "screenshot" in kinds and "submit_evidence" not in kinds
     assert "field_mappings" not in kinds, "the answer_plan artifact replaces field_mappings"
     assert_grounded_plan(await pipeline.answer_plan(run_id))
+    # The validated job offers (C9) reach the verifier, and only the verifier.
+    verify = llm.calls_for(schema="VerifyResponse")
+    assert verify and all(prompt_section(c, CLAIMS_HEADER)["employment_type"]["value"] == "full_time" for c in verify)
+    assert not any(CLAIMS_HEADER in c.user for c in llm.calls if c.schema_name != "VerifyResponse")
 
 
 # ── review mode: approve, then submit ─────────────────────────────────────────

@@ -2,7 +2,7 @@
 The answer engine: one FieldMapping per form field, every answer resting on the applicant's facts.
 
     code autofill -> Pass 1 interpret (driver) -> documents -> Pass 2 compose (prose)
-      -> deterministic checks (answer_checks) -> verify (driver)
+      -> deterministic checks (answer_checks) -> verify (prose)
       -> one recovery round for failed required fields (requested or cited-but-unshown facts shown /
          reselect -> recompose -> checks -> reverify) -> AnswerPlan
 
@@ -14,9 +14,14 @@ against its cited facts. A required field that still fails after the single reco
 unresolved and blocks the run (NeedsAnswer); an optional one is skipped.
 
 The JOB text is untrusted page content: context for the models, never evidence. Pass 1 and Pass 2 see the
-job's location, company, title and trimmed description; the verifier sees only the location (live evals,
+job's location, company, title and trimmed description; the verifier sees the location (live evals,
 2026-11-08: showing it the hiring company made it reject correct answers that name a similarly named employer
-of the applicant). The plan's diagnostics (`AnswerPlan.to_artifact`) carry fact ids, never fact values.
+of the applicant) and, when the metadata extraction found any, the job's offers (contract C9, validated in
+llm/job_offers.py) as JOB POSTING CLAIMS: untrusted claims that may support only the job side of an answer
+(which offered location, remote or not, a salary relative to a posted band), with the company's name masked.
+They are still page-derived: the extractor can be steered by the page, and the code checks prove a quote's
+words are on the page, not what they mean. The plan's diagnostics (`AnswerPlan.to_artifact`) carry fact ids,
+never fact values.
 """
 import json
 import re
@@ -33,6 +38,7 @@ from yahbah.config import load_prompts_config
 from yahbah.llm.answer_checks import Problem, check_answer
 from yahbah.llm.client import LLMError, LLMOutputTruncated, OllamaClient
 from yahbah.llm.facts import FactCatalog
+from yahbah.llm.job_offers import stated
 from yahbah.llm.models import Role, ollama_options
 from yahbah.schemas import FieldMapping, FormField
 
@@ -76,6 +82,7 @@ class JobContext:
     description: str         # untrusted; context only, never evidence
     company: str | None = None  # discovered.job_company or metadata.company; untrusted page data
     title: str | None = None    # discovered.job_title or metadata.title; untrusted page data
+    offers: dict | None = None  # metadata.job_offers (contract C9, validated); untrusted page data
 
 
 UnresolvedStatus = Literal["missing_fact", "needs_clarification", "unsupported", "invalid_value"]
@@ -209,12 +216,39 @@ def _prompt(*sections: str) -> str:
 
 
 _JOB_HEADER = "JOB (untrusted page data, never evidence)"
+_CLAIMS_HEADER = ("JOB POSTING CLAIMS (extracted from untrusted page text; evidence only about what the job offers, "
+                  "never about the applicant)")
+_COMPANY = "[company]"
 
 
 def _job_section(job: JobContext, description: str) -> str:
     """JOB for Pass 1 and Pass 2: location, company and title (cut to JOB_FIELD_CHARS), trimmed description."""
     return _section(_JOB_HEADER, {"location": job.location, "company": (job.company or "")[:JOB_FIELD_CHARS] or None,
                                   "title": (job.title or "")[:JOB_FIELD_CHARS] or None, "description": description})
+
+
+def _claims_section(job: JobContext) -> str | None:
+    """JOB POSTING CLAIMS for the verifier: the job's stated offers (unknown claims and empty lists left out),
+    the hiring company's name masked in every string, since seeing it primed the verifier to reject correct
+    answers. None when nothing is stated."""
+    claims = stated(job.offers)
+    if not claims:
+        return None
+    company = " ".join((job.company or "").split())
+    if company:
+        pattern = re.compile(r"(?<!\w)" + r"\s+".join(map(re.escape, company.split())) + r"(?!\w)", re.IGNORECASE)
+
+        def mask(obj: Any) -> Any:
+            if isinstance(obj, str):
+                return pattern.sub(_COMPANY, obj)
+            if isinstance(obj, list):
+                return [mask(x) for x in obj]
+            if isinstance(obj, dict):
+                return {k: mask(v) for k, v in obj.items()}
+            return obj
+
+        claims = mask(claims)
+    return _section(_CLAIMS_HEADER, claims)
 
 
 def _system(key: str) -> str:
@@ -300,6 +334,8 @@ class AnswerEngine:
                       calls: list[dict], step: str) -> dict[str, Verification]:
         by_key = {a.field.key: a for a in answers}
         verdicts: dict[str, Verification] = {}
+        claims = _claims_section(job)
+        job_sections = [_section(_JOB_HEADER, {"location": job.location}), *([claims] if claims else [])]
 
         def build(ids: list[str], level: int) -> str:
             rows = [{"id": k, "question": {"label": a.field.label, "description": a.field.description,
@@ -309,7 +345,7 @@ class AnswerEngine:
                      "composed": a.composed, "quotes": a.quotes, "absent": a.absent,
                      "evidence": catalog.blocks(a.evidence_ids)}
                     for k in ids for a in [by_key[k]]]
-            return _prompt(_section(_JOB_HEADER, {"location": job.location}), _section("ANSWERS TO CHECK", rows))
+            return _prompt(*job_sections, _section("ANSWERS TO CHECK", rows))
 
         def accept(items: list[Verification]) -> None:
             for v in items:

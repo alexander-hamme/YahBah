@@ -6,7 +6,9 @@
 
 AnswerEngine.verify_answers (the independent verifier of the two-pass answer engine) judges synthetic
 proposed answers for the applicant of answer_eval.yaml (plus verify_eval.yaml's `facts:`). Seeded-wrong
-items must be rejected, correct ones accepted. Switches (environment):
+items must be rejected, correct ones accepted. Jobs are answer_eval.yaml's plus verify_eval.yaml's
+`jobs:`; a job's `offers:` (C9) go through validate_offers with its description into JobContext.offers,
+as the product's extracted job offers do. Switches (environment):
   - YAHBAH_VERIFY_MODES: comma list of modes, default `batch,single`:
       batch   one verify_answers call per job (the engine splits it into VERIFY_BATCH chunks), as a
               whole form is verified;
@@ -40,6 +42,7 @@ from yahbah.agent.options import norm
 from yahbah.llm.answer_checks import PROFILE_RECORD_KINDS
 from yahbah.llm.answers import VERIFY_ROLE, AnswerEngine, JobContext, ProposedAnswer
 from yahbah.llm.facts import FactCatalog, load_facts
+from yahbah.llm.job_offers import validate_offers
 from yahbah.llm.models import spec
 from yahbah.schemas import FormField
 
@@ -47,11 +50,15 @@ HERE = Path(__file__).parent
 ANSWER_EVAL = yaml.safe_load((HERE / "answer_eval.yaml").read_text())
 VERIFY_EVAL = yaml.safe_load((HERE / "verify_eval.yaml").read_text())
 ITEMS = VERIFY_EVAL["items"]
+JOBS = ANSWER_EVAL["jobs"] | VERIFY_EVAL.get("jobs", {})
 # The answer-eval applicant's facts plus the verify set's own (cited only by the items naming them).
 FACTS = ANSWER_EVAL["applicant"]["facts"] + VERIFY_EVAL.get("facts", [])
 NO_VERDICT = "no verdict"  # the problem verify_answers gives a verdict the model left out
 MODES = ("batch", "single")
 ROLES = ("driver", "prose")
+
+OFFER_ENUMS = ("remote", "work_arrangement", "employment_type", "visa_sponsorship")
+OFFER_LISTS = ("locations", "salary_bands")
 
 
 def proposal(item: dict) -> ProposedAnswer:
@@ -79,7 +86,8 @@ def test_dataset_meets_the_minimum_and_cites_real_facts(applicant_facts) -> None
     assert set(expects) == {"supported", "unsupported"}
     unknown = {(i["id"], e) for i in ITEMS for e in i["evidence"] if e not in catalog.facts}
     assert not unknown, f"evidence ids not in the eval catalog: {sorted(unknown)}"
-    assert {i.get("job", "us") for i in ITEMS} <= set(ANSWER_EVAL["jobs"])
+    assert not set(ANSWER_EVAL["jobs"]) & set(VERIFY_EVAL.get("jobs", {})), "verify_eval.yaml jobs repeat a name"
+    assert {i.get("job", "us") for i in ITEMS} <= set(JOBS)
     for item in ITEMS:
         quotes = item.get("quotes", [])
         assert isinstance(quotes, list) and all(isinstance(q, str) and q.strip() for q in quotes), item["id"]
@@ -93,10 +101,45 @@ def test_dataset_meets_the_minimum_and_cites_real_facts(applicant_facts) -> None
         proposal(item)
 
 
+def full_offers(offers: dict) -> dict:
+    """A job's `offers:` in the whole C9 shape: omitted enum fields unknown, omitted lists empty."""
+    return {**{f: {"value": "unknown", "quote": None} for f in OFFER_ENUMS}, **{f: [] for f in OFFER_LISTS},
+            **offers}
+
+
+def surviving_offers(job: dict) -> dict | None:
+    """What validate_offers should keep of a job's offers: all of them but its `offers_dropped` claims
+    ("remote", "salary_bands[0]", ...); None when nothing is left."""
+    dropped = set(job.get("offers_dropped", []))
+    out = full_offers(job["offers"])
+    for f in OFFER_ENUMS:
+        if f in dropped:
+            out[f] = {"value": "unknown", "quote": None}
+    for f in OFFER_LISTS:
+        out[f] = [claim for i, claim in enumerate(out[f]) if f not in dropped and f"{f}[{i}]" not in dropped]
+    kept = any(out[f] for f in OFFER_LISTS) or any(out[f]["value"] != "unknown" for f in OFFER_ENUMS)
+    return out if kept else None
+
+
+def test_job_offers_survive_validation() -> None:
+    """Offline: every job's offers survive validate_offers whole, but for the claims it lists in
+    `offers_dropped` (each naming a real claim), and every offers job is used by an item."""
+    offer_jobs = {name: job for name, job in JOBS.items() if job.get("offers")}
+    assert offer_jobs
+    for name, job in offer_jobs.items():
+        assert set(full_offers(job["offers"])) == set(OFFER_ENUMS + OFFER_LISTS), name
+        claims = set(OFFER_ENUMS) | set(OFFER_LISTS) | {
+            f"{f}[{i}]" for f in OFFER_LISTS for i in range(len(job["offers"].get(f, [])))}
+        assert set(job.get("offers_dropped", [])) <= claims, name
+        assert validate_offers(full_offers(job["offers"]), job["description"]) == surviving_offers(job), name
+    assert set(offer_jobs) <= {i.get("job", "us") for i in ITEMS}
+
+
 def job_context(name: str) -> JobContext:
-    job = ANSWER_EVAL["jobs"][name]
+    job = JOBS[name]
+    offers = validate_offers(full_offers(job["offers"]), job["description"]) if job.get("offers") else None
     return JobContext(location=job.get("location"), description=job["description"], company=job.get("company"),
-                      title=job.get("title"))
+                      title=job.get("title"), offers=offers)
 
 
 def calls_for(mode: str) -> list[tuple[str, list[dict]]]:

@@ -1,7 +1,7 @@
 """
 Run the agentic pipeline on one job URL without Temporal or a run record — for debugging a board.
 
-  uv run python scripts/run_pipeline.py <job-url>                      # discover → map form → answers → fill
+  uv run python scripts/run_pipeline.py <job-url>                      # discover → map form → job offers → answers → fill
   uv run python scripts/run_pipeline.py <job-url> --force-tier oneshot # start form mapping at a fallback tier
   uv run python scripts/run_pipeline.py <job-url> --cover-letter       # also generate + attach a cover letter
   uv run python scripts/run_pipeline.py <job-url> --headed --keep-open # watch it, leave the browser open
@@ -31,10 +31,12 @@ from yahbah.config import settings
 from yahbah.db.models import ApplicantProfile
 from yahbah.db.session import AsyncSessionLocal
 from yahbah.llm.answers import AnswerEngine, AnswerPlan, JobContext, NeedsAnswer
+from yahbah.llm.client import OllamaClient
 from yahbah.llm.cover_letter import CoverLetterGenerator
 from yahbah.llm.facts import FactsConfigError, load_facts
 from yahbah.llm.logs import use_run_log_dir
-from yahbah.workflows.activities.llm import _text_to_pdf, field_from_row
+from yahbah.llm.job_offers import stated
+from yahbah.workflows.activities.llm import _text_to_pdf, extract_job_offers, field_from_row
 
 
 def _save_plan(run_id: str, plan: AnswerPlan, name: str, stage: str) -> None:
@@ -83,8 +85,13 @@ async def main() -> None:
         async with AsyncSessionLocal() as db:
             profile = (await db.execute(select(ApplicantProfile).limit(1))).scalar_one()
         catalog = load_facts(profile)
-        job_context = JobContext(location=job.get("location") or None, description=job.get("description") or "",
-                                 company=job.get("company") or None, title=job.get("job_title") or None)
+        description = job.get("description") or ""
+        t = time.time()
+        offers = await extract_job_offers(OllamaClient("driver"), description)  # same call + checks as the workflow
+        trace.add("job_offers", "model", t, f"stated: {list(stated(offers))}")
+        job_context = JobContext(location=job.get("location") or None, description=description,
+                                 company=job.get("company") or None, title=job.get("job_title") or None,
+                                 offers=offers)
         t = time.time()
         plan = await AnswerEngine().plan([field_from_row(f) for f in fields], job_context, catalog)
         _save_plan(run_id, plan, "answer_plan.json", "map_answers")

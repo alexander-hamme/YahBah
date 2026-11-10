@@ -396,6 +396,102 @@ async def test_fields_that_appear_while_filling_are_answered_with_the_jobs_compa
                                   "description": ""}]
 
 
+# ── job offers (contract C9): activity inputs -> JobContext -> the verifier's claims ─────────────────
+
+JOB_OFFERS = {"locations": [{"place": "Denver", "quote": "Offices in Boston and Denver"}],
+              "remote": {"value": "no", "quote": "Remote work is not available"},
+              "work_arrangement": {"value": "unknown", "quote": None},
+              "employment_type": {"value": "unknown", "quote": None},
+              "visa_sponsorship": {"value": "unknown", "quote": None}, "salary_bands": []}
+CLAIMS_HEADER = ("JOB POSTING CLAIMS (extracted from untrusted page text; evidence only about what the job offers, "
+                 "never about the applicant)")
+RELOCATE = {"key": "rel", "label": "Willing to relocate?", "required": True, "options": ["Yes", "No"]}
+
+
+def test_job_context_carries_the_job_offers_and_old_inputs_still_decode() -> None:
+    from temporalio.converter import DataConverter
+
+    from yahbah.schemas import MapAnswersInput, MapNewFieldsInput
+    from yahbah.workflows.activities.llm import job_context
+
+    inputs = [MapAnswersInput(run_id="r", form_schema_dict={}, job_offers=JOB_OFFERS),
+              MapNewFieldsInput(run_id="r", fields=[], approved_mappings=[], job_description="", review_round=2,
+                                job_offers=JOB_OFFERS),
+              fill_input("r", job_offers=JOB_OFFERS)]
+    assert [job_context(i).offers for i in inputs] == [JOB_OFFERS] * 3
+    # An input recorded before C9 (no job_offers key) decodes with offers None.
+    converter = DataConverter.default.payload_converter
+    old = {"run_id": "r", "form_schema_dict": {}, "job_description": "d", "job_location": "Boston, MA"}
+    [decoded] = converter.from_payloads(converter.to_payloads([old]), [MapAnswersInput])
+    assert decoded.job_offers is None and job_context(decoded).offers is None
+
+
+def script_one_answered_one_missing(llm) -> None:
+    """RELOCATE answered and verified; any other field missing_fact (so the activity ends needs_answer)."""
+    from harness.llm import compose_all, composed, interpret_all, reselect_all, verify_all
+
+    llm.on("driver", "InterpretResponse", handler=interpret_all(lambda fid: ["relocation"]))
+    llm.on("prose", "ComposeResponse", handler=compose_all(lambda fid, row: composed(fid, "Yes", ["relocation"])
+                                                           if fid == RELOCATE["key"] else composed(
+        fid, None, status="missing_fact", requested_info="Your visa type")))
+    llm.on("prose", "VerifyResponse", handler=verify_all())
+    llm.on("driver", "ReselectResponse", handler=reselect_all({}))
+
+
+def claims_sections(llm) -> list[dict]:
+    from harness.llm import prompt_section
+
+    return [prompt_section(c, CLAIMS_HEADER) for c in llm.calls_for(schema="VerifyResponse")]
+
+
+STATED = {"locations": JOB_OFFERS["locations"], "remote": JOB_OFFERS["remote"]}
+
+
+async def test_the_answer_activities_give_the_verifier_the_job_offers(db, activity_env, llm, llm_activities) -> None:
+    from dataclasses import replace
+
+    from yahbah.schemas import MapNewFieldsInput
+
+    _, run_id = await running_run(db)
+    script_one_answered_one_missing(llm)
+    env = activity_env(workflow_id=f"application-{run_id}")
+    with pytest.raises(ApplicationError):
+        await env.call(llm_activities.map_answers_activity, replace(
+            map_answers_input(run_id), form_schema_dict={"fields": [RELOCATE | {"field_type": "radio"}, CLEARANCE]},
+            job_offers=JOB_OFFERS, **JOB_IDENTITY))
+    with pytest.raises(ApplicationError):
+        await env.call(llm_activities.map_new_fields_activity, MapNewFieldsInput(
+            run_id=str(run_id), fields=[RELOCATE | {"type": "radio"}, NEW_REQUIRED], approved_mappings=[],
+            job_description="Acme, Boston, MA", review_round=2, job_location="Boston, MA", job_offers=JOB_OFFERS,
+            **JOB_IDENTITY))
+    assert claims_sections(llm) == [STATED] * 2
+
+
+async def test_fields_that_appear_while_filling_are_verified_with_the_job_offers(
+        db, activity_env, llm, browser_activities, registry, applicant_facts, monkeypatch) -> None:
+    from harness.profile import applicant
+
+    async def profile():
+        return applicant()
+
+    monkeypatch.setattr(browser_activities, "_load_profile", profile)
+    _, run_id = await running_run(db)
+    script_one_answered_one_missing(llm)
+    env = activity_env(workflow_id=f"application-{run_id}")
+    await env.call(registry.open, str(run_id), "https://jobs.harness.example/acme/1")
+
+    async def fill_form(session, board, ctx, map_new_fields=None, beat=None):
+        await map_new_fields([RELOCATE | {"type": "radio"}, NEW_REQUIRED])
+        return []
+
+    monkeypatch.setattr(browser_activities, "fill_form", fill_form)
+    with pytest.raises(ApplicationError) as exc:
+        await env.call(browser_activities.fill_activity, fill_input(run_id, job_location="Boston, MA",
+                                                                    job_offers=JOB_OFFERS, **JOB_IDENTITY))
+    assert exc.value.type == "needs_answer"
+    assert claims_sections(llm) == [STATED]
+
+
 async def test_an_unmigrated_personal_yaml_fails_the_run_without_retries_or_model_calls(
         db, activity_env, llm, llm_activities, applicant_facts) -> None:
     _, run_id = await running_run(db)

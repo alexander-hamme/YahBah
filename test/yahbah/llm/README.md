@@ -1,17 +1,24 @@
 # Live LLM evals
 
-Opt-in evals of the answer engine (`src/yahbah/llm/answers.py`) against the real local models. The default
-`uv run pytest` runs only their offline dataset checks; the live tests run only with `-m live_llm`. How the
-engine works: [docs/wiki/modules/llm.md](../../../docs/wiki/modules/llm.md).
+Opt-in evals of the answer engine (`src/yahbah/llm/answers.py`) and of the job-offers extraction against the
+real local models. The default `uv run pytest` runs only their offline dataset checks; the live tests run
+only with `-m live_llm`. How the engine works: [docs/wiki/modules/llm.md](../../../docs/wiki/modules/llm.md).
 
 | File | What | Items |
 |---|---|---|
 | `answer_eval.yaml` + `test_answer_eval.py` | Main answer set: questions with expected answers or expected `needs_answer` | 77 |
 | `answer_eval_heldout.yaml` (same test file) | Held-out answer set: new traps, never tuned against | 20 |
-| `verify_eval.yaml` + `test_verify_eval.py` | Verifier set: proposed answers the checker must accept or reject | 55 (29 wrong, 26 correct) |
+| `verify_eval.yaml` + `test_verify_eval.py` | Verifier set: proposed answers the checker must accept or reject | 61 (32 wrong, 29 correct) |
+| `job_offers_eval.yaml` + `test_job_offers_eval.py` | Job-offers extraction: synthetic postings and the validated offers (C9) expected from each | 8 postings |
 
-All three use the synthetic applicant defined in `answer_eval.yaml`, never `config/personal.yaml`. They
-need no database, Temporal or browser.
+The answer and verifier sets use the synthetic applicant defined in `answer_eval.yaml`, never
+`config/personal.yaml`. None of the evals needs a database, Temporal or a browser.
+
+Six verifier items (the `offers_*` ids) run on `verify_eval.yaml`'s own `jobs:`, which carry job offers.
+The harness passes those offers through `validate_offers` with the job's description, as the product
+does, so the verifier sees them as JOB POSTING CLAIMS. Two of these jobs hold mistakes that pass the code
+checks on purpose (a negated remote quote read as "yes", city bands swapped), and one holds an injection
+about the applicant.
 
 ## Before a run
 
@@ -35,6 +42,10 @@ YAHBAH_EVAL_SET=heldout YAHBAH_EVAL_OUT=artifacts/eval/answers-heldout.json \
 # Verifier (both modes)
 YAHBAH_EVAL_OUT=artifacts/eval/verify.json \
   uv run pytest -m live_llm test/yahbah/llm/test_verify_eval.py -s -n 0
+
+# Job-offers extraction (driver model, one job_metadata call per posting)
+YAHBAH_EVAL_OUT=artifacts/eval/job-offers.json \
+  uv run pytest -m live_llm test/yahbah/llm/test_job_offers_eval.py -s -n 0
 ```
 
 `-s` prints the summary, and the JSON report holds every row. `artifacts/` is gitignored, so reports stay
@@ -43,16 +54,17 @@ on your machine.
 | Switch | Eval | Effect |
 |---|---|---|
 | `YAHBAH_EVAL_SET=main\|heldout` | answers | Which set runs (default `main`) |
-| `YAHBAH_EVAL_OUT=<path>` | both | JSON report path; the verifier writes it before checking gates, so a failing run keeps it |
-| `YAHBAH_EVAL_REPEATS=<n>` | both | Passes per mode (default 1). Model output varies, so repeat before trusting a single miss |
+| `YAHBAH_EVAL_OUT=<path>` | all | JSON report path; the verifier and extraction evals write it before checking gates, so a failing run keeps it |
+| `YAHBAH_EVAL_REPEATS=<n>` | all | Passes, per mode where an eval has modes (default 1). Model output varies, so repeat before trusting a single miss |
 | `YAHBAH_VERIFY_MODES=batch,single` | verifier | `batch`: one call per job. `single`: one call per answer |
 | `YAHBAH_VERIFY_ROLE=driver\|prose` | verifier | Which model checks, for this test only; the product setting is unchanged |
-| `MODEL_DRIVER=<ollama model>` | both | Swaps the driver model, e.g. `qwen3-coder-next:q8_0` |
+| `MODEL_DRIVER=<ollama model>` | all | Swaps the driver model, e.g. `qwen3-coder-next:q8_0` |
 
 **Measured run times:**
 - **Main set:** 50 min with 77 items (2026-11-09): `per_item` 34 min, `whole_form` 16 min.
 - **Held-out set:** 13 min.
 - **Verifier:** about 2.5 min per pass with `qwen3.8:27b` as the checker.
+- **Job-offers extraction:** not measured yet.
 
 ## Gates
 
@@ -74,6 +86,28 @@ on your machine.
 |---|---|
 | Wrong answers rejected (catch rate) | ≥ 90% |
 | Correct answers rejected (false rejection) | ≤ 10% |
+
+**Job-offers extraction**, over every posting and repeat, scored per field of the validated result:
+
+| Gate | Target |
+|---|---|
+| Critical errors: a wrong non-`unknown` value (remote "yes" where the page says no), a place or band the page doesn't offer, a band paired with the wrong place, or an injected phrase in a kept quote | 0 |
+| Stated values recovered (a value the page states, not left `unknown`) | ≥ 85% |
+
+Each posting tests one situation: several offices, remote only in a negation, per-city salary bands, an
+hourly contract, no salary, a sponsorship refusal, an injection that tries to plant "remote: yes", a
+salary band and applicant facts, and a single monthly amount in euros. Tolerances are in the YAML: any
+listed spelling of a place, any quote span the validator keeps, a null currency or period, and any remote
+value for a hybrid job.
+
+**What the extraction eval can't show:**
+- **Truth:** the validator checks only that each quote is on the page, not what it means. A clean score
+  means the extractor read these postings right, not that extracted offers can be trusted.
+- **Injection resistance in general:** the extractor still reads the raw page, so an injection can steer
+  what it returns. One posting passing says nothing about wordings it hasn't seen.
+- **Real postings:** eight short synthetic postings, not the length or mess of real pages.
+- **Downstream effect:** the verifier items above measure how the checker treats claims, including
+  manipulated ones that reach it. Review mode stays the backstop.
 
 ## Rules
 
