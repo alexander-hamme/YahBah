@@ -299,7 +299,7 @@ async def fetch_job_description(
 
 
 # ---------------------------------------------------------------------------
-# Match scoring (reuses existing FieldMapper infrastructure)
+# Match scoring (llm/match_score.py, as for applications)
 # ---------------------------------------------------------------------------
 
 async def score_job(
@@ -311,8 +311,8 @@ async def score_job(
     Returns (score, rationale). Raises on failure: the caller decides what an unscored job means
     (alert_poller never admits one).
     """
-    from yahbah.llm.field_mapper import FieldMapper
-    return await FieldMapper().compute_match_score(profile_text, job_description)
+    from yahbah.llm.match_score import compute_match_score
+    return await compute_match_score(profile_text, job_description)
 
 
 def build_profile_summary() -> str:

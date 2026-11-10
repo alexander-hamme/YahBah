@@ -38,13 +38,12 @@ from yahbah.agent.tools import get_form_schema, run_js
 from yahbah.credentials import generate_email_alias
 from yahbah.db.models import ApplicantProfile, ApplicationRun
 from yahbah.db.session import AsyncSessionLocal
-from yahbah.llm.field_mapper import FieldMapper, NeedsAnswer
+from yahbah.llm.answers import AnswerEngine, JobContext, NeedsAnswer
 from yahbah.llm.logs import use_run_log_dir
 from yahbah.run_state import attempt_tag, claim_submission, record_possible_submission
 from yahbah.schemas import (
     DiscoverInput,
     DiscoverOutput,
-    FieldMapping,
     FillInput,
     FillOutput,
     FormField,
@@ -62,6 +61,13 @@ from yahbah.workflows.activities.db_ops import (
     superseded,
 )
 from yahbah.workflows.activities.heartbeat import heartbeating
+from yahbah.workflows.activities.llm import (
+    field_from_row,
+    job_context,
+    load_catalog,
+    needs_answer_error,
+    persist_answer_plan,
+)
 
 # Failures that a retry can't fix: fail the run right away with the reason.
 _FINAL = {"job_closed", "login_wall", "captcha", "blocked", "needs_answer", "form_changed", "possibly_submitted",
@@ -70,7 +76,7 @@ _FINAL = {"job_closed", "login_wall", "captcha", "blocked", "needs_answer", "for
 
 def _app_error(exc: StageFailed | NeedsAnswer) -> ApplicationError:
     if isinstance(exc, NeedsAnswer):
-        return ApplicationError(str(exc), type="needs_answer", non_retryable=True)
+        return needs_answer_error(exc)
     return ApplicationError(str(exc), type=exc.reason, non_retryable=exc.reason in _FINAL)
 
 
@@ -165,18 +171,19 @@ async def _session_with_form(run_id: str, job_url: str, schema: FormSchema | Non
     return session
 
 
-def _map_new_fields(profile: ApplicantProfile, ctx: FillContext, job_description: str, account_email: str | None,
-                    job_location: str | None):
-    """Mapper for fields that appear while filling: same profile-based mapping as the rest."""
-    async def map_new(new_fields: list[dict]) -> list[dict]:
-        fields = [FormField(key=f["key"], label=f["label"], field_type=f["type"], required=bool(f["required"]),
-                            options=f.get("options") or [], autocomplete=f.get("autocomplete")) for f in new_fields]
-        prior = [FieldMapping(**m) for m in ctx.mappings.values()]
-        mapped = await FieldMapper().map(fields, profile, job_description, prior=prior, job_location=job_location)
-        for m in mapped:
-            if m.source == "email" and account_email:
-                m.value = account_email
-        return [asdict(m) for m in mapped]
+def _map_new_fields(run_id: str, review_round: int, profile: ApplicantProfile, ctx: FillContext, job: JobContext,
+                    account_email: str | None):
+    """Answers for fields that appear while filling, and re-answers for planned values that matched no option
+    (rows with `feedback`): the same answer engine as MAP_ANSWERS, the form's other answers as prior context."""
+    async def map_new(rows: list[dict]) -> list[dict]:
+        keys = {r["key"] for r in rows}
+        feedback = {r["key"]: r["feedback"] for r in rows if r.get("feedback")}
+        prior = [m for k, m in ctx.mappings.items() if k not in keys]
+        plan = await AnswerEngine().plan([field_from_row(r) for r in rows], job,
+                                         load_catalog(profile, account_email), prior=prior, feedback=feedback)
+        await persist_answer_plan(run_id, plan, "fill", review_round)
+        plan.raise_if_blocked()
+        return [asdict(m) for m in plan.mappings]
     return map_new
 
 
@@ -187,7 +194,7 @@ def _fill_context(schema: FormSchema, mappings: list[dict], profile: ApplicantPr
         files["cover_letter"] = cover_letter_path
     return FillContext(
         fields={f.key: {"label": f.label, "type": f.field_type, "required": f.required, "options": f.options,
-                        "empty_value": f.empty_value}
+                        "empty_value": f.empty_value, "description": f.description, "section": f.section}
                 for f in schema.fields},
         mappings={m["key"]: m for m in mappings},
         files=files,
@@ -199,7 +206,8 @@ def _schema_with_ctx_fields(schema: FormSchema, ctx: FillContext) -> dict:
     """The schema plus fields that appeared while filling."""
     known = {f.key for f in schema.fields}
     extra = [FormField(key=k, label=f["label"], field_type=f["type"], required=f["required"], options=f["options"],
-                       empty_value=f.get("empty_value"))
+                       empty_value=f.get("empty_value"), description=f.get("description", ""),
+                       section=f.get("section", ""))
              for k, f in ctx.fields.items() if k not in known]
     return asdict(FormSchema(fields=schema.fields + extra, page_url=schema.page_url, board=schema.board))
 
@@ -300,8 +308,8 @@ async def fill_activity(input: FillInput) -> FillOutput:
     board = boards.by_name(schema.board)
     profile = await _load_profile()
     ctx = _fill_context(schema, input.field_mappings, profile, input.cover_letter_path, input.cover_letter_text)
-    map_new = None if input.refill else _map_new_fields(profile, ctx, input.job_description, input.account_email,
-                                                         input.job_location)
+    map_new = None if input.refill else _map_new_fields(input.run_id, input.review_round, profile, ctx,
+                                                         job_context(input), input.account_email)
     registry = SessionRegistry.instance()
     try:
         session = await _session_with_form(input.run_id, input.job_url, schema, trace, headed=input.headed)

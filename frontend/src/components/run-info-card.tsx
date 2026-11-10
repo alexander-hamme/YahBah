@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import {
   Activity,
@@ -9,12 +8,11 @@ import {
   AlertTriangle,
   Workflow,
   CheckCheck,
-  Clipboard,
-  Check,
   ExternalLink,
   MessageSquareCheck,
   Settings2,
 } from "lucide-react";
+import { CopyButton } from "@/components/copy-button";
 import { OutcomeBadge } from "@/components/outcome-badge";
 import { ApplicationStatusPipeline } from "@/components/application-status-pipeline";
 import { DeadlineCountdown } from "@/components/deadline-countdown";
@@ -73,27 +71,6 @@ function formatDateTime(iso: string | null): string {
 function formatStep(step: string | null): string {
   if (!step) return "-";
   return step.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      onClick={() => {
-        navigator.clipboard.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      }}
-      className="text-muted-foreground hover:text-cyan-400 transition-colors"
-      title="Copy to clipboard"
-    >
-      {copied ? (
-        <Check className="h-3 w-3 text-emerald-400" />
-      ) : (
-        <Clipboard className="h-3 w-3" />
-      )}
-    </button>
-  );
 }
 
 function Field({

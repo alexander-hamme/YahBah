@@ -18,8 +18,8 @@ from harness.forms import CappedAsyncio
 
 NOW = datetime.now(timezone.utc)
 FIELD = {"key": "1", "label": "First name", "field_type": "text", "required": True, "options": []}
-MAPPING = {"key": "1", "label": "First name", "field_type": "text", "source": "first_name", "value": "Jane",
-           "confidence": 1.0}
+MAPPING = {"key": "1", "label": "First name", "field_type": "text", "source": "autofill", "value": "Jane",
+           "basis": ["profile.first_name"], "generated": False}
 NEW_REQUIRED = {"key": "9", "label": "Visa type", "type": "text", "required": True, "options": []}
 
 
@@ -279,6 +279,223 @@ async def test_a_refilled_form_that_changed_since_review_fails_form_changed(
         await activity_env(workflow_id=f"application-{run_id}").call(
             browser_activities.fill_activity, fill_input(run_id, review_round=2, refill=True))
     assert (exc.value.type, exc.value.non_retryable) == ("form_changed", True)
+
+
+# ── answering: the answer engine in the activities (contract §2 Answers, §8 answer_plan) ─────
+
+CLEARANCE = {"key": "clr", "label": "What level of security clearance do you currently hold?",
+             "field_type": "text", "required": True}
+
+
+def map_answers_input(run_id):
+    from yahbah.schemas import MapAnswersInput
+
+    first = {"key": "1", "label": "First name", "field_type": "text", "required": True, "autocomplete": "given-name"}
+    return MapAnswersInput(run_id=str(run_id), form_schema_dict={"fields": [first, CLEARANCE]},
+                           job_description="Acme, Boston, MA", account_email="jane+1@example.test",
+                           job_location="Boston, MA")
+
+
+@pytest.fixture
+def llm_activities(monkeypatch, applicant_facts):
+    from harness.profile import applicant
+    from yahbah.workflows.activities import llm as module
+
+    async def profile():
+        return applicant()
+
+    monkeypatch.setattr(module, "_load_profile", profile)
+    return module
+
+
+async def test_map_answers_saves_the_plan_and_an_unanswerable_required_field_fails_needs_answer(
+        db, activity_env, llm, llm_activities) -> None:
+    from harness.llm import compose_all, composed, interpret_all, reselect_all
+
+    _, run_id = await running_run(db)
+    llm.on("driver", "InterpretResponse", handler=interpret_all())
+    llm.on("prose", "ComposeResponse", handler=compose_all(lambda fid, row: composed(
+        fid, None, status="missing_fact", requested_info="Your active security clearance level, if any")))
+    llm.on("driver", "ReselectResponse", handler=reselect_all({}))
+
+    with pytest.raises(ApplicationError) as exc:
+        await activity_env(workflow_id=f"application-{run_id}").call(llm_activities.map_answers_activity,
+                                                                     map_answers_input(run_id))
+    assert (exc.value.type, exc.value.non_retryable) == ("needs_answer", True)
+    assert CLEARANCE["label"] in str(exc.value) and "missing_fact" in str(exc.value)
+    [row] = await db.fetchall("SELECT artifact_type, path, artifact_metadata FROM application_artifact")
+    assert (row["artifact_type"], row["artifact_metadata"]) == ("answer_plan", {"stage": "map_answers",
+                                                                                "review_round": None})
+    plan = json.loads(Path(row["path"]).read_text())
+    assert [(u["key"], u["status"]) for u in plan["unresolved"]] == [("clr", "missing_fact")]
+    assert [(f["key"], f["status"], f["basis"]) for f in plan["fields"]][0] == (
+        "1", "autofill", ["profile.first_name"])
+
+
+JOB_IDENTITY = {"job_company": "Acme Robotics", "job_title": "Senior Data Engineer"}
+
+
+def job_sections(llm) -> list[dict]:
+    """The JOB section of every Pass 1 call: what the activities told the answer engine about the job."""
+    from harness.llm import prompt_section
+
+    return [prompt_section(c, "JOB (untrusted page data, never evidence)")
+            for c in llm.calls_for(schema="InterpretResponse")]
+
+
+def script_unanswerable(llm) -> None:
+    from harness.llm import compose_all, composed, interpret_all, reselect_all
+
+    llm.on("driver", "InterpretResponse", handler=interpret_all())
+    llm.on("prose", "ComposeResponse", handler=compose_all(lambda fid, row: composed(
+        fid, None, status="missing_fact", requested_info="Your visa type")))
+    llm.on("driver", "ReselectResponse", handler=reselect_all({}))
+
+
+async def test_the_answer_activities_give_the_engine_the_jobs_company_and_title(
+        db, activity_env, llm, llm_activities) -> None:
+    from dataclasses import replace
+
+    from yahbah.schemas import MapNewFieldsInput
+
+    _, run_id = await running_run(db)
+    script_unanswerable(llm)
+    env = activity_env(workflow_id=f"application-{run_id}")
+    with pytest.raises(ApplicationError):
+        await env.call(llm_activities.map_answers_activity, replace(map_answers_input(run_id), **JOB_IDENTITY))
+    with pytest.raises(ApplicationError):
+        await env.call(llm_activities.map_new_fields_activity, MapNewFieldsInput(
+            run_id=str(run_id), fields=[NEW_REQUIRED], approved_mappings=[], job_description="Acme, Boston, MA",
+            review_round=2, job_location="Boston, MA", **JOB_IDENTITY))
+    assert job_sections(llm) == [{"location": "Boston, MA", "company": "Acme Robotics", "title": "Senior Data Engineer",
+                                  "description": "Acme, Boston, MA"}] * 2
+
+
+async def test_fields_that_appear_while_filling_are_answered_with_the_jobs_company_and_title(
+        db, activity_env, llm, browser_activities, registry, applicant_facts, monkeypatch) -> None:
+    from harness.profile import applicant
+
+    async def profile():
+        return applicant()
+
+    monkeypatch.setattr(browser_activities, "_load_profile", profile)
+    _, run_id = await running_run(db)
+    script_unanswerable(llm)
+    env = activity_env(workflow_id=f"application-{run_id}")
+    await env.call(registry.open, str(run_id), "https://jobs.harness.example/acme/1")
+
+    async def fill_form(session, board, ctx, map_new_fields=None, beat=None):
+        await map_new_fields([NEW_REQUIRED])
+        return []
+
+    monkeypatch.setattr(browser_activities, "fill_form", fill_form)
+    with pytest.raises(ApplicationError) as exc:
+        await env.call(browser_activities.fill_activity, fill_input(run_id, job_location="Boston, MA", **JOB_IDENTITY))
+    assert exc.value.type == "needs_answer"
+    assert job_sections(llm) == [{"location": "Boston, MA", "company": "Acme Robotics", "title": "Senior Data Engineer",
+                                  "description": ""}]
+
+
+async def test_an_unmigrated_personal_yaml_fails_the_run_without_retries_or_model_calls(
+        db, activity_env, llm, llm_activities, applicant_facts) -> None:
+    _, run_id = await running_run(db)
+    applicant_facts.path.write_text(applicant_facts.path.read_text() + "known_answers:\n  work_authorization: 'Yes'\n")
+
+    with pytest.raises(ApplicationError) as exc:
+        await activity_env(workflow_id=f"application-{run_id}").call(llm_activities.map_answers_activity,
+                                                                     map_answers_input(run_id))
+    assert (exc.value.type, exc.value.non_retryable) == ("internal_error", True)
+    assert "migrate_known_answers.py" in str(exc.value)
+    assert llm.calls == []
+
+
+async def test_an_invalid_facts_list_while_filling_is_an_internal_error_not_a_browser_error(
+        db, activity_env, browser_activities, registry, applicant_facts, monkeypatch) -> None:
+    _, run_id = await running_run(db)
+    env = activity_env(workflow_id=f"application-{run_id}")
+    await env.call(registry.open, str(run_id), "https://jobs.harness.example/acme/1")
+    applicant_facts.add({"id": "no_description", "kind": "k", "value": "v"})
+
+    async def fill_form(session, board, ctx, map_new_fields=None, beat=None):
+        await map_new_fields([NEW_REQUIRED])  # a field appeared: answering it reads the facts
+        return []
+
+    monkeypatch.setattr(browser_activities, "fill_form", fill_form)
+    with pytest.raises(ApplicationError) as exc:
+        await env.call(browser_activities.fill_activity, fill_input(run_id))
+    assert (exc.value.type, exc.value.non_retryable) == ("internal_error", True)
+
+
+# The planned "Maybe" matched none of the live radio's options (agent/fill.py replan_option_misses).
+MISS = "'Maybe' matches none of this field's options; choose one of them."
+MISS_ROW = {"key": "7", "label": "Open to relocation?", "type": "radio", "required": True,
+            "options": ["Yes", "No", "Not sure"], "options_total": None, "description": "", "section": "",
+            "autocomplete": None, "empty_value": None, "feedback": MISS}
+
+
+async def test_a_fill_time_re_answer_reaches_the_engine_with_its_feedback_and_the_form_as_prior(
+        db, activity_env, browser_activities, registry, llm, applicant_facts, monkeypatch) -> None:
+    """The fill closure (_map_new_fields): the option-miss row's feedback and live options reach Pass 2, the
+    form's other answers are prior context, the missed value is not, and the plan is saved as stage `fill`."""
+    from harness.llm import compose_all, composed, interpret_all, prompt_section, verify_all
+
+    _, run_id = await running_run(db)
+    env = activity_env(workflow_id=f"application-{run_id}")
+    await env.call(registry.open, str(run_id), "https://jobs.harness.example/acme/1")
+    llm.on("driver", "InterpretResponse", handler=interpret_all({"7": ["relocation"]}))
+    llm.on("prose", "ComposeResponse", handler=compose_all(lambda fid, row: composed(fid, "Yes", ["relocation"])))
+    llm.on("prose", "VerifyResponse", handler=verify_all())
+    answered: list[list[dict]] = []
+
+    async def fill_form(session, board, ctx, map_new_fields=None, beat=None):
+        ctx.mappings["7"] = {"key": "7", "label": "Open to relocation?", "field_type": "radio", "source": "answer",
+                             "value": "Maybe", "basis": ["relocation"], "generated": False}
+        answered.append(await map_new_fields([MISS_ROW]))
+        return []
+
+    monkeypatch.setattr(browser_activities, "fill_form", fill_form)
+    await env.call(browser_activities.fill_activity, fill_input(run_id))
+
+    [[m]] = answered
+    assert (m["key"], m["source"], m["value"], m["basis"], m["generated"]) == ("7", "answer", "Yes", ["relocation"], False)
+    [interpret], [compose] = llm.calls_for(schema="InterpretResponse"), llm.calls_for(schema="ComposeResponse")
+    assert prompt_section(interpret, "ALREADY ANSWERED") == [{"id": "1", "label": "First name", "value": "Jane"}]
+    [row] = prompt_section(compose, "FIELDS TO ANSWER")
+    assert (row["id"], row["feedback"], row["options"]) == ("7", MISS, ["Yes", "No", "Not sure"])
+    assert "Maybe" not in json.dumps(prompt_section(compose, "ALREADY ANSWERED"))
+    plans = [r for r in await db.fetchall("SELECT artifact_type, path, artifact_metadata FROM application_artifact")
+             if r["artifact_type"] == "answer_plan"]
+    assert [p["artifact_metadata"] for p in plans] == [{"stage": "fill",
+                                                        "review_round": fill_input(run_id).review_round}]
+
+
+async def test_a_required_field_unanswerable_while_filling_fails_the_run_needs_answer(
+        db, activity_env, browser_activities, registry, llm, applicant_facts, monkeypatch) -> None:
+    from harness.llm import compose_all, composed, interpret_all, reselect_all
+
+    _, run_id = await running_run(db)
+    env = activity_env(workflow_id=f"application-{run_id}")
+    await env.call(registry.open, str(run_id), "https://jobs.harness.example/acme/1")
+    llm.on("driver", "InterpretResponse", handler=interpret_all())
+    llm.on("prose", "ComposeResponse", handler=compose_all(lambda fid, row: composed(
+        fid, None, status="missing_fact", requested_info="Which visa type you hold, if any")))
+    llm.on("driver", "ReselectResponse", handler=reselect_all({}))
+
+    async def fill_form(session, board, ctx, map_new_fields=None, beat=None):
+        await map_new_fields([NEW_REQUIRED])
+        raise AssertionError("an unanswerable required field was handed back to fill")
+
+    monkeypatch.setattr(browser_activities, "fill_form", fill_form)
+    with pytest.raises(ApplicationError) as exc:
+        await env.call(browser_activities.fill_activity, fill_input(run_id))
+    assert (exc.value.type, exc.value.non_retryable) == ("needs_answer", True)
+    assert "Visa type (missing_fact)" in str(exc.value)
+    [plan_row] = [r for r in await db.fetchall("SELECT artifact_type, path, artifact_metadata FROM application_artifact")
+                  if r["artifact_type"] == "answer_plan"]
+    assert plan_row["artifact_metadata"]["stage"] == "fill"
+    plan = json.loads(Path(plan_row["path"]).read_text())
+    assert [(u["key"], u["status"], u["requested_info"]) for u in plan["unresolved"]] == [
+        ("9", "missing_fact", "Which visa type you hold, if any")]
 
 
 # ── fenced terminal writes and run slots ──────────────────────────────────────

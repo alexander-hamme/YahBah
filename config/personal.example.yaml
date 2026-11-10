@@ -10,62 +10,218 @@ prompts:
     - Close with enthusiasm and a call to action
     - Output the cover letter text directly, no JSON
 
-# Stored answers. Screening questions (work authorization and sponsorship, citizenship, clearance,
-# years per skill, start date, salary, EEO, age, background checks, ...) are answered ONLY from
-# typed keys like the ones below: a question with no matching key fails the run as needs_answer,
-# naming the question, instead of being guessed. Edits apply to the next run without a restart.
-known_answers:
-  # Compensation
-  salary_expectation: "Open to discussion"
+# The applicant's stored facts: everything YahBah may state about you on an application form,
+# besides the profile below. Application questions are answered only from facts (and the profile);
+# a required question no fact answers fails the run as needs_answer, and the run's page shows a
+# paste-ready fact skeleton for it. Edits apply to the next run without a restart.
+#
+# Each fact:
+#   id           unique snake_case name; answers cite it as their basis
+#   kind         a free snake_case label (work_authorization, relocation_willingness, ...). It helps
+#                the models find the fact; nothing in code depends on it.
+#   data_type    text (default) | boolean | number | date (YYYY-MM-DD) | relative_availability | list
+#   value        the fact itself
+#   description  required: what the fact says, in one sentence
+#   aliases, examples   optional: other names for it, example questions it answers
+#   guidance     optional: how to read and use it (what it does NOT imply belongs here)
+#   jurisdiction optional: the country it is about (ISO code like US, DE, GB, or EU). A fact about one
+#                country never answers a question about another.
+#   sensitivity  normal (default) | legal (authorization, citizenship, declarations) | eeo
+# A fact still holding a placeholder (empty, <...>, TODO/TBD, "Your ...", 00000, a 555 phone number,
+# an example.com address) is ignored, as if it were missing.
+facts:
+  - id: availability_notice
+    kind: start_availability
+    data_type: relative_availability
+    value: "Within 2 weeks of accepting an offer"
+    aliases:
+      - start date
+      - earliest possible start
+      - available from
+      - when could you join
+    description: >
+      The candidate can generally begin employment
+      within two weeks after accepting an offer.
+    guidance: >
+      Answer availability questions naturally.
+      Do not invent a specific calendar date.
+      Do not assume this is the contractual notice period.
+    source: applicant_verified
+    sensitivity: normal
 
-  start_date: "Within 2 weeks of an offer"
+  - id: relocation
+    kind: relocation_willingness
+    data_type: boolean
+    value: true
+    aliases:
+      - willing to relocate
+      - open to relocating
+      - would you move
+    description: >
+      The candidate is willing to relocate
+      for suitable employment.
+    guidance: >
+      Willingness to relocate does not establish
+      current residence in the destination country.
+    source: applicant_verified
+    sensitivity: normal
 
-  # Location & contact
-  currently_located_near_job: "Yes"
-  willing_to_relocate: "Yes, willing to relocate"
-  country_phone_code: "+1"
-  which_location_are_you_interested_in: "Remote"
-  country_of_residence: "United States"
-  state_of_residence: "Your State"
-  city_of_residence: "Your City, Your State, United States"
-  zip_code_of_residence: "00000"
-  phone_number: "555-555-5555"
+  - id: salary_expectation
+    kind: salary_expectation
+    value: "Open to discussion"
+    description: The applicant's salary expectation
 
-  # Work authorization. Unsuffixed keys describe country_of_residence (default: United States).
-  # Other jurisdictions get their own suffixed keys (a country name or code, or "eu"), e.g.
-  # work_authorization_germany / sponsorship_required_eu; a fact for one never answers another.
-  work_status: "US Citizen"
-  work_authorization: "Yes"
-  sponsorship_required: "No"
-  # work_authorization_uk: "No"
-  # sponsorship_required_uk: "Yes"
+  - id: work_location_preference
+    kind: work_location_preference
+    value: "Remote"
+    description: Where the applicant prefers to work (remote, hybrid, on-site, or a location)
 
-  # Other screening facts: uncomment and fill in the ones you want answered automatically.
-  # security_clearance: "None"
-  # start_date: "Two weeks after an offer"
-  # at_least_18: "Yes"
-  # years_python: "5"            # years_<skill>, one per skill; total years: profile.years_of_experience
-  # background_check: "Yes"      # willing to undergo one
-  # criminal_record: "No"
+  - id: residence
+    kind: residence
+    value: "Your City, Your State, United States"
+    jurisdiction: US
+    description: Where the applicant currently lives
 
-  # Job discovery
-  how_i_found_this_job: "<COMPANY (replace with company name)>'s Job Board"
+  - id: postal_code
+    kind: postal_code
+    value: "00000"
+    jurisdiction: US
+    description: The postal code where the applicant lives
 
-  # Voluntary self-identification (EEO)
-  gender_identity: "Decline to self-identify"
-  sexual_orientation: "Decline to self-identify"
-  transgender_identity: "Decline to self-identify"
-  preferred_pronouns: "Decline to self-identify"
-  disability_status: "Decline to self-identify"
-  veteran_status: "Decline to self-identify"
-  race_ethnicity: "Decline to self-identify"
-  hispanic_or_latino: "Decline to self-identify"
+  - id: phone_country_code
+    kind: phone_country_code
+    value: "+1"
+    description: The country calling code of the applicant's phone number
 
-  # Consent & misc
-  agree_to_allow_info_use: "I agree"
-  subject_to_non_compete_or_non_solicitation: "No"
-  have_you_worked_for_company_before: "No"
-  consent_checkbox: "I agree"
+  # Work authorization: one fact per country, each with its jurisdiction.
+  - id: citizenship_us
+    kind: citizenship
+    value: "US Citizen"
+    jurisdiction: US
+    sensitivity: legal
+    description: The applicant's citizenship
+
+  - id: work_authorization_us
+    kind: work_authorization
+    data_type: boolean
+    value: true
+    jurisdiction: US
+    sensitivity: legal
+    description: Whether the applicant is currently authorized to work in the United States
+    guidance: current authorization in the US only
+
+  - id: sponsorship_required_us
+    kind: sponsorship
+    data_type: boolean
+    value: false
+    jurisdiction: US
+    sensitivity: legal
+    description: Whether the applicant needs visa sponsorship to work in the United States
+    guidance: now or in the future
+
+  # Another country gets its own facts, e.g.:
+  # - id: work_authorization_de
+  #   kind: work_authorization
+  #   data_type: boolean
+  #   value: false
+  #   jurisdiction: DE
+  #   sensitivity: legal
+  #   description: Whether the applicant is currently authorized to work in Germany
+  #   guidance: current authorization in Germany only
+
+  - id: referral_source
+    kind: referral_source
+    value: "Job board"
+    description: How the applicant usually hears about job openings
+
+  # Voluntary self-identification (EEO): answered only from these facts, never inferred.
+  - id: eeo_gender
+    kind: eeo_gender
+    value: "Decline to self-identify"
+    sensitivity: eeo
+    description: Self-identification of gender
+    guidance: pick the option meaning decline / prefer not to say
+
+  - id: eeo_sexual_orientation
+    kind: eeo_sexual_orientation
+    value: "Decline to self-identify"
+    sensitivity: eeo
+    description: Self-identification of sexual orientation
+    guidance: pick the option meaning decline / prefer not to say
+
+  - id: eeo_transgender
+    kind: eeo_transgender
+    value: "Decline to self-identify"
+    sensitivity: eeo
+    description: Self-identification of transgender identity
+    guidance: pick the option meaning decline / prefer not to say
+
+  - id: eeo_pronouns
+    kind: eeo_pronouns
+    value: "Decline to self-identify"
+    sensitivity: eeo
+    description: Self-identification of pronouns
+    guidance: pick the option meaning decline / prefer not to say
+
+  - id: eeo_disability
+    kind: eeo_disability
+    value: "Decline to self-identify"
+    sensitivity: eeo
+    description: Self-identification of disability status
+    guidance: pick the option meaning decline / prefer not to say
+
+  - id: eeo_veteran
+    kind: eeo_veteran
+    value: "Decline to self-identify"
+    sensitivity: eeo
+    description: Self-identification of veteran status
+    guidance: pick the option meaning decline / prefer not to say
+
+  - id: eeo_race
+    kind: eeo_race
+    value: "Decline to self-identify"
+    sensitivity: eeo
+    description: Self-identification of race / ethnicity
+    guidance: pick the option meaning decline / prefer not to say
+
+  - id: eeo_hispanic_latino
+    kind: eeo_hispanic_latino
+    value: "Decline to self-identify"
+    sensitivity: eeo
+    description: Self-identification as Hispanic or Latino
+    guidance: pick the option meaning decline / prefer not to say
+
+  # Consent and declarations
+  - id: consent_data_processing
+    kind: consent_data_processing
+    data_type: boolean
+    value: true
+    description: The applicant consents to the processing of their application data
+    guidance: consent to processing application data only; not a legal attestation
+
+  - id: non_compete
+    kind: non_compete
+    data_type: boolean
+    value: false
+    sensitivity: legal
+    description: Whether the applicant is bound by a non-compete or non-solicitation agreement
+
+  - id: employment_history_complete
+    kind: employment_history
+    data_type: boolean
+    value: true
+    description: The profile's work_experience lists every employer the applicant has worked for
+    guidance: with work_experience, answers 'have you worked for X before'
+
+  # The profile's skills and work history list what you have; they never say what you lack. A question
+  # about a technology none of your facts mention stops the run as needs_answer; store your experience
+  # with it (or that you have none) once, and later applications answer it honestly.
+  - id: kubernetes_experience
+    kind: technology_experience
+    value: "No professional Kubernetes experience; I deploy Docker services on AWS without an orchestrator"
+    aliases:
+      - k8s
+    description: The applicant's experience with Kubernetes
 
 profile:
   full_name: "Jane Doe"

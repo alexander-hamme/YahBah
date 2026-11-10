@@ -26,8 +26,8 @@ const VISA = makeRow({
   label: "Will you now or in the future require sponsorship?",
   required: true,
   answer: "No",
-  source: "profile.work_authorization",
-  basis: ["profile.work_authorization"],
+  source: "answer",
+  basis: ["sponsorship_required_us"],
 });
 
 let queueItems = [soon, later];

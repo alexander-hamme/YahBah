@@ -38,9 +38,6 @@ class Settings(BaseSettings):
     submit_max_attempts: int = 4
     browser_headless: bool = True
 
-    # Safety
-    min_field_confidence: float = 0.7
-
     # Idempotency — block re-application to the same job within this window
     duplicate_window_days: int = 31
 
@@ -81,7 +78,7 @@ class Settings(BaseSettings):
     # Artifacts (local filesystem)
     artifacts_dir: str = "./artifacts"
 
-    # Prompts / known answers config
+    # Prompts (prompts.yaml) and personal data: profile, facts, cover-letter prompt (personal.yaml)
     prompts_path: str = "config/prompts.yaml"
     personal_path: str = "config/personal.yaml"
 
@@ -262,9 +259,9 @@ _prompts_cache: dict = {}
 
 
 def load_prompts_config() -> dict:
-    """prompts.yaml merged with personal.yaml (prompts such as cover_letter, known_answers, profile).
+    """prompts.yaml merged with personal.yaml (prompts such as cover_letter, facts, profile).
 
-    Re-read whenever either file changes (mtime or size), so an edited stored answer applies to the
+    Re-read whenever either file changes (mtime or size), so an edited fact applies to the
     next call without a worker restart. prompts.yaml is safe to publish; personal.yaml contains
     personal info and is gitignored.
     """
@@ -289,9 +286,11 @@ def _read_prompts_config(prompts_path: Path, personal_path: Path) -> dict:
     if "prompts" in personal:
         config.setdefault("prompts", {}).update(personal["prompts"])
 
-    # Merge known_answers
-    if "known_answers" in personal:
-        config["known_answers"] = personal["known_answers"]
+    # The old flat known_answers: map is no longer read: load_facts refuses to run until it is migrated
+    config["legacy_known_answers"] = "known_answers" in personal
+
+    # The applicant's typed facts (validated by yahbah.llm.facts)
+    config["facts"] = personal.get("facts") or []
 
     # Merge profile
     if "profile" in personal:

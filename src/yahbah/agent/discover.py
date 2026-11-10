@@ -638,7 +638,8 @@ def _clean_schema_fields(fields: list[dict]) -> list[dict]:
     return [
         {"key": f["key"], "label": f["label"], "type": f["type"], "required": bool(f["required"]),
          "options": f.get("options") or [], "options_total": f.get("options_total"),
-         "autocomplete": f.get("autocomplete")}
+         "autocomplete": f.get("autocomplete"), "description": f.get("description") or "",
+         "section": f.get("section") or ""}
         for f in fields
     ]
 

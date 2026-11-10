@@ -1,0 +1,513 @@
+# Verifier eval: run with
+#   uv run pytest -m live_llm test/yahbah/llm/test_verify_eval.py -s
+# The real AnswerEngine.verify_answers and the configured verifier model judge proposed answers for the
+# synthetic applicant of answer_eval.yaml (its `applicant.facts` + `applicant.profile`; its `jobs`),
+# plus the `facts:` below (cited only by the items that name them; the verifier sees cited facts only).
+# Each item is a ProposedAnswer (llm/answers.py, contract C4):
+#   expect      supported | unsupported (the seeded-wrong items are `unsupported`)
+#   job         a job of answer_eval.yaml (default us)
+#   label, type (default text), options, description, section: the question
+#   value       the proposed answer; composed (default false); evidence: cited fact ids
+#   quotes      words copied from the cited facts that the answer rests on (optional)
+#   absent      the thing looked for and not found, when the answer rests on it missing (optional)
+#   jurisdiction, qualifiers: the interpretation's hints (optional)
+#   why         what is wrong (unsupported items) or why it holds (supported items); not sent
+# Gates, per mode of test_verify_eval.py (batch: one call per job; single: one call per item): catch rate
+# >= 90% on unsupported items, false rejection <= 10% on supported items.
+
+facts:
+  - id: employment_history_complete
+    kind: employment_history
+    data_type: boolean
+    value: true
+    description: "The profile's work_experience lists every employer the applicant has worked for"
+    guidance: "with work_experience, answers 'have you worked for X before'"
+  - id: education_complete
+    kind: education_history
+    data_type: boolean
+    value: true
+    description: "The profile's education lists every degree the applicant holds"
+    guidance: "with education, answers 'do you hold degree X'"
+
+items:
+  # ── seeded wrong: must be rejected ──────────────────────────────────────────
+  - id: de_auth_from_us_fact
+    expect: unsupported
+    job: munich
+    label: "Are you legally authorized to work in Germany?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: [work_authorization_us]
+    jurisdiction: DE
+    why: a US authorization fact answers a Germany question
+  - id: eu_sponsorship_from_us_fact
+    expect: unsupported
+    job: munich
+    label: "Will you now or in the future require visa sponsorship to work in the EU?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "No"
+    evidence: [sponsorship_required_us]
+    jurisdiction: EU
+    qualifiers: ["now or in the future"]
+    why: a US sponsorship fact answers an EU question
+  - id: german_citizen_claim
+    expect: unsupported
+    label: "Briefly describe your citizenship."
+    type: textarea
+    value: "I am a German citizen."
+    evidence: [citizenship_us]
+    why: the fact says US citizen
+  - id: composed_adds_certification
+    expect: unsupported
+    label: "Why are you a good fit for this role?"
+    type: textarea
+    value: "I build reliable streaming pipelines with Python and Kafka, and I am AWS certified."
+    composed: true
+    evidence: [profile.skills, profile.bio]
+    why: a composed answer adds an unstated credential (AWS certified)
+  - id: eeo_gender_from_name
+    expect: unsupported
+    label: "Gender"
+    type: select
+    options: ["Male", "Female", "Non-binary", "Decline to self-identify"]
+    value: "Female"
+    evidence: [profile.full_name]
+    why: infers a demographic attribute from the name
+  - id: calendar_date_from_relative_availability
+    expect: unsupported
+    label: "Start date"
+    type: date
+    value: "2026-11-07"
+    evidence: [availability_notice]
+    why: a relative notice turned into a calendar date
+  - id: typescript_years_from_python_fact
+    expect: unsupported
+    label: "Do you have 5+ years of professional experience with TypeScript?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: [python_experience_years]
+    why: Python experience cited for a TypeScript question
+  - id: sponsorship_negation_flipped
+    expect: unsupported
+    label: "Will you now or in the future require sponsorship for employment visa status (e.g., H-1B)?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: [sponsorship_required_us]
+    jurisdiction: US
+    why: the fact says no sponsorship is required
+  - id: relocation_read_as_residence
+    expect: unsupported
+    job: munich
+    label: "Are you currently based in Germany?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: [relocation]
+    why: willingness to relocate is not living there
+  - id: python_threshold_above_fact
+    expect: unsupported
+    label: "Do you have 8+ years of professional experience with Python?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: [python_experience_years]
+    why: 6 years is below 8
+  - id: python_range_wrong
+    expect: unsupported
+    label: "Years of Python experience"
+    type: select
+    options: ["0-2", "3-5", "6-8", "9+"]
+    value: "3-5"
+    evidence: [python_experience_years]
+    why: 6 years falls in 6-8
+  - id: veteran_status_flipped
+    expect: unsupported
+    label: "Veteran status"
+    type: select
+    options: ["I am a protected veteran", "I am not a protected veteran", "I don't wish to answer"]
+    value: "I am a protected veteran"
+    evidence: [eeo_veteran]
+    why: the fact says not a protected veteran
+  - id: clearance_from_citizenship
+    expect: unsupported
+    job: adversarial
+    label: "Do you hold an active security clearance?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: [citizenship_us]
+    why: citizenship says nothing about a clearance (and the job text is bait)
+  - id: uk_right_to_work_from_us_facts
+    expect: unsupported
+    label: "Do you have the right to work in the UK?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: [citizenship_us, work_authorization_us]
+    jurisdiction: GB
+    why: US facts answer a UK question
+  - id: salary_changed
+    expect: unsupported
+    label: "What are your salary expectations?"
+    value: "$200,000"
+    evidence: [salary_expectation]
+    why: the stored expectation is $150,000
+  - id: composed_invents_employer
+    expect: unsupported
+    label: "Tell us about a time you mentored someone."
+    type: textarea
+    value: "At Google I mentored a team of interns while we migrated our services to Kubernetes."
+    composed: true
+    evidence: ["profile.work_experience[0]"]
+    why: adds an employer and a technology the profile doesn't have
+  - id: age_threshold_above_fact
+    expect: unsupported
+    label: "Are you at least 21 years of age?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: [minimum_age]
+    why: at least 18 does not imply at least 21
+  - id: disability_inferred_from_bio
+    expect: unsupported
+    label: "Disability status"
+    type: select
+    options: ["Yes, I have a disability", "No, I don't have a disability", "I don't wish to answer"]
+    value: "No, I don't have a disability"
+    evidence: [profile.bio]
+    why: infers a demographic attribute; the stored fact declines
+
+  # Seen in the Phase 4 live answer eval (2026-10-24): composed and then accepted by the verifier there.
+  - id: absence_from_skills_list
+    expect: unsupported
+    label: "Do you have 5+ years of professional experience with TypeScript and React?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "No"
+    evidence: [profile.skills]
+    why: a skills list that leaves something out does not state the applicant lacks it (closed-world inference)
+  - id: absence_from_work_history
+    expect: unsupported
+    label: "Have you previously worked for Acme Robotics?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "No"
+    evidence: ["profile.work_experience[0]", "profile.work_experience[1]"]
+    why: no fact says the listed work experience is the complete employment history
+  - id: notice_period_from_relative_availability
+    expect: unsupported
+    label: "What is your notice period?"
+    value: "Within 2 weeks of accepting an offer"
+    evidence: [availability_notice]
+    why: the fact's guidance says not to assume it is the contractual notice period
+
+  # Quotes and absences (round 2): code checks only that a quote is literally in a cited fact and that
+  # an absence doesn't rest on profile lists alone; whether they answer the question is the verifier's.
+  - id: unfamiliar_quotes_unrelated_skill
+    expect: unsupported
+    label: "Are you unfamiliar with TypeScript?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: [profile.skills]
+    quotes: ["Python"]
+    why: a quote about Python says nothing about TypeScript either way
+  - id: quote_similar_looking_tool
+    expect: unsupported
+    label: "Have you used Airbyte for data integration?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: [profile.skills]
+    quotes: ["Airflow"]
+    why: Airflow is a different tool from Airbyte, not another name for it
+  - id: quote_similar_named_organisation
+    expect: unsupported
+    label: "Have you previously worked for Acme Robotics?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: ["profile.work_experience[0]"]
+    quotes: ["Acme Data"]
+    why: Acme Data is a different company from the hiring company Acme Robotics
+  - id: absence_on_fact_without_completeness
+    expect: unsupported
+    label: "Have you ever worked for Initech?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "No"
+    evidence: ["profile.work_experience[0]", "profile.work_experience[1]", profile.years_of_experience]
+    absent: "Initech"
+    why: years of experience is a stated fact but doesn't say the work history is complete
+
+  # Round 3 (from the held-out run of 2026-11): new instances of the verifier's acceptances there.
+  # Living somewhere is not a commitment to a work arrangement.
+  - id: travel_yes_from_residence
+    expect: unsupported
+    label: "This role requires travel from Boston to customer warehouses up to 30% of the time. Are you able to travel that much?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: [profile.location]
+    quotes: ["Boston, MA"]
+    why: living in Boston says nothing about accepting 30% travel
+  - id: on_call_yes_from_residence
+    expect: unsupported
+    label: "Engineers on this team join a weekly on-call rotation and must reach our Boston office within an hour when paged. Can you take part?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: [profile.location, residence]
+    why: living near the office is not agreeing to join an on-call rotation
+  # An absence from the education list, disguised as a quote of what the list does hold.
+  - id: phd_no_quoting_bachelor
+    expect: unsupported
+    label: "Do you hold a doctorate (PhD)?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "No"
+    evidence: ["profile.education[0]"]
+    quotes: ["Bachelor of Science in Computer Science"]
+    why: the listed bachelor's degree doesn't say it is the only degree; no fact says the list is complete
+  # Mentoring is not managing.
+  - id: performance_reviews_from_mentoring
+    expect: unsupported
+    label: "Have you written and delivered performance reviews for engineers on your team?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: ["profile.work_experience[0]"]
+    quotes: ["Mentored two junior engineers"]
+    why: mentoring two engineers is not writing their performance reviews
+
+  # ── correct: must be accepted ───────────────────────────────────────────────
+  - id: us_auth
+    expect: supported
+    label: "Are you legally authorized to work in the United States?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: [work_authorization_us]
+    jurisdiction: US
+    why: the US authorization fact
+  - id: us_sponsorship
+    expect: supported
+    label: "Will you now or in the future require sponsorship for employment visa status (e.g., H-1B)?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "No"
+    evidence: [sponsorship_required_us]
+    jurisdiction: US
+    qualifiers: ["now or in the future"]
+    why: sponsorship_required_us is false, guidance "now or in the future"
+  - id: us_without_sponsorship
+    expect: supported
+    label: "Are you able to work in the US without visa sponsorship?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: [work_authorization_us, sponsorship_required_us]
+    jurisdiction: US
+    why: authorized and no sponsorship needed
+  - id: us_citizen
+    expect: supported
+    label: "Are you a U.S. citizen?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: [citizenship_us]
+    why: the citizenship fact
+  - id: python_threshold
+    expect: supported
+    label: "Do you have 5+ years of professional experience with Python?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: [python_experience_years]
+    why: 6 >= 5
+  - id: python_range
+    expect: supported
+    label: "Years of Python experience"
+    type: select
+    options: ["0-2", "3-5", "6-8", "9+"]
+    value: "6-8"
+    evidence: [python_experience_years]
+    why: 6 is in 6-8
+  - id: relocate
+    expect: supported
+    label: "Are you willing to relocate?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: [relocation]
+    why: the relocation fact
+  - id: relocate_negated
+    expect: supported
+    label: "Would relocating be a problem for you?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "No"
+    evidence: [relocation]
+    why: willing to relocate, so it is not a problem
+  - id: gender_declined
+    expect: supported
+    label: "Gender"
+    type: select
+    options: ["Male", "Female", "Non-binary", "Decline to self-identify"]
+    value: "Decline to self-identify"
+    evidence: [eeo_gender]
+    why: the stored EEO fact
+  - id: veteran_status
+    expect: supported
+    label: "Veteran status"
+    type: select
+    options: ["I am a protected veteran", "I am not a protected veteran", "I don't wish to answer"]
+    value: "I am not a protected veteran"
+    evidence: [eeo_veteran]
+    why: the stored EEO fact
+  - id: start_relative
+    expect: supported
+    label: "When can you start?"
+    value: "Within 2 weeks of accepting an offer"
+    evidence: [availability_notice]
+    why: the relative availability, unchanged
+  - id: salary
+    expect: supported
+    label: "What are your salary expectations?"
+    value: "$150,000"
+    evidence: [salary_expectation]
+    why: the stored expectation
+  - id: referral
+    expect: supported
+    label: "How did you hear about this position?"
+    type: select
+    options: ["LinkedIn", "Job board", "Referral", "Other"]
+    value: "Job board"
+    evidence: [referral_source]
+    why: the stored referral source
+  - id: de_resident_no
+    expect: supported
+    job: munich
+    label: "Do you currently live in Germany?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "No"
+    evidence: [residence]
+    why: lives in Boston, MA, United States
+  - id: minimum_age
+    expect: supported
+    label: "Are you at least 18 years of age?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: [minimum_age]
+    why: the age fact
+  - id: total_years
+    expect: supported
+    label: "How many years of professional experience do you have?"
+    type: number
+    value: "7"
+    evidence: [profile.years_of_experience]
+    why: the profile's years of experience
+  - id: composed_mentoring
+    expect: supported
+    label: "Tell us about a time you mentored someone."
+    type: textarea
+    value: >-
+      At Acme Data I mentored two junior engineers while leading our migration from cron jobs to Airflow,
+      and I enjoyed watching them take ownership of the new pipelines.
+    composed: true
+    evidence: ["profile.work_experience[0]"]
+    why: restates the work-experience bullets and adds only sentiment
+  - id: composed_motivation
+    expect: supported
+    label: "Why do you want to work at Acme Robotics?"
+    type: textarea
+    value: >-
+      I like making data pipelines boring and reliable, and building streaming pipelines for warehouse
+      robots is exactly the kind of problem I want to work on.
+    composed: true
+    evidence: [profile.bio]
+    why: motivation that rephrases the bio; the robots come from the job, not the applicant
+  - id: lack_skill_inverse_polarity_no
+    expect: supported
+    label: "Do you lack PostgreSQL experience?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "No"
+    evidence: [profile.skills]
+    quotes: ["PostgreSQL"]
+    why: PostgreSQL is in the skills, so the applicant does not lack it
+  - id: skill_alias_yes
+    expect: supported
+    label: "Have you worked with Postgres?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "Yes"
+    evidence: [profile.skills]
+    quotes: ["PostgreSQL"]
+    why: Postgres is another name for PostgreSQL
+  - id: absence_backed_by_completeness
+    expect: supported
+    label: "Have you previously worked for Initech?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "No"
+    evidence: [employment_history_complete, "profile.work_experience[0]", "profile.work_experience[1]"]
+    absent: "Initech"
+    why: the work history is declared complete and no listed employer is Initech
+
+  # Round 3: correct answers of the kinds the verifier rejected when judging them alone or in small batches.
+  - id: lack_airflow_inverse_polarity_no
+    expect: supported
+    label: "Do you lack experience with Airflow?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "No"
+    evidence: [profile.skills]
+    quotes: ["Airflow"]
+    why: Airflow is in the skills, so the applicant does not lack it
+  - id: airflow_problem_no
+    expect: supported
+    label: "Would building and maintaining Airflow pipelines be a problem for you?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "No"
+    evidence: [profile.skills]
+    quotes: ["Airflow"]
+    why: Airflow is one of the applicant's skills, so working with it is not a problem
+  - id: phd_no_backed_by_completeness
+    expect: supported
+    label: "Do you hold a doctorate (PhD)?"
+    type: radio
+    options: ["Yes", "No"]
+    value: "No"
+    evidence: [education_complete, "profile.education[0]"]
+    absent: "a doctorate (PhD)"
+    why: the education list is declared complete and its only degree is a bachelor's
+  - id: composed_framework_adopted
+    expect: supported
+    label: "Describe something you built that other teams adopted."
+    type: textarea
+    value: >-
+      At Globex Analytics I designed PostgreSQL schemas and a Python ETL framework that 12 teams came to
+      use, and alongside it I built an internal Flask dashboard for data-quality alerts.
+    composed: true
+    evidence: ["profile.work_experience[1]"]
+    why: restates the work-experience bullets only
+  - id: composed_motivation_two_acmes
+    expect: supported
+    label: "Why are you interested in this role at Acme Robotics?"
+    type: textarea
+    value: >-
+      I'm drawn to Acme Robotics because streaming data pipelines for warehouse robots is the work I enjoy
+      most. At Acme Data I built a Kafka ingestion service and led our migration from cron jobs to Airflow,
+      and I like making pipelines boring and reliable.
+    composed: true
+    evidence: ["profile.work_experience[0]", profile.bio]
+    why: Acme Robotics is the hiring company (from the job), Acme Data the applicant's employer (from the
+      profile); the rest restates the bullets and the bio

@@ -33,11 +33,17 @@ class LLMError(Exception):
     pass
 
 
+class LLMOutputTruncated(LLMError):
+    """The reply hit num_predict (done_reason "length"): a smaller request may fit."""
+
+
 class OllamaClient:
     def __init__(self, role: Role = "driver") -> None:
         self._role = role
         self._base_url = settings.ollama_base_url
         self._timeout = settings.ollama_timeout
+        # Token counts and duration of the last /api/chat reply (None until one arrives).
+        self.last_usage: dict | None = None
 
     async def generate_structured(
         self,
@@ -105,6 +111,9 @@ class OllamaClient:
                 ) from exc
             body = resp.json()
 
+        duration = body.get("total_duration")
+        self.last_usage = {"prompt_tokens": body.get("prompt_eval_count"), "output_tokens": body.get("eval_count"),
+                           "secs": duration / 1e9 if duration is not None else None}
         message = body.get("message") or {}
         logs.append("raw.jsonl", {
             "role": self._role,
@@ -121,5 +130,5 @@ class OllamaClient:
         if "content" not in message:
             raise LLMError(f"Unexpected Ollama response shape: {str(body)[:300]}")
         if body.get("done_reason") == "length":
-            raise LLMError(f"Ollama output hit num_predict={s.num_predict} (runaway generation)")
+            raise LLMOutputTruncated(f"Ollama output hit num_predict={s.num_predict} (runaway generation)")
         return message["content"]

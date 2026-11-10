@@ -32,6 +32,8 @@ A run that may have been submitted but could not be verified ends `SUBMIT_UNCERT
 
 Design rule: **code first, models as fallbacks**. Each browser stage tries deterministic code, then one structured model call, then an agent loop, and verifies the result in code at each tier. Agents are never given a submit tool; submission is gated code (`src/yahbah/agent/submit.py`). Board-specific logic lives in `src/yahbah/agent/boards.py`.
 
+Answers rest on **facts**. Every application question is answered by a two-pass engine (`src/yahbah/llm/answers.py`): one model call interprets the form and picks the facts that might answer each question, a second writes the answer from those facts and cites them, then code checks (option membership, formats, dates, numbers, citations) and an independent verifier call reads each answer against its cited facts. A required question the facts can't support ends the run `FAILED` / `needs_answer`: the run's page lists what's missing with a paste-ready fact skeleton, and you add it to `config/personal.yaml` and retry. Optional questions are left blank. Your facts live in the typed `facts:` list of `config/personal.yaml` (see Setup, step 2).
+
 The worker process also runs two background Gmail pollers (application status emails, job-alert emails). Each application uses a unique per-run email alias (`you+job-xxxx@gmail.com`, `src/yahbah/credentials.py`) so replies can be matched to it.
 
 For module-level detail, start at [docs/wiki/index.md](docs/wiki/index.md).
@@ -67,11 +69,17 @@ browser-use drives Chrome over CDP and does not use the `playwright` Python pack
 cp .env.example .env
 ```
 
-Edit `.env`. Every setting, its default, and the env var it maps to (the upper-cased field name) is defined in [`src/yahbah/config.py`](src/yahbah/config.py), which is the authority. Notable ones: `DATABASE_URL`, `TEMPORAL_HOST`, `OLLAMA_BASE_URL`, `ARTIFACTS_DIR`, `MAX_CONCURRENT_RUNS`, `BROWSER_HEADLESS`, `MIN_FIELD_CONFIDENCE`, `DUPLICATE_WINDOW_DAYS`, Gmail settings.
+Edit `.env`. Every setting, its default, and the env var it maps to (the upper-cased field name) is defined in [`src/yahbah/config.py`](src/yahbah/config.py), which is the authority. Notable ones: `DATABASE_URL`, `TEMPORAL_HOST`, `OLLAMA_BASE_URL`, `ARTIFACTS_DIR`, `MAX_CONCURRENT_RUNS`, `BROWSER_HEADLESS`, `DUPLICATE_WINDOW_DAYS`, Gmail settings.
 
-Ollama models are chosen by two roles, not by one model name: `MODEL_DRIVER` / `CTX_DRIVER` (agent loops, DOM/HTML work, JSON mapping) and `MODEL_PROSE_VISION` / `CTX_PROSE_VISION` (cover letters, free-text answers, screenshots). Defaults are in `config.py`.
+Ollama models are chosen by two roles, not by one model name: `MODEL_DRIVER` / `CTX_DRIVER` (agent loops, DOM/HTML work, interpreting and verifying answers) and `MODEL_PROSE_VISION` / `CTX_PROSE_VISION` (composing answers, cover letters, screenshots). Defaults are in `config.py`.
 
-Personal data goes in `config/personal.yaml` (gitignored; copy `config/personal.example.yaml`). It holds your applicant `profile`, `known_answers`, and the cover-letter prompt, and is merged with `config/prompts.yaml` at load time. Never commit it or put secrets in docs.
+Personal data goes in `config/personal.yaml` (gitignored; copy `config/personal.example.yaml`). It holds your applicant `profile`, your typed `facts:` (everything YahBah may state about you on a form besides the profile: work authorization per country, relocation, availability, salary expectation, EEO choices, consent, and so on; each fact has an `id`, a `value`, a required `description` and optional `guidance` and `jurisdiction`, documented in the example file), and the cover-letter prompt, and is merged with `config/prompts.yaml` at load time. Edits to `facts:` apply to the next run without a restart. Never commit it or put secrets in docs.
+
+**Upgrading from the old flat `known_answers:` map?** It is no longer read: until you migrate it, every run ends at MAP_ANSWERS as `internal_error` with these instructions. Once, from the repo root:
+
+1. `uv run python scripts/migrate_known_answers.py` writes a draft `config/personal.facts-draft.yaml` (gitignored; `personal.yaml` is never modified, and no values are printed).
+2. Review the draft (kinds, jurisdictions and descriptions are guessed from the old key names), move its `facts:` list into `config/personal.yaml` and delete `known_answers:` there.
+3. `uv run alembic upgrade head` (see step 4 below; it applies migration 0020, which drops the unused `answer_cache` table).
 
 Runtime settings (run mode, review window, headed fallback, Gmail polling) live in `config/settings.yaml`, which is gitignored and machine-local. Copy the template once:
 
@@ -102,7 +110,7 @@ Point `DATABASE_URL` in `.env` at it (`postgresql+psycopg://yahbah_app:change-me
 uv run alembic upgrade head
 ```
 
-The app and alembic use the same role: `alembic/env.py` reads `settings.database_url`. The role owns the database, and therefore the `public` schema (Postgres 15+), plus every table that migrations create, so no GRANTs are needed.
+The app and alembic use the same role: `alembic/env.py` reads `settings.database_url`. The role owns the database, and therefore the `public` schema (Postgres 15+), plus every table that migrations create, so no GRANTs are needed. Re-run `uv run alembic upgrade head` after pulling new migrations; the answer-engine change added `0020`, which drops the unused `answer_cache` table.
 
 ### 5. Seed your applicant profile
 
@@ -148,7 +156,7 @@ There is no separate poller process: the status and job-alert pollers run inside
 uv run python scripts/run_pipeline.py <url>
 ```
 
-Runs discover → map → answers → fill without Temporal or a run record. It does not submit unless `--submit` is passed. `--headed-fallback` enables the headed fallback for a page that blocks headless. Output goes to `artifacts/debug-<timestamp>/`. See `--help` for the other flags.
+Runs discover → map → answers → fill without Temporal or a run record. It does not submit unless `--submit` is passed. `--headed-fallback` enables the headed fallback for a page that blocks headless. Output goes to `artifacts/debug-<timestamp>/`, including `answer_plan.json` (how each answer was derived and which fact ids back it; no fact values) and `answer_plan_fill_<n>.json` for answers made while filling. Blocking questions are printed with their reason. See `--help` for the other flags.
 
 ## Tests
 
@@ -172,7 +180,7 @@ Tests live in `test/`; the shared harness is `test/harness/` and the safety-inva
 - `live_llm`: the real local models; skipped unless selected with `-m live_llm` or `YAHBAH_LIVE_LLM=1`.
 - `slow` (waits for a real timeout) and `e2e` (whole runs) are set by hand. A bare `pytest` leaves out `e2e`; `--complete`, a path or any `-m` expression runs it.
 
-Tests cannot reach the real database, the network beyond localhost, or Ollama (outside `live_llm`). `scripts/save_fixture.py <url> <name>` saves a live page as a new fixture. `scripts/manual/` holds hand-run live checks (Gmail, metadata extraction), not part of pytest. Details: [docs/wiki/development.md](docs/wiki/development.md).
+Tests cannot reach the real database, the network beyond localhost, or Ollama (outside `live_llm`). `scripts/save_fixture.py <url> <name>` saves a live page as a new fixture. `scripts/manual/` holds hand-run live checks (Gmail, metadata extraction), not part of pytest. The answer engine's live evals (`uv run pytest -m live_llm test/yahbah/llm/test_answer_eval.py -s` and `.../test_verify_eval.py -s`, which need Ollama and both models) have gates described in [docs/wiki/development.md](docs/wiki/development.md#live-evals-answer-engine-opt-in-live_llm). Details: [docs/wiki/development.md](docs/wiki/development.md).
 
 ## Usage
 
@@ -193,7 +201,7 @@ Job URLs must be public `http(s)` URLs. `POST /jobs` and `POST /scheduled` answe
 
 Greenhouse has a dedicated board profile; other sites go through the generic profile (`src/yahbah/agent/boards.py`). Success on arbitrary sites varies.
 
-Files for each run are stored under `ARTIFACTS_DIR/<run_id>/`: screenshots, form schema, field mappings, submitted values, cover letter, confirmation text and HTML, `trace.jsonl` and the `llm/` call logs. The artifacts endpoint lists only files recorded in the database; `trace.jsonl` and the `llm/` logs are not recorded, so they exist only on disk. The exact set depends on the run. LLM call logs are described in [docs/wiki/modules/llm.md](docs/wiki/modules/llm.md).
+Files for each run are stored under `ARTIFACTS_DIR/<run_id>/`: screenshots, form schema, answer plans (`answer_plan_*.json`: how each answer was derived, with fact ids and never fact values), submitted values, cover letter, confirmation text and HTML, `trace.jsonl` and the `llm/` call logs. The artifacts endpoint lists only files recorded in the database; `trace.jsonl` and the `llm/` logs are not recorded, so they exist only on disk. The exact set depends on the run. LLM call logs are described in [docs/wiki/modules/llm.md](docs/wiki/modules/llm.md).
 
 Job metadata is queryable in Postgres:
 
@@ -242,13 +250,13 @@ src/yahbah/
 ├── api/          # FastAPI app (main.py) + routes/ (jobs, runs, applications, scheduled)
 ├── db/           # SQLAlchemy models + async session
 ├── gmail/        # client (OAuth), parser, status poller, job-alert poller/parser
-├── llm/          # Ollama client, model roles, field mapper, cover letter, LLM logs
+├── llm/          # Ollama client, model roles, fact store, answer engine, cover letter, LLM logs
 ├── workflows/    # ApplicationWorkflow + activities/ (browser, db_ops, llm)
 ├── config.py     # Settings (env/.env), runtime settings, prompts loading
 ├── schemas.py    # Temporal-serializable dataclasses
 ├── credentials.py, url_utils.py, jobs.py
 └── worker.py     # worker entrypoint + pollers
 alembic/          # migrations      config/   # prompts, settings, personal (gitignored)
-frontend/         # Next.js UI      scripts/  # run_pipeline, seed_profile, save_fixture, manual/
+frontend/         # Next.js UI      scripts/  # run_pipeline, seed_profile, migrate_known_answers, save_fixture, manual/
 test/             # pytest suite (harness/, invariants/)   docs/wiki/ # architecture, module docs, changelog
 ```

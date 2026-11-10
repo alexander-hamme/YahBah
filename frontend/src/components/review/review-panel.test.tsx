@@ -15,8 +15,8 @@ const answers = [
     key: "auth",
     label: "Are you authorized to work in the US?",
     answer: "Yes",
-    source: "known_answers.work_authorization",
-    basis: ["known_answers.work_authorization"],
+    source: "answer",
+    basis: ["work_authorization_us"],
     written: "Yes",
     page_value: "No",
     ok: false,
@@ -26,7 +26,7 @@ const answers = [
     label: "What kind of fruit are you?",
     required: false,
     answer: "A pineapple: tough outside, sweet once you get through.",
-    source: "custom",
+    source: "answer",
     basis: [],
     generated: true,
     written: "A pineapple: tough outside, sweet once you get through.",
@@ -64,7 +64,7 @@ describe("ReviewPanel evidence", () => {
     expect(within(rows[0]).getAllByText("applicant@example.com")).toHaveLength(2); // answer + page value
 
     // ok = false: the page value is shown and flagged
-    expect(within(rows[1]).getByText("known_answers.work_authorization")).toBeTruthy();
+    expect(within(rows[1]).getByText("work_authorization_us")).toBeTruthy();
     expect(within(rows[1]).getByText(/Differs on the page/)).toBeTruthy();
     expect(within(rows[1]).getByText("No")).toBeTruthy();
     expect(rows[1].dataset.flagged).toBe("true");
@@ -85,7 +85,7 @@ describe("ReviewPanel evidence", () => {
   });
 
   it("flags a factual answer without a stored basis", async () => {
-    mockApi({ [REVIEW_PATH]: { body: review({ answers: [makeRow({ basis: [], source: "custom" })] }) } });
+    mockApi({ [REVIEW_PATH]: { body: review({ answers: [makeRow({ basis: [], source: "answer" })] }) } });
     renderWithClient(<ReviewPanel runId={RUN} actions={["approve"]} />);
     expect(await screen.findByText("No stored basis")).toBeTruthy();
   });
@@ -108,7 +108,7 @@ describe("ReviewPanel evidence", () => {
 
   it("highlights new_fields added in a later round, separately from the approved answers", async () => {
     // new_fields aren't filled yet: written, page_value and ok arrive null
-    const visa = makeRow({ key: "visa", label: "Visa type", answer: "H-1B", basis: ["profile.visa"], written: null,
+    const visa = makeRow({ key: "visa", label: "Visa type", answer: "H-1B", source: "answer", basis: ["visa_type"], written: null,
                            page_value: null, ok: null as unknown as boolean });
     mockApi({ [REVIEW_PATH]: { body: review({ review_round: 2, answers: [...answers, visa], new_fields: [visa] }) } });
     renderWithClient(<ReviewPanel runId={RUN} actions={["approve", "reject"]} />);

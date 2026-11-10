@@ -15,10 +15,12 @@ class FormField:
     label: str
     field_type: str          # text | email | tel | number | url | date | textarea | select | combobox | radio | checkbox | file
     required: bool = False
-    options: list[str] = field(default_factory=list)  # select/combobox/radio/checkbox group (≤15 shown)
+    options: list[str] = field(default_factory=list)  # select/combobox/radio/checkbox group (≤40 shown)
     options_total: int | None = None                   # when there are more options than shown
     empty_value: str | None = None  # what a custom widget shows before anything is chosen (e.g. "Select...")
     autocomplete: str | None = None  # HTML autofill token, e.g. "given-name", "email"
+    description: str = ""  # helper text of the field (aria-describedby), ≤300 chars
+    section: str = ""      # nearest heading above the field (h1–h4, [role=heading], or an enclosing fieldset's legend for a non-group field), ≤120 chars
 
 
 @dataclass
@@ -37,11 +39,10 @@ class FieldMapping:
     key: str
     label: str
     field_type: str
-    source: str      # profile key | known-answer key | resume | cover_letter | custom | skip
-    value: str       # resolved value ("" for resume/cover_letter: filled from files at fill time)
-    confidence: float
-    basis: list[str] = field(default_factory=list)  # stored keys / profile fields backing a factual answer
-    generated: bool = False  # model-written prose (open-ended / personality questions), shown in review
+    source: str      # autofill | answer | resume | cover_letter | skip
+    value: str       # the final value fill writes ("" for resume / cover_letter / skip)
+    basis: list[str] = field(default_factory=list)  # fact ids (llm/facts.py) the value rests on
+    generated: bool = False  # composed narrative for an open-ended free-text question, shown in review
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +146,8 @@ class MapAnswersInput:
     job_description: str = ""
     account_email: str | None = None  # alias to use as the form's email
     job_location: str | None = None   # decides which country unscoped authorization questions are about
+    job_company: str | None = None    # the job's identity for the answer engine (untrusted page data)
+    job_title: str | None = None
 
 
 @dataclass
@@ -177,6 +180,8 @@ class FillInput:
     cover_letter_text: str | None = None
     account_email: str | None = None
     job_location: str | None = None
+    job_company: str | None = None
+    job_title: str | None = None
     review_round: int = 1  # the review round this fill's evidence is for
     # Re-fill after a review approval: exactly the approved mappings (no new model mapping), and the
     # browser stays open for SUBMIT unless a required field without an approved answer appeared.
@@ -191,8 +196,9 @@ class FillOutput:
     written: dict[str, str]     # key -> what was written/chosen (the submit gate checks the page against it)
     # Re-fill only: fields that appeared without an approved answer (rows shaped like schema fields)
     unmapped_new_fields: list[dict] = field(default_factory=list)
-    # Re-fill only: what fields without an approved answer showed after code's fill, before any agent ran
-    # (agent.fill.FillContext.baseline; shape owned by agent/fill.py). SUBMIT checks the page against it.
+    # What fields without a planned answer showed after code's fill, before any agent ran (every fill; only a
+    # re-fill's is carried on to SUBMIT, which checks the page against it). agent.fill.FillContext.baseline owns
+    # the shape.
     baseline: dict | None = None
 
 
@@ -206,6 +212,8 @@ class MapNewFieldsInput:
     review_round: int           # the round they are reviewed in
     account_email: str | None = None
     job_location: str | None = None
+    job_company: str | None = None
+    job_title: str | None = None
 
 
 @dataclass

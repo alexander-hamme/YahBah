@@ -11,8 +11,8 @@ from types import SimpleNamespace
 
 JOB_URL = "https://jobs.harness.example/acme/review-1"
 FIELD = {"key": "1", "label": "First name", "field_type": "text", "required": True, "options": []}
-MAPPING = {"key": "1", "label": "First name", "field_type": "text", "source": "first_name", "value": "Jane",
-           "confidence": 1.0}
+MAPPING = {"key": "1", "label": "First name", "field_type": "text", "source": "autofill", "value": "Jane",
+           "basis": ["profile.first_name"], "generated": False}
 
 
 class FakeBrowserSession:

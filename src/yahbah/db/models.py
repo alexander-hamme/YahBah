@@ -170,7 +170,8 @@ class ApplicationArtifact(Base):
         PG_UUID(as_uuid=True), ForeignKey("application_run.id"), nullable=False
     )
     artifact_type: Mapped[str] = mapped_column(String, nullable=False)
-    # screenshot | trace | cover_letter | form_schema | field_mappings | confirmation
+    # screenshot | trace | cover_letter | form_schema | answer_plan | submitted_values | new_fields |
+    # submit_evidence | confirmation | field_mappings (legacy: runs before the answer engine)
     path: Mapped[str] = mapped_column(String, nullable=False)
     artifact_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(
@@ -283,38 +284,6 @@ class GmailCheckpoint(Base):
     )
     email: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     history_id: Mapped[str] = mapped_column(String, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, onupdate=utcnow
-    )
-
-
-# ---------------------------------------------------------------------------
-# answer_cache
-# ---------------------------------------------------------------------------
-
-class AnswerCache(Base):
-    """Grounded factual answers to custom form questions with their provenance, reused only while
-    it still holds (yahbah.llm.answer_cache). Debug runs (scripts/run_pipeline.py) use namespace 'debug'."""
-
-    __tablename__ = "answer_cache"
-
-    namespace: Mapped[str] = mapped_column(String, primary_key=True, default="live")
-    # sha256 of the normalized question + sorted normalized options (first 32 hex chars)
-    question_key: Mapped[str] = mapped_column(String, primary_key=True)
-    question: Mapped[str] = mapped_column(Text, nullable=False)
-    options: Mapped[list[str]] = mapped_column(JSONB, default=list)
-    answer: Mapped[str] = mapped_column(Text, nullable=False)
-    basis: Mapped[list[str]] = mapped_column(JSONB, default=list)  # stored-answer keys / profile fields cited
-    basis_hash: Mapped[str] = mapped_column(String, nullable=False)  # their values + the stored-answer key set
-    model: Mapped[str] = mapped_column(String, nullable=False)
-    prompt_hash: Mapped[str] = mapped_column(String, nullable=False)
-    run_id: Mapped[uuid.UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("application_run.id", ondelete="SET NULL")
-    )
-    hits: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow
-    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )

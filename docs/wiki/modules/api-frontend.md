@@ -4,7 +4,7 @@
 Prefixes:
 - `/applications`: list and `/stats` (below).
 - `/jobs`: `POST` enqueues (201).
-- `/runs`: detail, review, steps, artifacts, status updates, the review/cancel/retry/resolution actions, bulk and single delete. The `runs.py` module docstring lists every route. `/steps` returns nothing, since no code writes `application_step` rows. `/artifacts` lists only files recorded in `application_artifact`; `trace.jsonl` and the `llm/` logs are on disk only.
+- `/runs`: detail, review, steps, artifacts, status updates, the review/cancel/retry/resolution actions, bulk and single delete. The `runs.py` module docstring lists every route. `/steps` returns nothing, since no code writes `application_step` rows. `/artifacts` lists only files recorded in `application_artifact`; `trace.jsonl` and the `llm/` logs are on disk only. Artifact download picks its content type from `_MEDIA_TYPES`: `answer_plan` (and the legacy `field_mappings` of earlier runs) is `application/json`.
 - `/scheduled`: create, list, `/stats`, get, `approve`/`reject`/`hold`/`promote`, delete.
 
 `main.py` also serves `GET /health`, the manual poller triggers `POST /gmail/poll`, `/gmail/alert-poll` and `/gmail/alert-backfill`, and the runtime settings. Response models are Pydantic classes in the route files.
@@ -41,7 +41,7 @@ Run: `uv run uvicorn yahbah.api.main:app --reload --port 8000` (binds 127.0.0.1)
 | Route | What it shows |
 |---|---|
 | `/applications` | The attention strip: uncertain runs to resolve, and the review count with the next deadline. Counts by outcome. The job form. The outcome filter (in the URL as `?filter=`: a single outcome or `hide_failed`/`all`/`needs_you`/`sent`). The list. |
-| `/applications/[id]` | Detail. It shows the review panel when the run lists `approve`/`reject`, the uncertain-run resolution panel (`#resolve`) when it lists `confirm_*`, then info, fill evidence and screenshots. |
+| `/applications/[id]` | Detail. It shows the review panel when the run lists `approve`/`reject`, the uncertain-run resolution panel (`#resolve`) when it lists `confirm_*`, then info, **the unanswered-questions panel when `failure_reason` is `needs_answer`** (below), fill evidence and screenshots. |
 | `/review` | The review queue: `awaiting_review` runs, soonest deadline first, each with a countdown (and "Round N · new fields" after the first round), beside the selected run's review panel (`?run=`). After a decision it moves to the next run. By default the selected run opens in the compact **triage preview** (see Triage below); the full review is one step away. |
 | `/scheduled` | The scheduled job queue. |
 
@@ -56,7 +56,7 @@ Run: `uv run uvicorn yahbah.api.main:app --reload --port 8000` (binds 127.0.0.1)
 
 **Review** (`components/review/`):
 - `ReviewPanel` renders `GET /runs/{id}/review`:
-  - **answers** (`AnswerEvidenceList`): each row shows its question, the answer, the `basis` keys or a **Generated** label, and what the page read back (`page_value`), with `ok=false` flagged;
+  - **answers** (`AnswerEvidenceList`): each row shows its question, the answer, the `basis` (fact ids: a `config/personal.yaml` fact id or `profile.<field>`) or a **Generated** label, and what the page read back (`page_value`), with `ok=false` flagged; `source` is `autofill | answer | resume | cover_letter | skip` ([contract §8](../contracts/run-lifecycle.md));
   - **flags**: rows to check are flagged (mismatch, generated, factual without basis, required and blank, new), and the summary can narrow the list to them;
   - **`new_fields`**: shown in their own section;
   - the full-page screenshot (scrollable, with a lightbox) and the cover letter.
@@ -64,6 +64,8 @@ Run: `uv run uvicorn yahbah.api.main:app --reload --port 8000` (binds 127.0.0.1)
   - approve is enabled only once the box "These answers are right: submit this application to …" is ticked;
   - reject takes an optional reason;
   - a 409 `stale_review_round`, `not_awaiting_review` or `action_not_allowed` refetches the review and explains; the box resets, because the bar is keyed by the round.
+
+**Unanswered questions** (`components/unanswered-questions.tsx`; added 2026-10-24). For a run that ended `needs_answer`, `UnansweredQuestions` (rendered below the info card on `/applications/[id]`) picks the newest `answer_plan` artifact by `created_at` (a later fill or new-field plan supersedes the first), downloads it with `artifactDownloadUrl` and lists `unresolved` rows with `required: true` under "Questions YahBah couldn't answer". Each row has the question label, a status chip (`missing_fact` "No stored fact", `needs_clarification` "Unclear question", `unsupported` "Couldn't be backed by your facts", `invalid_value` "No valid answer for this field"), the `reason`, "Needed: <requested_info>" and the `fact_template` in a `<pre>` with a copy button (`components/copy-button.tsx`, shared with `RunInfoCard`). The footer says to add the facts to the `facts:` list in `config/personal.yaml` and retry. There is no write API: the user edits the file, and the next run (a retry) picks the facts up. It shows a skeleton while the artifact list or file loads, "Couldn't load the unanswered questions." when the list or file fails or no `answer_plan` exists, and nothing when no required row is left. The artifact holds fact ids and templates, never fact values. `FAILURE_REASON_INFO.needs_answer` reads: "Some required questions couldn't be answered from your stored facts. The list below says what's missing: add those facts to config/personal.yaml, then retry." The artifact viewer hides `answer_plan` (with `submitted_values` and `form_schema`) from the raw artifact list. Types: `UnresolvedQuestion`, `UnresolvedStatus` in `lib/types.ts`.
 
 **Triage** (`/review`; added 2026-10-20). Quick approve/reject from the queue: eyeball a run, decide, open the full review only for the unsure ones. The rules (no bulk route, round from the rendered payload, dwell, undo window, visible drops) are in [run-lifecycle §4, "Triage"](../contracts/run-lifecycle.md); this section is the implementation.
 - **Preview** (`triage-preview.tsx`): a compact view of `GET /runs/{id}/review` for the selected run. It shows every flagged answer (the same flags as the full review, including the text of generated answers). **O** or the button opens the full `ReviewPanel` with its tick box.
@@ -86,7 +88,7 @@ Run: `uv run uvicorn yahbah.api.main:app --reload --port 8000` (binds 127.0.0.1)
 - A failed query shows an inline error and keeps the last data.
 
 **Frontend checks** (`frontend/`, run from there; state on 2026-10-23):
-- `npm test`: Vitest 5 with React Testing Library in jsdom, setup `vitest.setup.ts`, tests colocated as `src/**/*.test.ts(x)` (15 files, 120 tests, passing as of 2026-10-23). `npm run test:watch` for watch mode.
+- `npm test`: Vitest 5 with React Testing Library in jsdom, setup `vitest.setup.ts`, tests colocated as `src/**/*.test.ts(x)` (16 files, 126 tests, passing as of 2026-10-24). `npm run test:watch` for watch mode.
   - **Helpers:** `src/test/render.tsx` provides `renderWithClient` (the app's real QueryClient setup, no retries) and `mockApi` (stubs `fetch` per `"METHOD /path"`, records calls). `src/test/fixtures.ts` builds §8-shaped runs, rows and reviews.
   - **Navigation:** `vitest.setup.ts` mocks `next/navigation` with `src/test/navigation.ts`, since the app router isn't mounted in jsdom.
   - **Clean-up:** the setup resets toasts and stubbed globals after each test.

@@ -159,15 +159,41 @@ export interface FillEvidenceRow {
   required: boolean;
   options: string[];
   answer: string | null;
-  /** known-answer key | profile key | resume | cover_letter | custom | skip; null: not mapped */
+  /** autofill | answer | resume | cover_letter | skip; null: not mapped */
   source: string | null;
-  /** Stored keys / profile fields backing the answer. */
+  /** Fact ids (`config/personal.yaml` facts, or `profile.<field>`) the answer rests on. */
   basis: string[];
   /** Model-written prose (open-ended questions), not a stored fact. */
   generated: boolean;
   written: string | null;
   page_value: string | null;
   ok: boolean;
+}
+
+export type UnresolvedStatus = "missing_fact" | "needs_clarification" | "unsupported" | "invalid_value";
+
+/** A question the answer engine couldn't answer (`unresolved` in the `answer_plan` artifact). Never holds fact values. */
+export interface UnresolvedQuestion {
+  key: string;
+  label: string;
+  type: string;
+  /** Required ones block the run (`needs_answer`); optional ones were left blank. */
+  required: boolean;
+  status: UnresolvedStatus;
+  /** One sentence on why. */
+  reason: string;
+  /** What the applicant should store; "" if n/a. */
+  requested_info: string;
+  /** Paste-ready YAML skeleton for the `facts:` list; "" if n/a. */
+  fact_template: string;
+}
+
+/** The `answer_plan` artifact: one per answering pass (stage), with per-field diagnostics. */
+export interface AnswerPlanArtifact {
+  stage: "map_answers" | "fill" | "map_new_fields";
+  review_round: number | null;
+  unresolved: UnresolvedQuestion[];
+  [key: string]: unknown;
 }
 
 export interface ReviewPayload {

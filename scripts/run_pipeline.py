@@ -8,11 +8,13 @@ Run the agentic pipeline on one job URL without Temporal or a run record — for
   uv run python scripts/run_pipeline.py <job-url> --headed-fallback    # a page walled off headless: retry it headed
   uv run python scripts/run_pipeline.py <job-url> --submit             # really submit (gated + verified)
 
-Never submits without --submit. Uses the applicant profile from the DB (read-only) and its real
-email (no per-run alias). Artifacts and LLM logs: artifacts/debug-<timestamp>/.
+Never submits without --submit. Uses the applicant profile from the DB (read-only), the facts in
+config/personal.yaml and the profile's real email (no per-run alias). Artifacts (answer_plan*.json
+included) and LLM logs: artifacts/debug-<timestamp>/.
 """
 import argparse
 import asyncio
+import json
 import time
 from dataclasses import asdict
 
@@ -28,12 +30,16 @@ from yahbah.agent.tools import run_js
 from yahbah.config import settings
 from yahbah.db.models import ApplicantProfile
 from yahbah.db.session import AsyncSessionLocal
+from yahbah.llm.answers import AnswerEngine, AnswerPlan, JobContext, NeedsAnswer
 from yahbah.llm.cover_letter import CoverLetterGenerator
-from yahbah.llm import answer_cache
-from yahbah.llm.field_mapper import FieldMapper, NeedsAnswer
+from yahbah.llm.facts import FactsConfigError, load_facts
 from yahbah.llm.logs import use_run_log_dir
-from yahbah.schemas import FieldMapping, FormField
-from yahbah.workflows.activities.llm import _text_to_pdf
+from yahbah.workflows.activities.llm import _text_to_pdf, field_from_row
+
+
+def _save_plan(run_id: str, plan: AnswerPlan, name: str, stage: str) -> None:
+    with open(artifact_path(run_id, name), "w") as f:
+        json.dump(plan.to_artifact(stage, None), f, indent=2, ensure_ascii=False)
 
 
 async def main() -> None:
@@ -76,18 +82,17 @@ async def main() -> None:
 
         async with AsyncSessionLocal() as db:
             profile = (await db.execute(select(ApplicantProfile).limit(1))).scalar_one()
-        form_fields = [FormField(key=f["key"], label=f["label"], field_type=f["type"], required=f["required"],
-                                 options=f["options"], options_total=f.get("options_total"),
-                                 empty_value=f.get("empty_value"), autocomplete=f.get("autocomplete"))
-                       for f in fields]
+        catalog = load_facts(profile)
+        job_context = JobContext(location=job.get("location") or None, description=job.get("description") or "",
+                                 company=job.get("company") or None, title=job.get("job_title") or None)
         t = time.time()
-        mapper = FieldMapper(cache_namespace=answer_cache.DEBUG)  # debug answers never reach live runs
-        mappings = await mapper.map(form_fields, profile, job.get("description") or "",
-                                    job_location=job.get("location") or None)
-        trace.add("answers", "model", t, f"{len(mappings)} fields mapped")
+        plan = await AnswerEngine().plan([field_from_row(f) for f in fields], job_context, catalog)
+        _save_plan(run_id, plan, "answer_plan.json", "map_answers")
+        trace.add("answers", "model", t, f"{len(plan.mappings)} fields, {len(plan.calls)} model calls")
         print("\n=== answers ===")
-        for m in mappings:
-            print(f"  [{m.key:>5}] {m.label[:50]!r:52} <- {m.source:20} {m.value[:70]!r}")
+        for m in plan.mappings:
+            print(f"  [{m.key:>5}] {m.label[:50]!r:52} <- {m.source:12} {m.value[:70]!r} {m.basis}")
+        plan.raise_if_blocked()
 
         files = {"resume": profile.resume_path}
         cover_text = None
@@ -100,18 +105,26 @@ async def main() -> None:
 
         ctx = FillContext(
             fields={f["key"]: {"label": f["label"], "type": f["type"], "required": f["required"],
-                               "options": f["options"], "empty_value": f.get("empty_value")} for f in fields},
-            mappings={m.key: asdict(m) for m in mappings},
+                               "options": f["options"], "empty_value": f.get("empty_value"),
+                               "description": f.get("description") or "", "section": f.get("section") or ""}
+                    for f in fields},
+            mappings={m.key: asdict(m) for m in plan.mappings},
             files=files,
             cover_letter_text=cover_text,
         )
+        fill_plans = 0
 
-        async def map_new(new_fields: list[dict]) -> list[dict]:
-            new = [FormField(key=f["key"], label=f["label"], field_type=f["type"], required=bool(f["required"]),
-                             options=f.get("options") or [], autocomplete=f.get("autocomplete")) for f in new_fields]
-            prior = [FieldMapping(**m) for m in ctx.mappings.values()]
-            return [asdict(m) for m in await mapper.map(new, profile, job.get("description") or "", prior,
-                                                        job_location=job.get("location") or None)]
+        async def map_new(rows: list[dict]) -> list[dict]:
+            nonlocal fill_plans
+            keys = {r["key"] for r in rows}
+            new_plan = await AnswerEngine().plan(
+                [field_from_row(r) for r in rows], job_context, load_facts(profile),
+                prior=[m for k, m in ctx.mappings.items() if k not in keys],
+                feedback={r["key"]: r["feedback"] for r in rows if r.get("feedback")})
+            fill_plans += 1
+            _save_plan(run_id, new_plan, f"answer_plan_fill_{fill_plans}.json", "fill")
+            new_plan.raise_if_blocked()
+            return [asdict(m) for m in new_plan.mappings]
 
         t = time.time()
         problems = await fill_form(session, board, ctx, map_new_fields=map_new, beat=lambda note: print(f"  · {note}"))
@@ -140,7 +153,11 @@ async def main() -> None:
 
         record_observation(run_id, args.url, board, trace.rows, len(fields))
     except NeedsAnswer as exc:
-        print(f"\nFAILED needs_answer: {exc.label!r}")
+        print("\nFAILED needs_answer:")
+        for u in exc.unresolved:
+            print(f"  {u.label} ({u.status}): {u.reason}")
+    except FactsConfigError as exc:
+        print(f"\nFAILED: {exc}")
     except StageFailed as exc:
         print(f"\nFAILED {exc.reason}: {exc.detail}")
         await registry.screenshot(run_id, "failed")

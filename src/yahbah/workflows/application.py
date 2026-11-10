@@ -206,12 +206,16 @@ class ApplicationWorkflow:
         # ── MAP_ANSWERS (driver + prose) ──────────────────────────────────────
         await self._state("MAP_ANSWERS")
         job_location = discovered.job_location or metadata.location  # scopes authorization questions
+        job_company = discovered.job_company or metadata.company      # the job's identity for the answer engine
+        job_title = discovered.job_title or metadata.title
         answers = await self._long(map_answers_activity, MapAnswersInput(
             run_id=run_id,
             form_schema_dict=form.form_schema_dict,
             job_description=discovered.job_description,
             account_email=discovered.account_email,
             job_location=job_location,
+            job_company=job_company,
+            job_title=job_title,
         ))
 
         # ── GENERATE_COVER_LETTER (prose), only if the form asks for one ──────
@@ -236,6 +240,8 @@ class ApplicationWorkflow:
                 cover_letter_text=cover_text,
                 account_email=discovered.account_email,
                 job_location=job_location,
+                job_company=job_company,
+                job_title=job_title,
                 review_round=review_round,
                 refill=refill,
                 headed=headed,
@@ -276,6 +282,8 @@ class ApplicationWorkflow:
                 review_round=self._round + 1,
                 account_email=discovered.account_email,
                 job_location=job_location,
+                job_company=job_company,
+                job_title=job_title,
             ))
             approved = list({m["key"]: m for m in approved + mapped.field_mappings}.values())
 

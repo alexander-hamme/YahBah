@@ -1,7 +1,7 @@
 """ScriptedLLM: OllamaClient replies scripted per role and response schema, with every call recorded.
 
     llm.on("driver", "PostSubmitState", replies=[verdict("needs_fix", ["..."]), verdict("submitted")])
-    llm.on("prose", handler=lambda call: answer("Yes", quotes=["..."]))
+    llm.on("prose", "ComposeResponse", handler=compose_all(lambda fid, row: composed(fid, "Yes", ["fact_id"])))
     llm.on(("driver", "vision"), "PostSubmitState", handler=judge)   # async handlers are awaited
 
 Rules are tried in the order they were added; a rule with `replies` is used up after its last
@@ -13,10 +13,11 @@ A call no rule matches raises UnexpectedModelCall at the call site and is record
 the `llm` fixture also fails a passing test that had unexpected calls (code may swallow the error).
 """
 import inspect
+import json
 from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, get_args
 
 from pydantic import BaseModel
 
@@ -119,26 +120,82 @@ def verdict(state: str, problems: Iterable[str] = (), reasoning: str = "scripted
     return {"reasoning": reasoning, "state": state, "problems": list(problems), "blocked_reason": blocked_reason}
 
 
-def answer(text: str, *, quotes: Iterable[str] = (), basis: Iterable[str] = (), job_specific: bool = False,
-           insufficient_info: bool = False, generated: bool | None = None) -> dict:
-    """A prose/custom-answer reply. Carries both today's `evidence` quotes and the contract's `basis`
-    keys (§8); fit() keeps whichever the requested schema has."""
-    reply = {"answer": text, "evidence": list(quotes), "basis": list(basis), "insufficient_info": insufficient_info,
-             "job_specific": job_specific}
-    if generated is not None:
-        reply["generated"] = generated
-    return reply
+# ── Answer engine (yahbah.llm.answers): prompt sections and reply builders ──────
+
+def prompt_section(call: ModelCall, header: str) -> Any:
+    """The parsed JSON of one `HEADER (JSON):` section of an answer-engine prompt (KeyError if absent)."""
+    for chunk in call.user.split("\n\n"):
+        head, _, body = chunk.partition("\n")
+        if head == f"{header} (JSON):":
+            return json.loads(body)
+    raise KeyError(f"no {header!r} section in the prompt")
 
 
-def mapping_keys(call: ModelCall) -> list[str]:
-    """The field keys a mapping call asks about (the enum on its reply schema's `key`)."""
-    item = call.schema.model_fields["mappings"].annotation.__args__[0]
-    return list(item.model_fields["key"].annotation.__args__)
+def asked_ids(call: ModelCall) -> list[str]:
+    """The field ids an answer-engine call asks about (the enum on its items' `field_id`)."""
+    item = get_args(next(iter(call.schema.model_fields.values())).annotation)[0]
+    return list(get_args(item.model_fields["field_id"].annotation))
 
 
-def map_all(source: str | Callable[[str], str] = "custom", confidence: float = 1.0):
-    """Handler for the driver's field-mapping call: every asked key -> `source` (or source(key))."""
+def interpretation(field_id: str, fact_ids: Iterable[str] = (), *, intent: str = "scripted", document: str = "none",
+                   jurisdiction: str | None = None, qualifiers: Iterable[str] = (),
+                   ambiguity: str | None = None) -> dict:
+    """One Pass 1 (InterpretResponse) entry."""
+    return {"field_id": field_id, "intent": intent, "document": document, "jurisdiction": jurisdiction,
+            "qualifiers": list(qualifiers), "fact_ids": list(fact_ids), "ambiguity": ambiguity}
+
+
+def interpret_all(fact_ids: dict[str, Any] | Callable[[str], Any] = lambda fid: []):
+    """Handler for Pass 1: an entry for every asked id. fact_ids (a dict, or a function of the id) gives
+    the fact ids to select, or a whole interpretation(...) dict for that field."""
     def handler(call: ModelCall) -> dict:
-        return {"mappings": [{"key": k, "source": source(k) if callable(source) else source, "value": "",
-                              "confidence": confidence} for k in mapping_keys(call)]}
+        entries = []
+        for fid in asked_ids(call):
+            pick = fact_ids(fid) if callable(fact_ids) else fact_ids.get(fid, [])
+            entries.append(pick if isinstance(pick, dict) else interpretation(fid, pick))
+        return {"fields": entries}
+    return handler
+
+
+def composed(field_id: str, value: str | None, evidence: Iterable[str] = (), *, quotes: Iterable[str] = (),
+             absent: str | None = None, status: str = "answered", composed: bool = False,
+             requested: Iterable[str] = (), requested_info: str | None = None, reason: str = "scripted") -> dict:
+    """One Pass 2 (ComposeResponse) entry. quotes: words of the cited facts the answer rests on; absent:
+    what it rests on not finding (an answer citing only profile records needs one of them)."""
+    return {"field_id": field_id, "status": status, "value": value, "composed": composed,
+            "evidence_ids": list(evidence), "requested_fact_ids": list(requested), "requested_info": requested_info,
+            "reason": reason, "quotes": list(quotes), "absent": absent}
+
+
+def compose_all(fn: Callable[[str, dict], dict]):
+    """Handler for Pass 2 (compose and recompose): fn(field_id, its FIELDS TO ANSWER row) -> composed(...)."""
+    def handler(call: ModelCall) -> dict:
+        rows = {r["id"]: r for r in prompt_section(call, "FIELDS TO ANSWER")}
+        return {"answers": [fn(fid, rows[fid]) for fid in asked_ids(call)]}
+    return handler
+
+
+def verification(field_id: str, supported: bool = True, problem: str | None = None) -> dict:
+    """One verifier (VerifyResponse) verdict."""
+    return {"field_id": field_id, "supported": supported, "problem": problem}
+
+
+def verify_all(fn: Callable[[str], bool | str] = lambda fid: True):
+    """Handler for the verifier: fn(field_id) -> True (supported), False, or a problem string (unsupported)."""
+    def handler(call: ModelCall) -> dict:
+        verdicts = []
+        for fid in asked_ids(call):
+            result = fn(fid)
+            if isinstance(result, str):
+                verdicts.append(verification(fid, False, result))
+            else:
+                verdicts.append(verification(fid, bool(result), None if result else "scripted rejection"))
+        return {"verdicts": verdicts}
+    return handler
+
+
+def reselect_all(fact_ids: dict[str, list[str]]):
+    """Handler for the recovery reselect call: every asked id -> fact_ids.get(id, [])."""
+    def handler(call: ModelCall) -> dict:
+        return {"fields": [{"field_id": fid, "fact_ids": list(fact_ids.get(fid, []))} for fid in asked_ids(call)]}
     return handler

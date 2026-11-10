@@ -63,8 +63,8 @@ async def test_with_a_mapper_they_are_mapped_and_filled_and_nothing_is_left_unma
     async def mapper(new_fields: list[dict]) -> list[dict]:
         seen.append(sorted(f["label"] for f in new_fields))
         answers = {"Please explain": "Employer sponsored", "Visa type": "H-1B", "How often?": "Monthly"}
-        return [{"key": f["key"], "label": f["label"], "field_type": f["type"], "source": "custom",
-                 "value": answers[f["label"]], "confidence": 1.0} for f in new_fields]
+        return [{"key": f["key"], "label": f["label"], "field_type": f["type"], "source": "answer",
+                 "value": answers[f["label"]], "basis": ["visa_details"], "generated": False} for f in new_fields]
 
     problems = await fill_form(browser, GENERIC, ctx, map_new_fields=mapper)
     assert problems == [] and ctx.unmapped_new_fields == []
@@ -94,8 +94,8 @@ async def test_a_revealed_field_with_an_approved_mapping_is_filled_not_asked_abo
     ctx2 = await mapped_ctx(browser, pages)  # a fresh page and context: only the visible fields in ctx.fields
     for label, value in (("Please explain", "Employer sponsored"), ("Visa type", "H-1B")):
         key = revealed[label]["key"]
-        ctx2.mappings[key] = {"key": key, "label": label, "field_type": revealed[label]["type"], "source": "custom",
-                              "value": value, "confidence": 1.0}
+        ctx2.mappings[key] = {"key": key, "label": label, "field_type": revealed[label]["type"], "source": "answer",
+                              "value": value, "basis": ["visa_details"], "generated": False}
     problems = await fill_form(browser, GENERIC, ctx2)
     assert problems == [] and ctx2.unmapped_new_fields == []
     assert {ctx2.fields[r["key"]]["label"] for r in revealed.values()} == {"Please explain", "Visa type"}
@@ -140,3 +140,76 @@ async def test_content_added_to_a_field_with_no_approved_answer_is_a_problem_at_
     with pytest.raises(StageFailed) as exc:
         await submit(browser, GENERIC, ctx, claim=claim)
     assert exc.value.reason == "fill_failed" and "Newsletter" in exc.value.detail and claim.calls == 0
+
+
+# ── option misses: re-answered once with the options the page really offers ───
+
+async def miss_ctx(browser, fixture_server):
+    await load(browser, fixture_server.url("synthetic/option_miss.html"))
+    return context_for(await get_form_schema(browser), {
+        "First name": "Jane", "How did you hear?": "LinkedIn post", "Open to relocation?": "Maybe"})
+
+
+def answer_rows(rows: list[dict], values: dict[str, str]) -> list[dict]:
+    return [{"key": r["key"], "label": r["label"], "field_type": r["type"], "source": "answer",
+             "value": values[r["label"]], "basis": ["f"], "generated": False} for r in rows]
+
+
+def no_option_fits(llm) -> None:
+    llm.on("driver", "_OptionPick", handler=lambda call: {"reasoning": "none fits", "choice": None})
+
+
+async def test_a_planned_value_matching_no_option_is_re_answered_once_with_the_page_options(
+        browser, fixture_server, llm) -> None:
+    no_option_fits(llm)
+    ctx = await miss_ctx(browser, fixture_server)
+    seen: list[list[dict]] = []
+
+    async def mapper(rows: list[dict]) -> list[dict]:
+        seen.append(rows)
+        return answer_rows(rows, {"How did you hear?": "Referral", "Open to relocation?": "Not sure"})
+
+    problems = await fill_form(browser, GENERIC, ctx, map_new_fields=mapper)
+
+    assert problems == [] and ctx.option_misses == {}
+    assert len(seen) == 1  # once
+    rows = {r["label"]: r for r in seen[0]}
+    assert set(rows) == {"How did you hear?", "Open to relocation?"}  # First name filled; it is not asked again
+    hear, relocate = rows["How did you hear?"], rows["Open to relocation?"]
+    assert hear["options"] == ["Select...", "Job board", "Referral", "Other"] and hear["options_total"] is None
+    assert relocate["options"] == ["Yes", "No", "Not sure"]
+    assert (hear["type"], hear["required"], relocate["type"]) == ("select", True, "radio")
+    assert hear["feedback"] == "'LinkedIn post' matches none of this field's options; choose one of them."
+    assert "'Maybe'" in relocate["feedback"]
+    assert set(hear) >= {"key", "label", "type", "required", "options", "options_total", "description", "section",
+                         "autocomplete", "empty_value", "feedback"}
+    assert hear["autocomplete"] is None
+    by_label = {ctx.fields[k]["label"]: v for k, v in ctx.written.items()}
+    assert by_label == {"First name": "Jane", "How did you hear?": "Referral", "Open to relocation?": "Not sure"}
+    assert {ctx.mappings[r["key"]]["value"] for r in seen[0]} == {"Referral", "Not sure"}
+
+
+async def test_a_second_miss_is_not_re_answered_and_stays_a_fill_problem(browser, fixture_server, llm, agent_llm) -> None:
+    no_option_fits(llm)
+    agent_llm.done(data={"fixed": False, "unresolved": ["How did you hear?", "Open to relocation?"]})
+    ctx = await miss_ctx(browser, fixture_server)
+    calls = 0
+
+    async def mapper(rows: list[dict]) -> list[dict]:
+        nonlocal calls
+        calls += 1
+        return answer_rows(rows, {"How did you hear?": "Podcast", "Open to relocation?": "Perhaps"})
+
+    problems = await fill_form(browser, GENERIC, ctx, map_new_fields=mapper)
+
+    assert calls == 1
+    assert any("How did you hear?" in p for p in problems) and any("Open to relocation?" in p for p in problems)
+
+
+async def test_without_a_mapper_an_option_miss_is_not_re_answered(browser, fixture_server, llm, agent_llm) -> None:
+    no_option_fits(llm)
+    agent_llm.done(data={"fixed": False, "unresolved": []})
+    ctx = await miss_ctx(browser, fixture_server)
+    problems = await fill_form(browser, GENERIC, ctx)  # locked: the approved answers are final
+    assert any("How did you hear?" in p for p in problems)
+    assert ctx.mappings[next(k for k, f in ctx.fields.items() if f["label"] == "How did you hear?")]["value"] == "LinkedIn post"

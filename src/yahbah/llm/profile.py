@@ -1,33 +1,20 @@
 """
-The applicant as the LLM layer sees it: one canonical profile, one fact namespace, one serializer.
+The applicant profile as the LLM layer sees it: one canonical profile, one serializer.
 
 - Profile: the DB `applicant_profile` row (seeded from personal.yaml's `profile:` by
   scripts/seed_profile.py; anything with the same attributes works, e.g. tests' SimpleNamespace).
-- Stored answers: personal.yaml `known_answers` (re-read when the file changes), plus education
-  keys derived from the profile's most recent education entry.
-- `facts()`: every key an answer may cite in `basis`, with its current value: the stored answers,
-  then the profile fields (`full_name`, `skills`, `work_experience[0]`, `education[0]`, ...).
-  A key that is not in it can never back an answer; the job description is never in it.
-- `profile_text()`: the only serializer of the profile. Field mapping, custom answers, cover
-  letters and match scoring all use it, so a fact reads the same everywhere, and every line starts
-  with the key a model cites for it.
+- `profile_facts()`: the profile fields as `key: value` pairs (`full_name`, `skills`,
+  `work_experience[0]`, `education[0]`, ...). The answer engine's fact catalog (llm/facts.py) builds
+  its `profile.<field>` facts from the same helpers.
+- `profile_text()`: the only serializer of the profile as prompt text. Cover letters and match
+  scoring use it, so a fact reads the same everywhere.
 """
 from typing import Any
-
-from yahbah.config import load_prompts_config
 
 # Profile fields that are single values, in prompt order (first_name/last_name are derived).
 SCALAR_FIELDS = ("full_name", "first_name", "last_name", "email", "phone", "location",
                  "linkedin_url", "github_url", "portfolio_url", "years_of_experience")
 _CONTACT_FIELDS = {"email", "phone", "linkedin_url", "github_url", "portfolio_url"}
-_EDUCATION_KEYS = ("school", "degree_type", "discipline", "start_month", "start_year", "end_month",
-                   "end_year", "gpa")
-
-
-def known_answers() -> dict[str, str]:
-    """personal.yaml known_answers, as strings; empty values are left out (they back nothing)."""
-    raw = load_prompts_config().get("known_answers") or {}
-    return {str(k): str(v).strip() for k, v in raw.items() if v is not None and str(v).strip()}
 
 
 def _education(profile: Any) -> list[dict]:
@@ -37,19 +24,6 @@ def _education(profile: Any) -> list[dict]:
 def _experience(profile: Any) -> list[dict]:
     """Work-experience entries the applicant allows in prompts (`use_in_custom_prompts`, default yes)."""
     return [e for e in getattr(profile, "work_experience", None) or [] if e.get("use_in_custom_prompts", True)]
-
-
-def education_answers(profile: Any) -> dict[str, str]:
-    """education_<key> stored answers from the profile's most recent education entry."""
-    entries = _education(profile)
-    if not entries:
-        return {}
-    return {f"education_{k}": str(entries[0][k]) for k in _EDUCATION_KEYS if entries[0].get(k)}
-
-
-def stored_answers(profile: Any) -> dict[str, str]:
-    """Known answers plus the education-derived keys (an explicit known answer wins)."""
-    return {**education_answers(profile), **known_answers()}
 
 
 def scalar_values(profile: Any) -> dict[str, str]:
@@ -80,7 +54,7 @@ def _education_line(e: dict) -> str:
 
 
 def profile_facts(profile: Any) -> dict[str, str]:
-    """Profile fields as citable facts: scalars, skills, bio, work_experience[i], education[i]."""
+    """Profile fields as `key: value` pairs: scalars, skills, bio, work_experience[i], education[i]."""
     facts = scalar_values(profile)
     skills = getattr(profile, "skills", None) or []
     if skills:
@@ -94,18 +68,9 @@ def profile_facts(profile: Any) -> dict[str, str]:
     return facts
 
 
-def facts(profile: Any, stored: dict[str, str] | None = None) -> dict[str, str]:
-    """Every key an answer may cite, with its current value. A stored answer wins over a profile
-    field of the same name (as in field mapping)."""
-    return {**profile_facts(profile), **(stored_answers(profile) if stored is None else stored)}
-
-
 def profile_text(profile: Any, *, contact: bool = True) -> str:
     """The profile as prompt text, one `key: value` line per fact (with each role's bullets).
     contact=False leaves out email, phone and links (match scoring, cover letters)."""
     return "\n".join(f"{k}: {v}" for k, v in profile_facts(profile).items()
                      if contact or k not in _CONTACT_FIELDS)
 
-
-def stored_text(stored: dict[str, str]) -> str:
-    return "\n".join(f"{k}: {v}" for k, v in stored.items())

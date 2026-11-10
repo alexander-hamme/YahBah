@@ -61,6 +61,28 @@ READ_FORM_SCHEMA_JS = r"""
     return el.getAttribute('aria-label') || txt(el.closest('label')) || el.placeholder || el.name || el.id || '';
   };
   const clean = (l) => l.replace(/[\s:*]+$/, '').trim();
+  // Helper text the page ties to a control (hints, formats, sometimes a validation message).
+  const describedBy = (el) => (el?.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean)
+    .map((id) => txt(document.getElementById(id))).filter(Boolean).join(' ').slice(0, 300);
+  // The nearest visible heading above a field, read once per call (in document order). A legend heads only
+  // the fields of its own fieldset; `skip` is the group's own legend; a heading reading the same as the
+  // field's label is its label, not its section.
+  const headings = [...document.querySelectorAll('h1,h2,h3,h4,[role=heading],legend')].filter(vis);
+  const sectionOf = (el, label, skip) => {
+    for (let i = headings.length - 1; i >= 0; i--) {
+      const h = headings[i];
+      if (h === skip || !(h.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+      if (h.tagName === 'LEGEND' && !h.closest('fieldset')?.contains(el)) continue;
+      const t = clean(txt(h));
+      if (t && t !== label) return t.slice(0, 120);
+    }
+    return '';
+  };
+  const withContext = (f, description, section) => {
+    if (description) f.description = description;
+    if (section) f.section = section;
+    return f;
+  };
   // Stable handle so callers can find the element again (for clicks, filling, verification).
   // An invisible data attribute; it doesn't change what the page shows or submits. The counter only
   // grows, so a field that appears after another disappeared can't reuse a key still in use.
@@ -84,9 +106,13 @@ READ_FORM_SCHEMA_JS = r"""
       if (radioGroups.has(el.name)) continue;
       radioGroups.add(el.name);
       const group = [...document.getElementsByName(el.name)];
-      const legend = txt(el.closest('fieldset')?.querySelector('legend')) || el.name;
-      fields.push({ key: keyOf(el), label: clean(legend), type,
-                    required: group.some((g) => g.required) || /\*\s*$/.test(legend), options: group.map(labelOf) });
+      const fieldset = el.closest('fieldset');
+      const ownLegend = fieldset?.querySelector('legend');
+      const legend = txt(ownLegend) || el.name;
+      fields.push(withContext(
+        { key: keyOf(el), label: clean(legend), type,
+          required: group.some((g) => g.required) || /\*\s*$/.test(legend), options: group.map(labelOf) },
+        describedBy(fieldset) || describedBy(group[0]), sectionOf(el, clean(legend), ownLegend)));
       continue;
     }
     const label = labelOf(el);
@@ -96,9 +122,9 @@ READ_FORM_SCHEMA_JS = r"""
     // HTML autofill token (e.g. given-name, email): a structured statement of what the field is for.
     const ac = (el.getAttribute('autocomplete') || '').trim().toLowerCase();
     if (ac && !['on', 'off', 'list', 'none'].includes(ac)) f.autocomplete = ac;
-    if (type === 'select') f.options = [...el.options].map((o) => o.text.trim()).filter(Boolean).slice(0, 15);
+    if (type === 'select') f.options = [...el.options].map((o) => o.text.trim()).filter(Boolean).slice(0, 40);
     if (type === 'combobox') f.options_note = 'custom dropdown: use list_dropdown_options to read options';
-    fields.push(f);
+    fields.push(withContext(f, describedBy(el), sectionOf(el, f.label, null)));
   }
   return JSON.stringify(fields);
 })()
@@ -110,7 +136,7 @@ READ_OPEN_OPTIONS_JS = r"""
   const sel = '[role=listbox] [role=option], [role=option], [class*="menu"] [class*="option"]';
   const opts = [...new Set([...document.querySelectorAll(sel)].filter(vis)
     .map((o) => (o.innerText || o.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean))];
-  return JSON.stringify({ total: opts.length, options: opts.slice(0, 15) });
+  return JSON.stringify({ total: opts.length, options: opts.slice(0, 40) });
 })()
 """
 
@@ -135,7 +161,7 @@ READ_OWN_OPTIONS_JS = r"""
     opts = [...a.querySelectorAll('[role=option]')];
   }
   const names = [...new Set(opts.map(txt).filter(Boolean))];
-  return JSON.stringify({ total: names.length, options: names.slice(0, 15) });
+  return JSON.stringify({ total: names.length, options: names.slice(0, 40) });
 })
 """
 
@@ -351,8 +377,9 @@ async def screenshot_b64(browser_session: BrowserSession, quality: int = 75) -> 
 
 def make_tools(vision_llm=None, fill_ctx=None) -> tuple[Tools, StallTracker]:
     """vision_llm: adds look_at_screen so the text-only driver can ask about the screenshot.
-    fill_ctx (a fill.FillContext): adds the key-based fill tools (fix phase only). There is never a submit tool,
-    and the generic click / send_keys actions run through the submit-control guard (controls.GuardedTools)."""
+    fill_ctx (a fill.FillContext): adds the key-based fill tools (fix phase only) and limits the generic `input`
+    action to text that is part of a planned answer. There is never a submit tool, and the generic click /
+    send_keys actions run through the submit-control guard (controls.GuardedTools)."""
     from yahbah.agent.controls import GuardedTools  # controls imports run_js from this module
 
     tools = GuardedTools(exclude_actions=["evaluate"])
@@ -458,5 +485,6 @@ def make_tools(vision_llm=None, fill_ctx=None) -> tuple[Tools, StallTracker]:
     if fill_ctx is not None:
         from yahbah.agent.fill import register_fill_tools  # fill imports this module
         register_fill_tools(tools, fill_ctx)
+        tools.text_allowed = fill_ctx.text_allowed
 
     return tools, stalls

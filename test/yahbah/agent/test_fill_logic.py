@@ -1,6 +1,12 @@
 """Code-side decisions of the fill stage: option matching, read-back checks, problem lists, fill evidence rows.
 (The submit stage's structural verdict is in test_submit_evidence_logic.py.)"""
-from yahbah.agent.fill import FillContext, intended_answer, match_option, problems_for, submitted_values, value_ok
+import pytest
+
+from yahbah.agent import fill
+from yahbah.agent.fill import (
+    FillContext, FillError, NoMatchingOption, fill_keys, intended_answer, problems_for, submitted_values, value_ok,
+)
+from yahbah.agent.options import match_option
 
 
 # ── match_option ──────────────────────────────────────────────────────────────
@@ -119,7 +125,8 @@ def _ctx() -> FillContext:
             "4": {"label": "Resume/CV", "type": "file", "required": True, "options": []},
         },
         mappings={
-            "1": {"key": "1", "source": "first_name", "value": "Jane"},
+            # an old-history source (before the answer engine): still filled with its value (C2 replay safety)
+            "1": {"key": "1", "source": "first_name", "value": "Jane", "confidence": 1.0},
             "4": {"key": "4", "source": "resume", "value": ""},
             "5": {"key": "5", "source": "cover_letter", "value": ""},
         },
@@ -161,6 +168,21 @@ def test_no_problems_when_everything_matches() -> None:
     assert problems_for(ctx, values, []) == []
 
 
+def test_a_field_without_a_plan_must_keep_its_baseline_content_in_every_mode() -> None:
+    from yahbah.agent.fill import content_signature
+
+    for locked in (False, True):  # a first fill (mapper) as well as an approved re-fill
+        ctx = _ctx()
+        ctx.locked = locked
+        ctx.baseline = {"3": content_signature({"value": "https://site-prefilled.test"})}
+        def baseline_problems(value: str) -> list[str]:
+            return [p for p in problems_for(ctx, {"3": {"value": value}}, []) if "no planned answer" in p]
+
+        assert baseline_problems("https://site-prefilled.test") == []
+        (changed,) = baseline_problems("https://site-prefilled.test/x")
+        assert "Website" in changed
+
+
 # ── fill evidence rows (contract run-lifecycle §8) ────────────────────────────
 
 def test_submitted_values_rows_have_the_contract_shape() -> None:
@@ -199,3 +221,127 @@ def test_submitted_values_marks_a_disagreement() -> None:
     ctx.written = {"1": "Jane"}
     (row,) = [r for r in submitted_values(ctx, {"1": {"value": "Jan"}}) if r["key"] == "1"]
     assert row["ok"] is False and row["page_value"] == "Jan" and row["written"] == "Jane"
+
+
+# ── text_allowed (contract C8) ────────────────────────────────────────────────
+
+@pytest.mark.parametrize("text, allowed", [
+    ("", True), ("   ", True),                    # nothing typed
+    ("Jane", True), ("jane", True), ("Ja", True),  # (part of) a planned answer, normalized
+    ("dear team", True),                          # the cover letter text planned for a text box
+    ("resume.pdf", True),                         # a planned document path
+    ("Janet", False), ("Blue", False), ("Jane and Bob", False),
+])
+def test_text_allowed_is_only_part_of_a_planned_answer(text, allowed) -> None:
+    assert _ctx().text_allowed(text) is allowed
+
+
+def test_text_allowed_ignores_skipped_and_unplanned_fields() -> None:
+    ctx = _ctx()
+    ctx.mappings["3"] = {"key": "3", "source": "skip", "value": "Hidden"}
+    assert not ctx.text_allowed("Hidden")
+
+
+# ── the fix agent writes planned values only, in every mode ───────────────────
+
+class _Registry:
+    """Stands in for browser-use's Tools: keeps the registered fill tools as plain coroutines."""
+
+    def __init__(self) -> None:
+        self.actions: dict = {}
+
+    def action(self, _description):
+        def register(fn):
+            self.actions[fn.__name__] = fn
+            return fn
+        return register
+
+
+def _fill_tools(ctx: FillContext) -> _Registry:
+    registry = _Registry()
+    fill.register_fill_tools(registry, ctx)
+    return registry
+
+
+def _fill_field_tool(ctx: FillContext, monkeypatch):
+    writes: list[tuple[str, str]] = []
+
+    async def write_field(session, ctx_, key, value):
+        writes.append((key, value))
+        return value
+
+    async def read_values(session, keys):
+        return {k: {"value": dict(writes)[k]} for k in keys}
+
+    monkeypatch.setattr(fill, "write_field", write_field)
+    monkeypatch.setattr(fill, "read_values", read_values)
+    fill_field = _fill_tools(ctx).actions["fill_field"]
+
+    async def call(key, value):
+        return await fill_field(key=key, value=value, browser_session=None)
+    return call, writes
+
+
+@pytest.mark.parametrize("locked", [False, True])
+async def test_fill_field_rejects_a_value_other_than_the_plan_in_every_mode(monkeypatch, locked) -> None:
+    ctx = _ctx()
+    ctx.locked = locked
+    call, writes = _fill_field_tool(ctx, monkeypatch)
+    result = await call("1", "Janet")
+    assert result.error and "approved answer" in result.error and writes == []
+
+
+@pytest.mark.parametrize("locked", [False, True])
+@pytest.mark.parametrize("key", ["2", "3", "999"])  # no mapping / not on the form
+async def test_fill_field_rejects_a_key_without_a_plan_in_every_mode(monkeypatch, locked, key) -> None:
+    ctx = _ctx()
+    ctx.locked = locked
+    call, writes = _fill_field_tool(ctx, monkeypatch)
+    result = await call(key, "anything")
+    assert result.error and "no planned answer" in result.error and writes == []
+
+
+@pytest.mark.parametrize("locked", [False, True])
+async def test_fill_field_writes_the_planned_value_for_a_value_that_means_it(monkeypatch, locked) -> None:
+    ctx = _ctx()
+    ctx.locked = locked
+    call, writes = _fill_field_tool(ctx, monkeypatch)
+    assert (await call("1", " jane ")).error is None
+    assert writes == [("1", "Jane")]
+
+
+async def test_a_file_field_is_not_written_by_fill_field_and_upload_needs_the_planned_document(monkeypatch) -> None:
+    ctx = _ctx()
+    call, writes = _fill_field_tool(ctx, monkeypatch)
+    assert (await call("4", "/etc/passwd")).error and writes == []
+    upload_document = _fill_tools(ctx).actions["upload_document"]
+    for key, which in (("1", "resume"), ("4", "cover_letter"), ("999", "resume")):
+        result = await upload_document(key=key, which=which, browser_session=None)
+        assert result.error and "leave it alone" in result.error  # unlocked too
+
+
+# ── NoMatchingOption ──────────────────────────────────────────────────────────
+
+def test_no_matching_option_keeps_the_options_the_page_offered() -> None:
+    exc = fill._no_option("nothing fits", ["", "...", "Yes", "No"])
+    assert isinstance(exc, NoMatchingOption) and isinstance(exc, FillError) and exc.options == ["Yes", "No"]
+
+
+def test_no_options_at_all_is_a_plain_fill_error() -> None:
+    exc = fill._no_option("nothing fits", ["", "..."])
+    assert type(exc) is FillError  # a browser problem (menu never rendered), nothing to re-answer against
+
+
+async def test_fill_keys_records_an_option_miss_and_keeps_the_field_a_problem(monkeypatch) -> None:
+    ctx = _ctx()
+    ctx.mappings["2"] = {"key": "2", "source": "answer", "value": "Maybe"}
+
+    async def write_field(session, ctx_, key, value):
+        if key == "2":
+            raise NoMatchingOption("no option fits", ["Yes", "No"])
+        raise FillError("could not focus")
+
+    monkeypatch.setattr(fill, "write_field", write_field)
+    await fill_keys(None, ctx, ["1", "2"], lambda _: None)
+    assert ctx.option_misses == {"2": ("Maybe", ["Yes", "No"])}  # a plain FillError is not a miss
+    assert ctx.written == {"1": "Jane", "2": "Maybe"}  # both stay in the problem list

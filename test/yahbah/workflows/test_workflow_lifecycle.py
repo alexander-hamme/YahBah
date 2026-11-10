@@ -150,7 +150,7 @@ async def test_testing_mode_fills_once_and_submits_nothing(workflows, db, runtim
 
 async def test_a_cover_letter_is_written_only_when_the_form_asks_for_one(workflows, db, runtime_settings):
     letter = {"key": "2", "label": "Cover letter", "field_type": "file", "source": "cover_letter", "value": "",
-              "confidence": 1.0}
+              "basis": [], "generated": False}
     workflows.stubs.on("map_answers_activity", lambda call: workflows.stubs.default(
         call, field_mappings=[{**letter, "key": "1"}]))
     workflows.stubs.on("generate_cover_letter_activity", lambda call: workflows.stubs.default(

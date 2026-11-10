@@ -17,7 +17,9 @@ Two users, one definition (the JS below):
                       one, before the action reaches the browser. In "navigate" mode (the discover agent
                       clicking "Apply" on a job page) that only applies once the page shows an application
                       form, or the control sits in a form of its own that takes input; in "form" and "fix"
-                      modes it always applies and the agent may not navigate away.
+                      modes it always applies and the agent may not navigate away. With a fill plan
+                      (`text_allowed`, set by make_tools from the FillContext) it also refuses free-text
+                      `input` that is not part of any planned answer (VALUE_NOT_PLANNED).
   check_still_on_form the tripwire after a "fix" agent: if the document was replaced, the URL changed or the
                       form's fields vanished, an unclassified control may have submitted the form
                       (StageFailed "possibly_submitted"; the activity records the claim, the run ends
@@ -27,6 +29,7 @@ control or key raised them (a label the classifier does not know cannot get past
 """
 import asyncio
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -236,6 +239,8 @@ BLOCKED = ("Blocked: this would activate a control that submits or advances the 
            "pipeline's own code may do that. Fix fields with fill_field / upload_document instead, or finish.")
 FORM_PHASE_NO_NAVIGATION = ("Blocked: leave the page alone. This step works on the form that is open; "
                             "navigating away is not allowed.")
+VALUE_NOT_PLANNED = ("Refused: that text is not part of any planned answer. Use fill_field with the planned value, "
+                     "or report the problem as unresolved.")
 _NAVIGATION_ACTIONS = {"navigate", "search", "go_back", "close"}
 
 
@@ -327,17 +332,23 @@ async def refusal_for(mode: AgentMode, session: BrowserSession, action_name: str
 
 class GuardedTools(Tools):
     """browser-use Tools whose `act` runs the guard first. A refusal comes back to the agent as an error
-    result (it can try something else); `mode` is set by run_agent for the phase."""
+    result (it can try something else); `mode` is set by run_agent for the phase. `text_allowed`, set by
+    make_tools for agents working on a planned fill, refuses free-text `input` that is in no planned answer."""
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.mode: AgentMode = "form"  # the safe default: a phase that forgets to say is fully guarded
+        self.text_allowed: Callable[[str], bool] | None = None
 
     async def act(self, action, browser_session, *args, **kwargs):
         for name, params in action.model_dump(exclude_unset=True).items():
             if params is None:
                 continue
-            reason = await refusal_for(self.mode, browser_session, name, params if isinstance(params, dict) else {})
+            p = params if isinstance(params, dict) else {}
+            reason = await refusal_for(self.mode, browser_session, name, p)
+            if (not reason and name == "input" and self.text_allowed is not None
+                    and not self.text_allowed(p.get("text") or "")):
+                reason = VALUE_NOT_PLANNED
             if reason:
                 logs.append("guard.jsonl", {"mode": self.mode, "action": name, "params": params, "refused": reason[:60]})
                 return ActionResult(error=reason)

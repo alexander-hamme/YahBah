@@ -77,7 +77,7 @@ export function makeRow(overrides: Partial<FillEvidenceRow> = {}): FillEvidenceR
     required: true,
     options: [],
     answer: "applicant@example.com",
-    source: "profile.email",
+    source: "autofill",
     basis: ["profile.email"],
     generated: false,
     written: "applicant@example.com",

@@ -1,6 +1,6 @@
 # Contract: Run Lifecycle, Review Gate & Submission Safety
 
-**Status: IMPLEMENTED and authoritative** (agreed 2026-10-19; implemented by batch 1 of the [2026-10-18 roadmap](../../audits/2026-10-18/roadmap.md), amended through 2026-10-21; verified against the code on 2026-10-20).
+**Status: IMPLEMENTED and authoritative** (agreed 2026-10-19; implemented by batch 1 of the [2026-10-18 roadmap](../../audits/2026-10-18/roadmap.md), amended through 2026-10-24; verified against the code on 2026-10-20). The 2026-10-24 amendments (§2 Answers row, §4 "Planned values only", §8 `FieldMapping` and `answer_plan`) describe the two-pass answer engine.
 - **Source of truth:** this page and `src/yahbah/run_state.py` agree. A difference between this page and the code is a defect to report to the main session, not a licence to pick one.
 - **Owner:** the main session. Changing any name, value or semantic here needs main-session approval first; agents report proposed changes, they don't make them unilaterally.
 - **History:** the decisions behind the amendments are in the [changelog](../changelog.md), "Batch 1, wave 2 + close-out (2026-10-20)".
@@ -41,7 +41,7 @@ Set on every terminal status except `COMPLETED`. `error_message` keeps the human
 | Group | Values |
 |---|---|
 | Discover/map | `form_not_found`, `form_unmapped`, `form_changed`, `job_closed`, `login_wall`, `captcha`, `blocked` |
-| Answers | `needs_answer` |
+| Answers | `needs_answer` (`error_message` lists every blocking question as `label (status)`; the `answer_plan` artifact, §8, carries the reasons) |
 | Fill | `fill_failed`, `possibly_submitted` (agent tripwire: the page navigated or the form vanished while an agent acted; always ends `SUBMIT_UNCERTAIN`, §6) |
 | Submit | `submit_button_not_found`, `claim_denied`, `email_code_entry`, `email_code_timeout`, `submit_unverified` |
 | Infra | `browser_error`, `llm_error`, `timeout`, `superseded`, `internal_error` |
@@ -112,7 +112,7 @@ Rules 2–5 and 8 run before any model tier, with zero model calls. Rules 6–7 
 - `approve_submission(review_round: int)`
 - `reject_submission(review_round: int, reason: str | None)`
 
-The workflow ignores, and logs, any signal whose round is not the current round. An approval therefore covers exactly the `answers` and `new_fields` the user saw in that round: all or nothing, with no per-answer edits in batch 1. To change an answer, the user rejects, corrects the stored answer or profile, and retries. Per-answer editing comes in batch 2.
+The workflow ignores, and logs, any signal whose round is not the current round. An approval therefore covers exactly the `answers` and `new_fields` the user saw in that round: all or nothing, with no per-answer edits in batch 1. To change an answer, the user rejects, corrects the stored fact (`config/personal.yaml` `facts:`) or profile, and retries. Per-answer editing comes in batch 2.
 
 **API** (the routes send signals; the workflow writes the resulting state):
 
@@ -140,13 +140,15 @@ The workflow ignores, and logs, any signal whose round is not the current round.
 
 **Interface between tasks 3 and 4:** `fill_form(..., map_new_fields=None)` records such fields on `ctx.unmapped_new_fields: list[dict]`, with the same row shape as schema fields, instead of failing. The FILL/submit activity returns them to the workflow as `FillOutput.unmapped_new_fields: list[dict]`, and the workflow turns them into the review loop.
 
-**Approved-state baseline** (added 2026-10-20). On a locked re-fill, `fill_form` records what every field *without* an approved answer shows once code has filled (`FillContext.baseline`), before any agent runs. It travels as data: `FillOutput.baseline` → `SubmitInput.baseline` → `submit_and_verify`, so the submit gate and every post-claim fix round can tell an agent's write from a starting value. `agent/fill.py` owns its shape. A locked submit without a baseline fails closed (`fill_failed`) before the gate and the claim. A re-fill that submit has to redo itself (browser lost between re-fill and submit) takes its own baseline.
+**Approved-state baseline** (added 2026-10-20; extended to first fills 2026-10-24). In every fill, locked or not, `fill_form` records what every field *without* a planned answer (no mapping, `skip`, or an empty value) shows once code has filled, new fields and option replans included (`FillContext.baseline`), before any agent runs. A field without a planned answer whose content then differs from its baseline is a fill problem, whatever write path changed it, so a first fill fails closed (`fill_failed`) rather than showing the reviewer an agent's stray write. On a locked re-fill the baseline travels as data: `FillOutput.baseline` → `SubmitInput.baseline` → `submit_and_verify`, so the submit gate and every post-claim fix round can tell an agent's write from a starting value. `agent/fill.py` owns its shape. A locked submit without a baseline fails closed (`fill_failed`) before the gate and the claim. A re-fill that submit has to redo itself (browser lost between re-fill and submit) takes its own baseline. `locked` additionally governs new-field handling and the `wrote_from` check.
 
 **The review window** is `review_window_hours: float`. Like `submission_mode`, it is snapshotted at run creation into `ApplicationWorkflowInput.review_window_hours`, so the workflow stays deterministic. Fractional values are valid; tests use sub-hour windows.
 
 **Unverified submit:** `submit_and_verify` raises `StageFailed("submit_unverified")`. It never returns a flagged result.
 
 **After the submit claim**, nothing new may be mapped: in review mode `submit_and_verify` gets `map_new_fields=None`. A post-click problem ends `SUBMIT_UNCERTAIN`.
+
+**Planned values only** (added 2026-10-24, with the two-pass answer engine). In every fill, first or locked, the fix agent's `fill_field` writes only the planned value of a field that has a plan entry, and refuses a field without one. Its free-text `input` action may type only text contained in a planned value (`FillContext.text_allowed`, refused with `VALUE_NOT_PLANNED` and logged to `guard.jsonl` otherwise). A planned value that matches no option of the live widget is re-answered once through the answer engine, with the options read from the page and the miss as feedback (first fill only, never on a locked re-fill); it is never chosen by an agent. A second miss is an ordinary fill problem.
 
 ## 5. `possibly_applied()`, the one dedup predicate
 
@@ -256,14 +258,46 @@ The run then ends `SUBMIT_UNCERTAIN` / `possibly_submitted`, never `FAILED`.
 
 ```json
 {"key": "…", "label": "…", "type": "text", "required": true, "options": [],
- "answer": "intended value", "source": "known-answer key | profile key | resume | cover_letter | custom | skip",
- "basis": ["stored keys/profile fields that back the answer"], "generated": false,
+ "answer": "intended value", "source": "autofill | answer | resume | cover_letter | skip",
+ "basis": ["fact ids (llm/facts.py) the answer rests on"], "generated": false,
  "written": "what code typed/selected", "page_value": "read back from the page", "ok": true}
 ```
 
-**`FieldMapping`** (`src/yahbah/schemas.py`) gains `basis: list[str] = []` and `generated: bool = False`. Task 5 populates them, and everyone else passes them through unchanged.
-- `generated = True`: model-written prose, for open-ended and personality questions.
-- `basis`: required for any non-generated factual answer.
+**`FieldMapping`** (`src/yahbah/schemas.py`), amended 2026-10-24 for the two-pass answer engine (`llm/answers.py`):
+
+```python
+@dataclass
+class FieldMapping:
+    key: str
+    label: str
+    field_type: str
+    source: str      # autofill | answer | resume | cover_letter | skip
+    value: str       # the final value fill writes ("" for resume / cover_letter / skip)
+    basis: list[str] = field(default_factory=list)  # fact ids (llm/facts.py) the value rests on
+    generated: bool = False  # composed narrative for an open-ended free-text question, shown in review
+```
+
+- `confidence` is removed, together with `Settings.min_field_confidence`. The `source == "email"` alias override is gone: the run's alias is the value of the `profile.email` fact.
+- **Invariants:**
+  - every `answer` with `generated=False` has a non-empty `basis`;
+  - a choice, checkbox, number, date, email, tel or url answer is never `generated`;
+  - `autofill` has `basis == [fact id]`.
+- **Replay safety:** nothing rebuilds `FieldMapping(**m)` from history dicts. Prior answers go to the engine as dicts, and fill reads dicts. Histories from before the cutover (with `confidence` and old `source` values) still fill and re-fill: `FillContext.value_for` returns `m["value"]` for any source other than `skip`, `resume` or `cover_letter`.
+
+**`answer_plan` artifact** (artifact type `answer_plan`, file `answer_plan_<stage>_<attempt_tag()>.json`, metadata `{"stage", "review_round"}`, stage `map_answers | fill | map_new_fields`). It is the per-plan diagnostic record of the answer engine and replaces the `field_mappings` artifact. One is written for every plan, before a blocking plan raises `needs_answer`:
+
+```json
+{"stage": "map_answers", "review_round": null,
+ "fields": [{"key", "label", "type", "required", "status": "autofill|answered|document|skipped|unresolved",
+             "source", "value", "basis", "generated", "intent", "jurisdiction", "fact_ids", "reason",
+             "checks": ["problem strings, in order"], "verified": true|false|null, "recovered": false,
+             "repaired": false}],
+ "unresolved": [{"key", "label", "type", "required", "status", "reason", "requested_info", "fact_template"}],
+ "placeholders": ["fact ids"],
+ "calls": [{"step", "role", "fields": <count>, "secs", "prompt_tokens", "output_tokens"}]}
+```
+
+The artifact holds fact ids, never fact values. `value` is the field's own answer, which is already in `submitted_values`. Model-written text (`intent`, `reason`, `requested_info`, verifier problems) is scrubbed of text fact values of 4+ characters before it reaches the artifact. `repaired` marks an accepted composed answer whose unsupported-number sentences code dropped. Unresolved `status` is `missing_fact | needs_clarification | unsupported | invalid_value`; required unresolved rows are what `needs_answer` blocks on, and the run page lists them with a paste-ready `fact_template`.
 
 **`GET /runs/{id}/review`:**
 
@@ -345,6 +379,8 @@ The frontend renders `outcome`; it never derives it from `status`.
 - **Foreign key:** `scheduled_job.promoted_run_id` becomes `ON DELETE SET NULL`, which unblocks deleting promoted runs.
 
 **Migration `0019_answer_cache_provenance`** (task 5, `down_revision = "0018"`) deletes every `answer_cache` row (none has provenance), makes the primary key `(namespace, question_key)` and adds `namespace`, `basis`, `basis_hash`, `model`, `prompt_hash` and `run_id` (`ON DELETE SET NULL`); see [llm](../modules/llm.md). Integration order is task 3, then task 5.
+
+**Migration `0020_drop_answer_cache`** (2026-10-24, `down_revision = "0019"`) drops `answer_cache`: the two-pass answer engine answers every plan from the current facts and caches nothing. The downgrade recreates the empty 0019 table (the cached rows are not restored).
 
 ## 10. Shared code location
 

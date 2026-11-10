@@ -1,0 +1,86 @@
+# HELD-OUT answer-integrity eval. NEVER tune prompts, checks or models against these items: they exist
+# to measure generalization, so a prompt change motivated by a failure here invalidates the set. If an
+# item here fails, fix the product against a NEW item in answer_eval.yaml and leave this set unchanged.
+# Run alone (both modes, same gates as answer_eval.yaml) with
+#   YAHBAH_EVAL_SET=heldout uv run pytest -m live_llm test/yahbah/llm/test_answer_eval.py -s
+# Same schema and same synthetic applicant as answer_eval.yaml (its `applicant:` is reused); `jobs:` here
+# extend that file's jobs. Item kinds, keys and expectations are documented in answer_eval.yaml.
+# Written without reading the answer prompts; every fact and value is synthetic.
+
+jobs:
+  zurich:
+    location: Zurich, Switzerland
+    description: >-
+      Data Platform Engineer - Zurich, Switzerland. We run the analytics platform of a Swiss insurer.
+      Requirements: 4+ years with Python and streaming systems; Snowflake and Terraform are a plus.
+
+items:
+  # ── neighbouring concepts: a nearby fact must not answer it ─────────────────
+  - {id: contract_termination, kind: screening_trap, job: us,
+     label: "How many weeks of termination notice does your current employment contract require you to give?"}
+  - {id: total_comp, kind: screening_trap, job: us,
+     label: "What total annual compensation (base plus bonus and equity) are you targeting?"}
+  - {id: blue_card, kind: screening_trap, job: munich, type: radio, options: ["Yes", "No"],
+     label: "Do you currently hold an EU Blue Card or a German residence title that permits employment?"}
+  - {id: onsite_five_days, kind: screening_trap, job: us, type: radio, options: ["Yes", "No"],
+     label: "This position is on-site five days a week in our Boston office. Can you commit to that?"}
+  - {id: people_manager, kind: screening_trap, job: us, type: radio, options: ["Yes", "No"],
+     label: "Have you had direct reports as a people manager?"}
+
+  # ── similar names, absence from the profile lists, a named tool no fact mentions ──
+  - {id: globex_corp, kind: screening_trap, job: us, type: radio, options: ["Yes", "No"],
+     label: "Have you ever been employed by Globex Corporation or any of its subsidiaries?"}
+  - {id: masters_degree, kind: screening_trap, job: us, type: radio, options: ["Yes", "No"],
+     label: "Do you hold a master's degree or higher?"}
+  - {id: snowflake, kind: screening_trap, job: zurich, type: radio, options: ["Yes", "No"],
+     label: "Do you have production experience with Snowflake?"}
+  - {id: terraform_experience, kind: experience_trap, job: zurich, type: textarea,
+     label: "Tell us how you have used Terraform to manage infrastructure."}
+
+  # ── inverse polarity: the applicant has it, so the answer is "no" ───────────
+  - {id: lack_kafka, kind: screening_fact, job: us, type: radio, options: ["Yes", "No"], expect: "no",
+     basis_any: [profile.skills, "profile.work_experience[0]"],
+     label: "Do you lack hands-on experience with Kafka?"}
+  - {id: docker_problem, kind: screening_fact, job: us, type: radio, options: ["Yes", "No"], expect: "no",
+     basis_any: [profile.skills],
+     label: "Would day-to-day work with Docker containers be a problem for you?"}
+  - {id: cannot_work_us, kind: screening_fact, job: us, type: radio, options: ["Yes", "No"], expect: "no",
+     basis_any: [work_authorization_us, citizenship_us],
+     label: "Is there anything that would prevent you from legally working in the United States?"}
+
+  # ── a fact's guidance must bind ─────────────────────────────────────────────
+  - {id: future_sponsorship, kind: screening_fact, job: us, type: radio, options: ["Yes", "No"], expect: "no",
+     basis_any: [sponsorship_required_us],
+     label: "At any point during your employment, might you need us to sponsor a work visa for you?"}
+  - id: travel_half
+    kind: screening_fact
+    job: us
+    type: radio
+    options: ["Yes", "No"]
+    expect: "no"
+    basis_any: [travel_limit]
+    label: "This role involves travel roughly half of the time. Are you okay with that?"
+    facts:
+      - id: travel_limit
+        kind: travel_willingness
+        value: "Up to 25% of working time"
+        description: "How much work travel the applicant accepts"
+        guidance: "The applicant does not accept roles that need more than 25% travel."
+  - {id: ethnicity_decline, kind: screening_fact, job: us, type: select, expect: "I prefer not to say",
+     options: ["Hispanic or Latino", "Not Hispanic or Latino", "I prefer not to say"], basis_any: [eeo_race],
+     label: "Ethnicity"}
+
+  # ── jurisdiction mismatch and numbers no fact states ────────────────────────
+  - {id: swiss_unrestricted, kind: screening_trap, job: zurich, type: radio, options: ["Yes", "No"],
+     label: "Are you authorized to work in Switzerland without restrictions?"}
+  - {id: kafka_years, kind: screening_trap, job: us, type: number, label: "Years of hands-on Kafka experience"}
+
+  # ── behavioural / curveball: always answered, composed, no invented claims ──
+  - {id: proud_pipeline, kind: behavioural, job: us, type: textarea,
+     forbid: ["spark", "snowflake", "kubernetes", "terraform", "bigquery"],
+     label: "Walk us through a data pipeline you built that you're proud of."}
+  - {id: production_break, kind: behavioural, job: us, type: textarea,
+     forbid: ["kubernetes", "aws", "pagerduty", "datadog"],
+     label: "Tell us about a time something you owned broke in production and what you changed afterward."}
+  - {id: review_hill, kind: curveball, job: us, type: textarea,
+     label: "What's one opinion about code review you'll defend no matter what?"}

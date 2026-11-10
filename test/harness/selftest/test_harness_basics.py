@@ -10,10 +10,10 @@ from pydantic import BaseModel
 
 from harness import env
 from harness.contract import HarnessDrift, fit, make, minimal
-from harness.llm import UnexpectedModelCall, answer, map_all, verdict
+from harness.llm import ModelCall, UnexpectedModelCall, compose_all, composed, verdict
 from yahbah.agent.submit import PostSubmitState
+from yahbah.llm.answers import ComposedAnswer, _reply_model
 from yahbah.llm.client import LLMError, OllamaClient
-from yahbah.llm.field_mapper import _FallbackAnswer, _response_model
 
 
 # ── guards ────────────────────────────────────────────────────────────────────
@@ -98,9 +98,15 @@ async def test_scripted_llm_can_raise_model_errors(llm) -> None:
         await OllamaClient("vision").generate_structured("s", "u", PostSubmitState)
 
 
-def test_answer_fits_todays_fallback_schema() -> None:
-    got = fit(_FallbackAnswer, answer("Yes", quotes=["q"], basis=["work_authorization"]))
-    assert (got.answer, got.basis, got.job_specific) == ("Yes", ["work_authorization"], False)
+def _compose_schema() -> type[BaseModel]:
+    return _reply_model("ComposeResponse", "answers", ComposedAnswer, ["1", "2"], ["relocation", "residence"],
+                        ("evidence_ids", "requested_fact_ids"))
+
+
+def test_composed_fits_the_compose_schema() -> None:
+    got = fit(_compose_schema(), {"answers": [composed("1", "Yes", ["relocation"])]})
+    [entry] = got.answers
+    assert (entry.field_id, entry.status, entry.value, entry.evidence_ids) == ("1", "answered", "Yes", ["relocation"])
 
 
 def test_fit_filters_enum_lists_and_reports_unknown_required_fields() -> None:
@@ -108,7 +114,7 @@ def test_fit_filters_enum_lists_and_reports_unknown_required_fields() -> None:
         answer: str
         basis: list[Literal["work_authorization", "sponsorship_required"]] = []
 
-    got = fit(Reply, answer("No", basis=["sponsorship_required", "job_description"]))
+    got = fit(Reply, {"answer": "No", "basis": ["sponsorship_required", "job_description"]})
     assert got.basis == ["sponsorship_required"]
 
     class Drifted(BaseModel):
@@ -116,14 +122,15 @@ def test_fit_filters_enum_lists_and_reports_unknown_required_fields() -> None:
         jurisdiction: str
 
     with pytest.raises(HarnessDrift, match="jurisdiction"):
-        fit(Drifted, answer("No"))
+        fit(Drifted, {"answer": "No"})
 
 
-def test_map_all_builds_a_valid_mapping_reply() -> None:
-    from harness.llm import ModelCall
-    schema = _response_model(["1", "2"], ["custom", "skip"])
-    reply = fit(schema, map_all("custom")(ModelCall("driver", "structured", "", "", schema, 0)))
-    assert [(m.key, m.source) for m in reply.mappings] == [("1", "custom"), ("2", "custom")]
+def test_compose_all_answers_every_asked_field() -> None:
+    schema = _compose_schema()
+    user = 'FIELDS TO ANSWER (JSON):\n[{"id": "1", "label": "Relocate?"}, {"id": "2", "label": "Where?"}]'
+    handler = compose_all(lambda fid, row: composed(fid, row["label"], ["relocation"]))
+    reply = fit(schema, handler(ModelCall("prose", "structured", "", user, schema, 0)))
+    assert [(a.field_id, a.value) for a in reply.answers] == [("1", "Relocate?"), ("2", "Where?")]
 
 
 def test_make_drops_unknown_fields_and_fills_required_ones() -> None:

@@ -29,7 +29,7 @@ function soonReview(overrides: Partial<ReviewPayload> = {}): ReviewPayload {
     run_id: "run-soon",
     answers: [
       makeRow(),
-      makeRow({ key: "story", label: "Tell us about a hard problem", required: false, answer: STORY, source: "custom",
+      makeRow({ key: "story", label: "Tell us about a hard problem", required: false, answer: STORY, source: "answer",
                 basis: [], generated: true, written: STORY, page_value: STORY }),
     ],
     cover_letter: { text: "Dear Acme team, I build reliable backends.", artifact_id: null },

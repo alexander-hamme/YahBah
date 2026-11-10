@@ -1,8 +1,8 @@
 """
 LLM activities — stateless, retryable.
 
-  map_answers_activity            map every form field to an answer (and score the match)
-  map_new_fields_activity         map fields that appeared on a review re-fill, for the next review round
+  map_answers_activity            answer every form field (llm/answers.py) and score the match
+  map_new_fields_activity         answer fields that appeared on a review re-fill, for the next review round
   generate_cover_letter_activity  cover letter text + PDF
   extract_job_metadata_activity   title, company, salary, technologies, ...
 """
@@ -17,16 +17,18 @@ from temporalio.exceptions import ApplicationError
 
 from yahbah.agent.session import artifact_path
 from yahbah.config import load_prompts_config
+from yahbah.llm.answers import AnswerEngine, AnswerPlan, JobContext, NeedsAnswer
 from yahbah.llm.client import OllamaClient
-from yahbah.llm.field_mapper import FieldMapper, NeedsAnswer
 from yahbah.llm.cover_letter import CoverLetterGenerator
+from yahbah.llm.facts import FactCatalog, FactsConfigError, load_facts
 from yahbah.llm.logs import use_run_log_dir
+from yahbah.llm.match_score import compute_match_score
 from yahbah.llm.profile import profile_text
 from yahbah.run_state import attempt_tag
 from yahbah.schemas import (
     CoverLetterInput,
     CoverLetterOutput,
-    FieldMapping,
+    FillInput,
     FormField,
     JobMetadataInput,
     JobMetadataOutput,
@@ -59,42 +61,61 @@ async def _load_profile() -> ApplicantProfile:
         return profile
 
 
+def field_from_row(row: dict) -> FormField:
+    """A FormField from a schema-field row (agent/fill.py's rows: `type`, not `field_type`)."""
+    return FormField(key=row["key"], label=row["label"], field_type=row["type"], required=bool(row.get("required")),
+                     options=row.get("options") or [], options_total=row.get("options_total"),
+                     empty_value=row.get("empty_value"), autocomplete=row.get("autocomplete"),
+                     description=row.get("description") or "", section=row.get("section") or "")
+
+
+def load_catalog(profile, account_email: str | None) -> FactCatalog:
+    """The run's fact catalog; an invalid or unmigrated personal.yaml fails the run without retries."""
+    try:
+        return load_facts(profile, account_email=account_email)
+    except FactsConfigError as exc:
+        raise ApplicationError(str(exc), type="internal_error", non_retryable=True) from exc
+
+
+def job_context(input_: MapAnswersInput | MapNewFieldsInput | FillInput) -> JobContext:
+    """What the answer engine is told about the job (untrusted page data, context only)."""
+    return JobContext(location=input_.job_location, description=input_.job_description,
+                      company=input_.job_company, title=input_.job_title)
+
+
+async def persist_answer_plan(run_id: str, plan: AnswerPlan, stage: str, review_round: int | None) -> None:
+    """The plan's diagnostics (contract §8 `answer_plan`: fact ids, never fact values)."""
+    path = artifact_path(run_id, f"answer_plan_{stage}_{attempt_tag()}.json")
+    with open(path, "w") as f:
+        json.dump(plan.to_artifact(stage, review_round), f, indent=2, ensure_ascii=False)
+    await persist_artifact_activity(run_id, "answer_plan", path, {"stage": stage, "review_round": review_round})
+
+
+def needs_answer_error(exc: NeedsAnswer) -> ApplicationError:
+    return ApplicationError(str(exc), type="needs_answer", non_retryable=True)
+
+
 @activity.defn
 @heartbeating
 async def map_answers_activity(input_: MapAnswersInput) -> MapAnswersOutput:
     use_run_log_dir(input_.run_id)
     profile = await _load_profile()
+    catalog = load_catalog(profile, input_.account_email)  # profile.email is the run's alias
     fields = [FormField(**f) for f in input_.form_schema_dict.get("fields", [])]
 
-    mapper = FieldMapper()
+    plan = await AnswerEngine().plan(fields, job_context(input_), catalog)
+    await persist_answer_plan(input_.run_id, plan, "map_answers", None)
     try:
-        mappings = await mapper.map(fields, profile, job_description=input_.job_description,
-                                    job_location=input_.job_location)
+        plan.raise_if_blocked()
     except NeedsAnswer as exc:
-        raise ApplicationError(str(exc), type="needs_answer", non_retryable=True) from exc
-
-    # Override the email field with the trackable alias so company replies
-    # can be matched back to this specific application run.
-    if input_.account_email:
-        for m in mappings:
-            if m.source == "email":
-                m.value = input_.account_email
-
+        raise needs_answer_error(exc) from exc
     activity.logger.info(
-        "[map_answers] " + ", ".join(f"[{m.key}] {m.label[:30]!r}<-{m.source}" for m in mappings))
-    mappings_path = artifact_path(input_.run_id, "field_mappings.json")
-    with open(mappings_path, "w") as f:
-        json.dump([asdict(m) for m in mappings], f, indent=2, ensure_ascii=False)
-    await persist_artifact_activity(
-        input_.run_id,
-        "field_mappings",
-        mappings_path,
-    )
+        "[map_answers] " + ", ".join(f"[{m.key}] {m.label[:30]!r}<-{m.source}" for m in plan.mappings))
 
     # Compute match score (separate LLM call)
     match_score, match_rationale = None, None
     try:
-        match_score, match_rationale = await mapper.compute_match_score(
+        match_score, match_rationale = await compute_match_score(
             profile_text(profile, contact=False), input_.job_description
         )
         activity.logger.info(
@@ -106,7 +127,7 @@ async def map_answers_activity(input_: MapAnswersInput) -> MapAnswersOutput:
         activity.logger.warning(f"[match] Failed to compute match score: {exc}")
 
     return MapAnswersOutput(
-        field_mappings=[asdict(m) for m in mappings],
+        field_mappings=[asdict(m) for m in plan.mappings],
         match_score=match_score,
         match_rationale=match_rationale,
     )
@@ -115,26 +136,22 @@ async def map_answers_activity(input_: MapAnswersInput) -> MapAnswersOutput:
 @activity.defn
 @heartbeating
 async def map_new_fields_activity(input_: MapNewFieldsInput) -> MapAnswersOutput:
-    """Map required fields that appeared when an approved application was re-filled (contract §4).
+    """Answer required fields that appeared when an approved application was re-filled (contract §4).
     Their rows (fill-evidence shape, nothing written yet) are saved as the `new_fields` artifact of
-    the review round they go to; the approved mappings are the mapper's prior context."""
+    the review round they go to; the approved mappings are the engine's prior answers."""
     use_run_log_dir(input_.run_id)
     profile = await _load_profile()
-    fields = [FormField(key=f["key"], label=f["label"], field_type=f["type"], required=bool(f.get("required")),
-                        options=f.get("options") or [], options_total=f.get("options_total"),
-                        empty_value=f.get("empty_value"), autocomplete=f.get("autocomplete"))
-              for f in input_.fields]
-    prior = [FieldMapping(**m) for m in input_.approved_mappings]
+    catalog = load_catalog(profile, input_.account_email)
+    fields = [field_from_row(f) for f in input_.fields]
+    plan = await AnswerEngine().plan(fields, job_context(input_), catalog,
+                                     prior=input_.approved_mappings)
+    await persist_answer_plan(input_.run_id, plan, "map_new_fields", input_.review_round)
     try:
-        mappings = await FieldMapper().map(fields, profile, input_.job_description, prior=prior,
-                                           job_location=input_.job_location)
+        plan.raise_if_blocked()
     except NeedsAnswer as exc:
-        raise ApplicationError(str(exc), type="needs_answer", non_retryable=True) from exc
-    for m in mappings:
-        if m.source == "email" and input_.account_email:
-            m.value = input_.account_email
+        raise needs_answer_error(exc) from exc
 
-    by_key = {m.key: m for m in mappings}
+    by_key = {m.key: m for m in plan.mappings}
     rows = [{"key": f.key, "label": f.label, "type": f.field_type, "required": f.required, "options": f.options,
              "answer": (m := by_key.get(f.key)) and m.value, "source": m and m.source,
              "basis": list(m.basis) if m else [], "generated": bool(m and m.generated),
@@ -144,8 +161,9 @@ async def map_new_fields_activity(input_: MapNewFieldsInput) -> MapAnswersOutput
     with open(path, "w") as f:
         json.dump(rows, f, indent=2, ensure_ascii=False)
     await persist_artifact_activity(input_.run_id, "new_fields", path, {"review_round": input_.review_round})
-    activity.logger.info("[map_new_fields] " + ", ".join(f"[{m.key}] {m.label[:30]!r}<-{m.source}" for m in mappings))
-    return MapAnswersOutput(field_mappings=[asdict(m) for m in mappings])
+    activity.logger.info(
+        "[map_new_fields] " + ", ".join(f"[{m.key}] {m.label[:30]!r}<-{m.source}" for m in plan.mappings))
+    return MapAnswersOutput(field_mappings=[asdict(m) for m in plan.mappings])
 
 
 def _text_to_pdf(text: str, path: str) -> None:

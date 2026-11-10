@@ -614,7 +614,8 @@ _MEDIA_TYPES: dict[str, str] = {
     "cover_letter": "application/pdf",
     "trace": "application/zip",
     "form_schema": "application/json",
-    "field_mappings": "application/json",
+    "answer_plan": "application/json",
+    "field_mappings": "application/json",  # legacy: runs from before the answer engine
     "submitted_values": "application/json",
     "new_fields": "application/json",
     "submit_evidence": "text/plain; charset=utf-8",  # JSON lines

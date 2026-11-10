@@ -5,8 +5,8 @@ real worker and every real activity, before any unattended live submission.
   - Browser: real headless Chrome, launched by SessionRegistry as in production, offline: the job host
     `jobs.harness.example` is mapped onto the harness fixture server, everything else is unresolvable.
     The job is the mock-ATS form with an instant success page (synthetic/mock_ats.html).
-  - Models: ScriptedLLM for every OllamaClient call (mapping, match score, job metadata); browser-use
-    agents are never reached on this form. No live model.
+  - Models: ScriptedLLM for every OllamaClient call (the answer engine's interpret / compose / verify,
+    match score, job metadata); browser-use agents are never reached on this form. No live model.
   - Gmail: a fake GmailClient that fails the run if a verification code is ever asked for.
   - Database: the disposable test database, with the synthetic applicant seeded.
   - API: the real /jobs and /runs routes, talking to the same Temporal server.
@@ -26,13 +26,14 @@ from temporalio.client import WorkflowExecutionStatus
 from harness.api import api_client
 from harness.browser import offline_profile
 from harness.forms import CappedAsyncio
+from harness.llm import asked_ids, composed, interpretation, prompt_section, verify_all
 
 pytestmark = [pytest.mark.browser, pytest.mark.e2e]
 
 JOB_HOST = "jobs.harness.example"
 # Chrome: the job host goes to the fixture server, nothing else resolves (harness.browser.OFFLINE_ARGS).
 RESOLVER_RULES = f"--host-resolver-rules=MAP {JOB_HOST} 127.0.0.1 , MAP * ~NOTFOUND , EXCLUDE localhost , EXCLUDE 127.0.0.1"
-SOURCES = {"first name": "first_name", "last name": "last_name", "email": "email"}
+FACT_IDS = {"first name": "profile.first_name", "last name": "profile.last_name", "email": "profile.email"}
 EVIDENCE_KEYS = {"key", "label", "type", "required", "options", "answer", "source", "basis", "generated",
                  "written", "page_value", "ok"}  # contract §8 fill evidence rows
 
@@ -54,13 +55,20 @@ class NoGmail:
 
 
 def script_models(llm) -> None:
-    """Replies for every model call a run makes on the mock-ATS form."""
-    def mapping(call) -> dict:
-        fields = json.loads(call.user.split("FORM FIELDS (JSON):", 1)[1].split("APPLICANT PROFILE:", 1)[0])
-        return {"mappings": [{"key": f["key"], "source": SOURCES[f["label"].rstrip(" *").lower()], "value": "",
-                              "confidence": 1.0} for f in fields]}
+    """Replies for every model call a run makes on the mock-ATS form: the answer engine selects the
+    profile fact of each field, composes its value from the FACTS it is shown, and the verifier accepts."""
+    def interpret(call) -> dict:
+        labels = {f["id"]: f["label"].rstrip(" *").lower() for f in prompt_section(call, "FORM")}
+        return {"fields": [interpretation(fid, [FACT_IDS[labels[fid]]]) for fid in asked_ids(call)]}
 
-    llm.on("driver", "MappingResponse", handler=mapping)
+    def compose(call) -> dict:
+        facts = {b["id"]: b for b in prompt_section(call, "FACTS")}
+        return {"answers": [composed(row["id"], str(facts[row["fact_ids"][0]]["value"]), [row["fact_ids"][0]])
+                            for row in prompt_section(call, "FIELDS TO ANSWER")]}
+
+    llm.on("driver", "InterpretResponse", handler=interpret)
+    llm.on("prose", "ComposeResponse", handler=compose)
+    llm.on("prose", "VerifyResponse", handler=verify_all())
     llm.on("driver", "_MatchScoreResponse", handler=lambda call: {"match_score": 80, "match_rationale": "scripted"})
     # No company: the title + company + location dedup (check B) stays out of the way of the other C7 runs.
     llm.on("driver", "_JobMetadata", handler=lambda call: {"title": "Software Engineer", "location": "Boston, MA"})
@@ -96,6 +104,22 @@ class Pipeline:
     async def artifacts(self, run_id) -> list[dict]:
         return await self.db.fetchall("SELECT id, artifact_type, path, artifact_metadata FROM application_artifact "
                                       "WHERE run_id = :id ORDER BY created_at", id=run_id)
+
+    async def answer_plan(self, run_id) -> dict:
+        """The run's MAP_ANSWERS answer_plan artifact (contract §8), loaded; asserts it is registered."""
+        plans = [a for a in await self.artifacts(run_id) if a["artifact_type"] == "answer_plan"]
+        initial = [a for a in plans if (a["artifact_metadata"] or {}).get("stage") == "map_answers"]
+        assert len(initial) == 1, f"not one map_answers answer_plan artifact: {plans}"
+        assert initial[0]["artifact_metadata"] == {"stage": "map_answers", "review_round": None}
+        return json.loads(Path(initial[0]["path"]).read_text())
+
+
+def assert_grounded_plan(plan: dict) -> None:
+    """Every field of the mock form answered from its profile fact; nothing unresolved."""
+    assert (plan["stage"], plan["unresolved"]) == ("map_answers", []), plan
+    assert {f["status"] for f in plan["fields"]} <= {"autofill", "answered"}, plan["fields"]
+    assert all(f["basis"] for f in plan["fields"] if not f["generated"]), plan["fields"]
+    assert {c["step"] for c in plan["calls"]} <= {"interpret", "compose", "verify"}, plan["calls"]
 
 
 @pytest.fixture
@@ -149,6 +173,8 @@ async def test_c7_a_testing_run_fills_the_form_and_completes_without_a_claim_or_
     assert await pipeline.claims() == []
     kinds = [a["artifact_type"] for a in await pipeline.artifacts(run_id)]
     assert "submitted_values" in kinds and "screenshot" in kinds and "submit_evidence" not in kinds
+    assert "field_mappings" not in kinds, "the answer_plan artifact replaces field_mappings"
+    assert_grounded_plan(await pipeline.answer_plan(run_id))
 
 
 # ── review mode: approve, then submit ─────────────────────────────────────────
@@ -166,6 +192,12 @@ async def test_c7_an_approved_review_run_submits_exactly_once_and_blocks_a_secon
         assert all(set(row) >= EVIDENCE_KEYS for row in review["answers"]), review["answers"]
         assert (answers["First name"]["answer"], answers["First name"]["page_value"]) == ("Jane", "Jane")
         assert answers["Email"]["answer"].startswith("jane.doe+job-"), "the run's email alias was not filled in"
+        assert {row["source"] for row in review["answers"]} <= {"answer", "autofill"}, review["answers"]
+        assert all(row["basis"] for row in review["answers"]
+                   if row["source"] in ("answer", "autofill") and not row["generated"]), review["answers"]
+        assert (answers["First name"]["basis"], answers["Email"]["basis"]) == (
+            ["profile.first_name"], ["profile.email"])
+        assert_grounded_plan(await pipeline.answer_plan(run_id))
         assert all(row["ok"] for row in review["answers"])
         assert review["new_fields"] == []
         shot = await client.get(f"/runs/{run_id}/artifacts/{review['screenshot_artifact_id']}/download")
@@ -220,3 +252,5 @@ async def test_c7_a_rejected_run_is_cancelled_and_an_expired_one_sends_nothing(p
     assert await pipeline.claims() == []
     assert not [a for run_id in (rejected, expiring) for a in await pipeline.artifacts(run_id)
                 if a["artifact_type"] == "submit_evidence"]
+    for run_id in (rejected, expiring):
+        assert_grounded_plan(await pipeline.answer_plan(run_id))

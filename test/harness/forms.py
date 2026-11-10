@@ -45,8 +45,8 @@ def context_for(schema: list[dict], values: dict[str, str]) -> FillContext:
         fields={f["key"]: {"label": f["label"], "type": f["type"], "required": f["required"],
                            "options": f.get("options") or [], "empty_value": f.get("empty_value")} for f in schema},
         mappings={by_label[label]["key"]: {"key": by_label[label]["key"], "label": label,
-                                           "field_type": by_label[label]["type"], "source": "custom",
-                                           "value": value, "confidence": 1.0}
+                                           "field_type": by_label[label]["type"], "source": "answer",
+                                           "value": value, "basis": ["harness_fact"], "generated": False}
                   for label, value in values.items()},
         files={},
     )

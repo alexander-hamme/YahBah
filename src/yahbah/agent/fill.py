@@ -30,6 +30,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 from yahbah.agent.boards import BoardProfile, with_notes
+from yahbah.agent.options import TRUTHY, match_option, norm
 from yahbah.agent.tools import (
     READ_OPEN_OPTIONS_JS,
     READ_OWN_OPTIONS_JS,
@@ -228,28 +229,6 @@ READ_ERRORS_JS = r"""
 
 # ── Option matching ───────────────────────────────────────────────────────────
 
-def _norm(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", s.casefold()).strip()
-
-
-def match_option(value: str, options: list[str]) -> str | None:
-    """The option meaning `value`, decided in code: exact, then a unique prefix of whole words ("No" is a
-    prefix of "No, thanks", not of "Now"), then a unique whole-word match. None when ambiguous (a model
-    decides then)."""
-    v = _norm(value)
-    if not v:
-        return None
-    options = [o for o in options if o and o != "..."]
-    for candidates in (
-        [o for o in options if _norm(o) == v],
-        [o for o in options if _norm(o).startswith(f"{v} ") or (_norm(o) and v.startswith(f"{_norm(o)} "))],
-        [o for o in options if re.search(rf"\b{re.escape(v)}\b", _norm(o))],
-    ):
-        if len(candidates) == 1 or (candidates and all(_norm(c) == v for c in candidates)):
-            return candidates[0]
-    return None
-
-
 class _OptionPick(BaseModel):
     reasoning: str
     choice: int | None  # 1-based index into the options; null if none fits
@@ -281,6 +260,21 @@ async def pick_option(label: str, value: str, options: list[str]) -> str | None:
 
 class FillError(Exception):
     pass
+
+
+class NoMatchingOption(FillError):
+    """The planned value matches none of the field's options (`options`: those the page offers). The answer is
+    wrong for this widget, not the browser: fill_form re-answers it once through the answer engine."""
+
+    def __init__(self, message: str, options: list[str]):
+        super().__init__(message)
+        self.options = [o for o in options if o and o != "..."]
+
+
+def _no_option(message: str, options: list[str]) -> FillError:
+    """No option fits: the answer is wrong for the widget when the page offered options, else a browser problem."""
+    err = NoMatchingOption(message, options)
+    return err if err.options else FillError(message)
 
 
 async def _insert_text(session: BrowserSession, text: str) -> None:
@@ -326,7 +320,7 @@ async def select_native(session: BrowserSession, key: str, label: str, value: st
         session, f"((key) => JSON.stringify([...{_EL}.options].map((o) => o.text.trim())))({json.dumps(key)})"))
     chosen = await pick_option(label, value, options)
     if chosen is None:
-        raise FillError(f"no option of {label!r} fits {value!r}")
+        raise _no_option(f"no option of {label!r} fits {value!r}", options)
     if not await run_js(session, f"{SET_NATIVE_VALUE_JS}({json.dumps(key)}, {json.dumps(chosen)}, true)"):
         raise FillError(f"could not select {chosen!r} in {label!r}")
     return chosen
@@ -346,6 +340,7 @@ async def _visible_options(session: BrowserSession, key: str) -> list[str]:
 async def choose_combobox(session: BrowserSession, key: str, label: str, value: str) -> str:
     """Custom dropdown (React-select & co.): type to filter, pick an option, click it for real."""
     queries = [value] + ([value.split()[0]] if len(value.split()) > 1 else [])
+    seen: list[str] = []
     for query in queries + [""]:
         if not await focus_key(session, key):
             raise FillError(f"could not focus dropdown {label!r}")
@@ -356,6 +351,7 @@ async def choose_combobox(session: BrowserSession, key: str, label: str, value: 
             await session.event_bus.dispatch(SendKeysEvent(keys="Backspace"))
             await session.event_bus.dispatch(SendKeysEvent(keys="ArrowDown"))
         options = await _visible_options(session, key)
+        seen = options or seen
         if not options:
             continue
         chosen = await pick_option(label, value, options)
@@ -364,7 +360,7 @@ async def choose_combobox(session: BrowserSession, key: str, label: str, value: 
             await close_open_dropdowns(session)
             return chosen
     await close_open_dropdowns(session)
-    raise FillError(f"no option of dropdown {label!r} fits {value!r}")
+    raise _no_option(f"no option of dropdown {label!r} fits {value!r}", seen)
 
 
 async def choose_in_group(session: BrowserSession, key: str, label: str, value: str) -> str:
@@ -372,7 +368,7 @@ async def choose_in_group(session: BrowserSession, key: str, label: str, value: 
     options = json.loads(await run_js(session, f"{GROUP_OPTIONS_JS}({json.dumps(key)})"))
     chosen = await pick_option(label, value, options)
     if chosen is None:
-        raise FillError(f"no option of {label!r} fits {value!r}")
+        raise _no_option(f"no option of {label!r} fits {value!r}", options)
     point = await run_js(session, f"{CHOICE_POINT_JS}({json.dumps(key)}, {json.dumps(chosen)})")
     if point and json.loads(point)["checked"]:
         return chosen
@@ -381,11 +377,8 @@ async def choose_in_group(session: BrowserSession, key: str, label: str, value: 
     return chosen
 
 
-_TRUE = {"yes", "true", "1", "checked", "agree", "i agree", "accept", "y", "on"}
-
-
 async def set_checkbox(session: BrowserSession, key: str, value: str) -> str:
-    want = _norm(value) in _TRUE
+    want = norm(value) in TRUTHY
     point = await run_js(session, f"{CHOICE_POINT_JS}({json.dumps(key)}, null)")
     if not point:
         raise FillError(f"checkbox {key} is not clickable")
@@ -419,8 +412,8 @@ async def upload_file(session: BrowserSession, key: str, path: str) -> str:
 class FillContext:
     """Everything the executors (and the fix agent's tools) need for one form."""
 
-    fields: dict[str, dict]       # key -> {label, type, required, options}
-    mappings: dict[str, dict]     # key -> FieldMapping dict {key, label, field_type, source, value}
+    fields: dict[str, dict]       # key -> {label, type, required, options, empty_value, description, section}
+    mappings: dict[str, dict]     # key -> FieldMapping dict {key, label, field_type, source, value, ...}
     files: dict[str, str]         # "resume" / "cover_letter" -> absolute path
     cover_letter_text: str | None = None
     written: dict[str, str] = field(default_factory=dict)  # key -> what we actually wrote/chose
@@ -428,15 +421,32 @@ class FillContext:
     # now, e.g. an approved application being re-filled): schema-field rows, so the caller can send the run back to
     # review. Refreshed from the page by every fill_new_fields call.
     unmapped_new_fields: list[dict] = field(default_factory=list)
-    # Locked: the mappings are the user's approved answers (no mapper, nothing new may be decided). Nothing may put
-    # a different value into a field: the fix agent's fill_field writes only the approved answer, and problems_for
-    # reports a field whose last write came from something else. Set by fill_form and submit_and_verify.
+    # Locked: the mappings are the user's approved answers (no mapper, nothing new may be decided). Locked governs how
+    # new fields are handled and problems_for's wrote_from check (a field whose last write came from something
+    # other than its approved answer is a problem). The planned-value lock of the fix agent's tools and the baseline
+    # below apply in every mode.
     locked: bool = False
     wrote_from: dict[str, str] = field(default_factory=dict)  # key -> the value write_field was asked to write
-    # Locked: what each field with no approved answer shows once code has filled the form (before any agent ran),
-    # key -> signature. Such a field must still show it: an agent adding text, ticking a box or choosing an option
-    # there puts content on the application that nobody approved. None until fill_form has taken it.
+    # What each field with no planned answer (no mapping, `skip`, or an empty value) shows once code has filled the
+    # form (before any agent ran), key -> signature; taken by fill_form in every mode, after new fields and option
+    # replans, so a field whose planned value code wrote late is not in it. Such a field must still show it,
+    # whatever way an agent writes (typing, keys, clicks, uploads): content nobody planned must not reach the
+    # application. None until fill_form has taken it.
     baseline: dict[str, str] | None = None
+    # key -> (value, options seen on the page) for fields whose planned value matched none of the live widget's
+    # options: fill_form re-answers them once through map_new_fields.
+    option_misses: dict[str, tuple[str, list[str]]] = field(default_factory=dict)
+
+    def text_allowed(self, text: str) -> bool:
+        """May an agent type `text`? Only what is part of a planned answer (or nothing at all)."""
+        want = norm(text)
+        if not want:
+            return True
+        for key in self.mappings:
+            planned = self.value_for(key)
+            if planned and want in norm(planned):
+                return True
+        return False
 
     def value_for(self, key: str) -> str | None:
         m = self.mappings.get(key)
@@ -479,16 +489,16 @@ async def read_errors(session: BrowserSession) -> list[dict]:
 
 
 def _tokens(s: str) -> Counter:
-    return Counter(_norm(s).split())
+    return Counter(norm(s).split())
 
 
 def value_ok(f: dict, written: str, actual: dict) -> bool:
     """Does the page now show what we wrote? (f: the field, with its type and empty_value)"""
     ftype = f.get("type")
-    want = _norm(written)
+    want = norm(written)
     if ftype == "file":
         # The input may be gone (widgets swap it for the file name): its tagged container still shows it.
-        return actual.get("files", 0) > 0 or (bool(want) and want in _norm(actual.get("shown") or ""))
+        return actual.get("files", 0) > 0 or (bool(want) and want in norm(actual.get("shown") or ""))
     if actual.get("missing"):
         return False
     if ftype == "checkbox" and written in ("checked", "unchecked"):
@@ -499,7 +509,7 @@ def value_ok(f: dict, written: str, actual: dict) -> bool:
         # "+1" for "United States +1" passes; an untouched "Select..." or another option fails.
         new = _tokens(actual.get("value") or "") - _tokens(f["empty_value"])
         return bool(new) and not (new - _tokens(written))
-    got = _norm(actual.get("value") or "")
+    got = norm(actual.get("value") or "")
     if ftype in ("select", "combobox", "radio", "checkbox"):
         return bool(want) and want in got
     return got == want
@@ -517,20 +527,20 @@ async def capture_empty_values(session: BrowserSession, fields: list[dict]) -> N
 
 def is_empty(f: dict, actual: dict) -> bool:
     value = actual.get("value") or ""
-    if f.get("empty_value") is not None and _norm(value) == _norm(f["empty_value"]):
+    if f.get("empty_value") is not None and norm(value) == norm(f["empty_value"]):
         return True  # a custom widget still showing its placeholder
     return not (value or actual.get("checked") or actual.get("files"))
 
 
 def content_signature(actual: dict) -> str:
     """What a field shows, comparably: its text, whether it is ticked, how many files it holds."""
-    return json.dumps([_norm(actual.get("value") or ""), bool(actual.get("checked")), actual.get("files", 0),
-                       _norm(actual.get("shown") or "")])
+    return json.dumps([norm(actual.get("value") or ""), bool(actual.get("checked")), actual.get("files", 0),
+                       norm(actual.get("shown") or "")])
 
 
 async def take_baseline(session: BrowserSession, ctx: FillContext) -> dict[str, dict]:
-    """Locked answers: remember what every field without an approved answer shows now (see FillContext.baseline).
-    Returns the values read, by key."""
+    """Remember what every field without a planned answer shows now, after code has filled the form (see
+    FillContext.baseline). Returns the values read, by key."""
     keys = [k for k in ctx.fields if not ctx.value_for(k)]
     values = await read_values(session, keys) if keys else {}
     ctx.baseline = {k: content_signature(values.get(k) or {}) for k in keys}
@@ -540,9 +550,9 @@ async def take_baseline(session: BrowserSession, ctx: FillContext) -> dict[str, 
 def problems_for(ctx: FillContext, values: dict[str, dict], errors: list[dict]) -> list[str]:
     """Human/model-readable list of what's wrong: mismatches, empty required fields, validation errors."""
     problems = []
-    for key, was in (ctx.baseline or {}).items() if ctx.locked else ():
+    for key, was in (ctx.baseline or {}).items():
         if key in ctx.fields and content_signature(values.get(key) or {}) != was:
-            problems.append(f'[{key}] "{ctx.fields[key]["label"]}": has no approved answer but its content changed '
+            problems.append(f'[{key}] "{ctx.fields[key]["label"]}": has no planned answer but its content changed '
                             f'to {(values.get(key) or {}).get("value", "")[:60]!r}')
     for key, f in ctx.fields.items():
         actual = values.get(key, {})
@@ -600,24 +610,45 @@ async def fill_keys(session: BrowserSession, ctx: FillContext, keys: list[str], 
         beat(f"fill [{key}] {ctx.fields[key]['label'][:40]}")
         try:
             await write_field(session, ctx, key, value)
+        except NoMatchingOption as exc:
+            ctx.option_misses[key] = (value, exc.options)
+            logger.warning(f"[fill] [{key}] {ctx.fields[key]['label']!r}: {exc}")
+            ctx.written.setdefault(key, value)  # keeps it in the problem list for the fix agent
         except FillError as exc:
             logger.warning(f"[fill] [{key}] {ctx.fields[key]['label']!r}: {exc}")
             ctx.written.setdefault(key, value)  # keeps it in the problem list for the fix agent
+
+
+async def read_new_comboboxes(session: BrowserSession, rows: list[dict]) -> None:
+    """Custom dropdowns have no options in the schema: open each one and read them (in place)."""
+    for f in rows:
+        if f["type"] == "combobox" and not f.get("options"):
+            f.pop("options_note", None)
+            data = await read_dropdown_by_key(session, f["key"])
+            f["options"], f["options_total"] = data["options"], data["total"] or None
+
+
+def _schema_row(f: dict) -> dict:
+    """A schema field as the rows map_new_fields receives."""
+    return {"key": f["key"], "label": f["label"], "type": f["type"], "required": bool(f["required"]),
+            "options": f.get("options") or [], "options_total": f.get("options_total"),
+            "description": f.get("description") or "", "section": f.get("section") or "",
+            "autocomplete": f.get("autocomplete"), "empty_value": f.get("empty_value")}
+
+
+def _ctx_entry(f: dict) -> dict:
+    return {"label": f["label"], "type": f["type"], "required": bool(f["required"]),
+            "options": f.get("options") or [], "empty_value": f.get("empty_value"),
+            "description": f.get("description") or "", "section": f.get("section") or ""}
 
 
 async def new_fields_on_page(session: BrowserSession, ctx: FillContext) -> list[dict]:
     """Visible *required* fields the context has no entry for, as schema rows (what discover.map_form returns
     for a field, options of custom dropdowns read). Optional ones can stay empty: nothing to ask about."""
     new = [f for f in await get_form_schema(session) if f["key"] not in ctx.fields and f["label"] and f["required"]]
-    for f in new:
-        if f["type"] == "combobox" and not f.get("options"):
-            f.pop("options_note", None)
-            data = await read_dropdown_by_key(session, f["key"])
-            f["options"], f["options_total"] = data["options"], data["total"] or None
+    await read_new_comboboxes(session, new)
     await capture_empty_values(session, new)
-    return [{"key": f["key"], "label": f["label"], "type": f["type"], "required": bool(f["required"]),
-             "options": f.get("options") or [], "options_total": f.get("options_total"),
-             "autocomplete": f.get("autocomplete"), "empty_value": f.get("empty_value")} for f in new]
+    return [_schema_row(f) for f in new]
 
 
 async def fill_new_fields(session: BrowserSession, ctx: FillContext, map_new_fields: MapNewFields | None,
@@ -630,12 +661,11 @@ async def fill_new_fields(session: BrowserSession, ctx: FillContext, map_new_fie
     if map_new_fields is None:
         # A revealed field that already has an approved mapping (same key and label) is an approved answer: fill it.
         approved = [f for f in await get_form_schema(session)
-                    if f["key"] not in ctx.fields and f["label"] and _norm((ctx.mappings.get(f["key"]) or {}).get("label") or "") == _norm(f["label"])]
+                    if f["key"] not in ctx.fields and f["label"] and norm((ctx.mappings.get(f["key"]) or {}).get("label") or "") == norm(f["label"])]
         if approved:
             await capture_empty_values(session, approved)
             for f in approved:
-                ctx.fields[f["key"]] = {"label": f["label"], "type": f["type"], "required": bool(f["required"]),
-                                        "options": f.get("options") or [], "empty_value": f.get("empty_value")}
+                ctx.fields[f["key"]] = _ctx_entry(f)
             await fill_keys(session, ctx, [f["key"] for f in approved], beat)
         ctx.unmapped_new_fields = await new_fields_on_page(session, ctx)
         if ctx.unmapped_new_fields:
@@ -647,14 +677,38 @@ async def fill_new_fields(session: BrowserSession, ctx: FillContext, map_new_fie
     if not new:
         return 0
     logger.info(f"[fill] {len(new)} new field(s) appeared: {[f['label'] for f in new]}")
+    await read_new_comboboxes(session, new)
     await capture_empty_values(session, new)
     for f in new:
-        ctx.fields[f["key"]] = {"label": f["label"], "type": f["type"], "required": bool(f["required"]),
-                                "options": f.get("options") or [], "empty_value": f.get("empty_value")}
-    for m in await map_new_fields(new):
+        ctx.fields[f["key"]] = _ctx_entry(f)
+    for m in await map_new_fields([_schema_row(f) for f in new]):
         ctx.mappings[m["key"]] = m
     await fill_keys(session, ctx, [f["key"] for f in new], beat)
     return len(new)
+
+
+async def replan_option_misses(session: BrowserSession, ctx: FillContext, map_new_fields: MapNewFields,
+                               beat: Beat) -> None:
+    """A planned value that matched none of the live widget's options goes back to the answer engine once, with
+    the options the page really offers; the fields are then written again. Never an agent's choice."""
+    misses, ctx.option_misses = ctx.option_misses, {}
+    rows = []
+    for key, (value, options) in misses.items():
+        f = ctx.fields[key]
+        rows.append({
+            "key": key, "label": f["label"], "type": f["type"], "required": bool(f["required"]),
+            "options": options[:40], "options_total": len(options) if len(options) > 40 else None,
+            "description": f.get("description") or "", "section": f.get("section") or "",
+            "autocomplete": None, "empty_value": f.get("empty_value"),
+            "feedback": f"{value!r} matches none of this field's options; choose one of them.",
+        })
+        f["options"] = options[:40]
+        ctx.written.pop(key, None)
+        ctx.wrote_from.pop(key, None)
+    logger.info(f"[fill] re-answering {len(rows)} field(s) whose answer matched no option: {list(misses)}")
+    for m in await map_new_fields(rows):
+        ctx.mappings[m["key"]] = m
+    await fill_keys(session, ctx, list(misses), beat)
 
 
 async def fill_form(
@@ -676,6 +730,8 @@ async def fill_form(
     for _ in range(2):  # e.g. "If yes, please explain" shows up after answering "Yes"
         if not await fill_new_fields(session, ctx, map_new_fields, beat):
             break
+    if map_new_fields is not None and ctx.option_misses:
+        await replan_option_misses(session, ctx, map_new_fields, beat)
 
     await close_open_dropdowns(session)
     values = await read_values(session, list(ctx.fields))
@@ -688,7 +744,9 @@ async def fill_form(
         values = await read_values(session, list(ctx.fields))
     if map_new_fields is None:
         await fill_new_fields(session, ctx, None, beat)  # (refresh the unmapped list after the retries)
-        await take_baseline(session, ctx)  # from here on, only approved answers may change anything
+    # From here on only planned answers may change anything. Compared against the same read as the baseline, so
+    # whatever the page did between two reads is not mistaken for an agent's write.
+    values = {**values, **await take_baseline(session, ctx)}
 
     problems = problems_for(ctx, values, await read_errors(session))
     if problems:
@@ -741,21 +799,14 @@ def register_fill_tools(tools: Tools, ctx: FillContext) -> None:
         "fields, dropdowns, radio groups and checkboxes (for these, pass the option text). Read-back verified."
     )
     async def fill_field(key: str, value: str, browser_session: BrowserSession):
-        if ctx.locked:  # approved answers: this tool writes exactly the approved one, or nothing
-            approved = ctx.value_for(key) if key in ctx.fields and ctx.fields[key]["type"] != "file" else None
-            if approved is None:
-                return ActionResult(error=f"[{key}] is not a field with an approved answer; leave it alone.")
-            if _norm(value) != _norm(approved) and match_option(approved, [value]) != value:
-                return ActionResult(error=f"[{key}] has an approved answer ({approved!r}); a different value "
-                                          f"({value!r}) is not allowed. Report the problem as unresolved instead.")
-            value = approved
-        if key not in ctx.fields:
-            schema = {f["key"]: f for f in await get_form_schema(browser_session)}
-            if key not in schema:
-                return ActionResult(error=f"No field with key {key!r}; call read_form_schema for the keys.")
-            f = schema[key]
-            ctx.fields[key] = {"label": f["label"], "type": f["type"], "required": bool(f["required"]),
-                               "options": f.get("options") or []}
+        # This tool writes exactly the planned answer of a field with a plan entry, or nothing (every mode).
+        planned = ctx.value_for(key) if key in ctx.fields and ctx.fields[key]["type"] != "file" else None
+        if planned is None:
+            return ActionResult(error=f"[{key}] has no planned answer; leave it alone and report it as unresolved.")
+        if norm(value) != norm(planned) and match_option(planned, [value]) != value:
+            return ActionResult(error=f"[{key}] has an approved answer ({planned!r}); a different value "
+                                      f"({value!r}) is not allowed. Report the problem as unresolved instead.")
+        value = planned
         try:
             written = await write_field(browser_session, ctx, key, value)
         except FillError as exc:
@@ -767,8 +818,8 @@ def register_fill_tools(tools: Tools, ctx: FillContext) -> None:
 
     @tools.action('Upload a document to a file field by its key. which must be "resume" or "cover_letter".')
     async def upload_document(key: str, which: str, browser_session: BrowserSession):
-        if ctx.locked and (key not in ctx.fields or (ctx.mappings.get(key) or {}).get("source") != which):
-            return ActionResult(error=f"[{key}] is not the field approved for the {which}; leave it alone.")
+        if key not in ctx.fields or (ctx.mappings.get(key) or {}).get("source") != which:
+            return ActionResult(error=f"[{key}] is not the field planned for the {which}; leave it alone.")
         path = ctx.files.get(which)
         if not path:
             return ActionResult(error=f'which must be one of {sorted(ctx.files)}')

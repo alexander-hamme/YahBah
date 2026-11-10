@@ -6,7 +6,7 @@ the same num_ctx and never reloads mid-run.
 
 Roles:
   driver      qwen3-coder-next — agent loops, DOM/HTML work, mapping JSON, page judging (text only)
-  prose       qwen3.8:27b      — cover letters, free-text answers
+  prose       qwen3.8:27b      — cover letters, free-text answers, answer verification
   vision      qwen3.8:27b      — look_at_screen, reading a page from a screenshot
   escalation  qwen3.8:27b      — thinking + screenshots for a few steps when the driver stalls
 """

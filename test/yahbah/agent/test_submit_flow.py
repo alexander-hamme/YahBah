@@ -298,8 +298,8 @@ async def test_with_a_mapper_new_fields_are_answered_and_filled_before_the_claim
     await reveal(browser)
 
     async def mapper(new_fields: list[dict]) -> list[dict]:
-        return [{"key": f["key"], "label": f["label"], "field_type": f["type"], "source": "custom",
-                 "value": "None needed", "confidence": 1.0} for f in new_fields]
+        return [{"key": f["key"], "label": f["label"], "field_type": f["type"], "source": "answer",
+                 "value": "None needed", "basis": ["harness_fact"], "generated": False} for f in new_fields]
 
     claim = Claim()
     await run(browser, ctx, claim=claim, map_new_fields=mapper)
@@ -387,7 +387,7 @@ async def test_the_post_claim_fix_agent_cannot_add_text_to_an_unapproved_field_g
         browser, pages, fast, agent_llm, fixture_server) -> None:
     """The submit step builds its own FillContext and gets the fill step's baseline as data; a fix agent typing
     into a field nobody answered after the claim ends the attempt, with no second click."""
-    from harness.browser import element_index
+    from harness.agent import AgentScript
 
     # The first submit shows an error; any edit clears it (so the fix agent's typing "fixes" the page); a second
     # submit would succeed. Only the baseline stands between the agent's text and a successful, unapproved submit.
@@ -402,10 +402,15 @@ async def test_the_post_claim_fix_agent_cannot_add_text_to_an_unapproved_field_g
     fresh.baseline = dict(ctx.baseline)  # FillOutput.baseline -> SubmitInput.baseline
 
     async def type_comment(step):
-        index = await element_index(step.session, id="comments")
-        return [{"input": {"index": index, "text": "I would also accept a lower salary.", "clear": True}}]
+        # past the tool guard (it refuses `input` text that is not planned; test_reverify_probes): this test is
+        # about what the baseline does with text that got onto the page anyway
+        from yahbah.agent.fill import fill_text
 
-    agent_llm.step(type_comment).done(data={"fixed": True, "unresolved": []})
+        key = next(f["key"] for f in await get_form_schema(step.session) if f["label"].startswith("Anything else"))
+        await fill_text(step.session, key, "I would also accept a lower salary.")
+        return [AgentScript.done_action(step, data={"fixed": True, "unresolved": []})]
+
+    agent_llm.step(type_comment)
     claim, records = Claim(), Records()
     with pytest.raises(StageFailed) as exc:
         await run(browser, fresh, claim=claim, records=records)

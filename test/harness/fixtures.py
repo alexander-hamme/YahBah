@@ -5,7 +5,7 @@
   browser           (module)   headless browser-use session that can only reach localhost [browser]
   llm               (test)     ScriptedLLM installed on OllamaClient (harness.llm)
   agent_llm         (test)     AgentScript installed as every browser-use chat model (harness.agent)
-  applicant_facts   (test)     the synthetic applicant's stored answers; .set({...}) rewrites them
+  applicant_facts   (test)     the synthetic applicant's personal.yaml; .set_facts/.set_value/.add/.remove facts
   runtime_settings  (test)     config/settings.yaml redirected to a temp file; .set(key=value)
   pg_database       (session)  the disposable yahbah_test_<hex> database; skips if Postgres is down
   db                (test)     TestDB on it, tables truncated, AsyncSessionLocal patched [db]
@@ -13,6 +13,7 @@
   workflows         (test)     stubs + the real worker + run helpers [temporal, db]
   activity_env      (test)     activity_env(workflow_id=..., attempt=...) -> temporalio ActivityEnvironment
 """
+import copy
 import dataclasses
 import importlib
 import inspect
@@ -37,7 +38,7 @@ __all__ = ["fixture_server", "pages", "browser", "llm", "agent_llm", "applicant_
 
 # Modules that bind AsyncSessionLocal at import; imported before patching so all of them get patched.
 _SESSION_USERS = ("yahbah.workflows.activities.db_ops", "yahbah.workflows.activities.browser",
-                  "yahbah.workflows.activities.llm", "yahbah.jobs", "yahbah.llm.field_mapper",
+                  "yahbah.workflows.activities.llm", "yahbah.jobs",
                   "yahbah.worker", "yahbah.api.routes.runs", "yahbah.api.routes.jobs")
 
 
@@ -127,22 +128,39 @@ def _live_llm_gate(request):
 # ── configuration ─────────────────────────────────────────────────────────────
 
 class ApplicantFacts:
-    """The synthetic applicant's stored answers (config/personal.yaml known_answers)."""
+    """The synthetic applicant's personal.yaml (facts:, read by the answer engine). Every change rewrites the
+    file and drops the cached config."""
 
     def __init__(self, path: Path, monkeypatch) -> None:
         from yahbah.config import load_prompts_config, settings
 
         self.path, self._clear = path, load_prompts_config.cache_clear
         monkeypatch.setattr(settings, "personal_path", str(path))
-        self.set(profile.KNOWN_ANSWERS)
+        self.facts = copy.deepcopy(profile.SYNTHETIC_FACTS)
+        self._write()
 
-    def set(self, known_answers: dict[str, str]) -> None:
-        self.known_answers = dict(known_answers)
-        profile.write_personal(self.path, self.known_answers)
+    def _write(self) -> None:
+        profile.write_personal(self.path, self.facts)
         self._clear()
 
-    def update(self, **answers: str) -> None:
-        self.set({**self.known_answers, **answers})
+    def set_facts(self, facts: list[dict]) -> None:
+        self.facts = copy.deepcopy(facts)
+        self._write()
+
+    def set_value(self, fact_id: str, value) -> None:
+        fact = next((f for f in self.facts if f["id"] == fact_id), None)
+        if fact is None:
+            raise KeyError(f"no fact {fact_id!r}")
+        fact["value"] = value
+        self._write()
+
+    def add(self, fact: dict) -> None:
+        self.facts.append(copy.deepcopy(fact))
+        self._write()
+
+    def remove(self, fact_id: str) -> None:
+        self.facts = [f for f in self.facts if f["id"] != fact_id]
+        self._write()
 
 
 @pytest.fixture

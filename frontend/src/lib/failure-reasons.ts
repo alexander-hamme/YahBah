@@ -41,7 +41,8 @@ export const FAILURE_REASON_INFO: Record<FailureReason, FailureReasonInfo> = {
   },
   needs_answer: {
     title: "Needs an answer from you",
-    detail: "A required question has no stored answer. Add the answer, then retry.",
+    detail:
+      "Some required questions couldn't be answered from your stored facts. The list below says what's missing: add those facts to config/personal.yaml, then retry.",
   },
   fill_failed: {
     title: "Couldn't fill the form",

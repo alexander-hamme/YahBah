@@ -12,6 +12,7 @@ from yahbah.agent.controls import (
     FIND_SUBMIT_JS,
     FORM_PAGE_JS,
     FORM_PHASE_NO_NAVIGATION,
+    VALUE_NOT_PLANNED,
     GuardedTools,
     refusal_for,
 )
@@ -287,6 +288,81 @@ async def test_a_refusal_comes_back_to_the_agent_as_an_error_and_nothing_is_clic
     harmless = tools.registry.create_action_model()(click={"index": await index_of(zoo, "b-back")})
     assert (await tools.act(action=harmless, browser_session=zoo)).error is None
     assert await fixture_server.wait_events("clicked", 1) == 1
+
+
+# ── planned values only (contract run-lifecycle §4) ───────────────────────────
+
+@pytest.fixture
+def acted(monkeypatch) -> list[dict]:
+    """Actions that got past the guard; browser-use's own `act` is stubbed, so nothing is typed."""
+    from browser_use import ActionResult, Tools
+
+    calls: list[dict] = []
+
+    async def fake_act(self, action, browser_session, *args, **kwargs):
+        calls.append(action.model_dump(exclude_unset=True))
+        return ActionResult(extracted_content="done")
+
+    monkeypatch.setattr(Tools, "act", fake_act)
+    return calls
+
+
+@pytest.fixture
+def guard_log(monkeypatch) -> list[dict]:
+    from yahbah.llm import logs
+
+    records: list[dict] = []
+    monkeypatch.setattr(logs, "append", lambda name, rec: records.append({"file": name, **rec}))
+    return records
+
+
+async def type_into(tools: GuardedTools, session, element_id: str, text: str):
+    action = tools.registry.create_action_model()(input={"index": await index_of(session, element_id), "text": text})
+    return await tools.act(action=action, browser_session=session)
+
+
+async def test_text_that_is_in_no_planned_answer_is_refused_and_logged(zoo, acted, guard_log) -> None:
+    tools = GuardedTools()
+    tools.text_allowed = lambda text: text in "Jane Doe"
+    result = await type_into(tools, zoo, "first", "Totally made up")
+    assert result.error == VALUE_NOT_PLANNED and acted == []
+    assert guard_log == [{"file": "guard.jsonl", "mode": "form", "action": "input",
+                          "params": {"index": guard_log[0]["params"]["index"], "text": "Totally made up"},
+                          "refused": VALUE_NOT_PLANNED[:60]}]
+
+
+async def test_part_of_a_planned_answer_may_be_typed(zoo, acted, guard_log) -> None:
+    tools = GuardedTools()
+    tools.text_allowed = lambda text: text in "Jane Doe"
+    assert (await type_into(tools, zoo, "first", "Jane")).error is None
+    assert [a["input"]["text"] for a in acted] == ["Jane"] and guard_log == []
+
+
+async def test_the_submit_guard_still_decides_first(zoo, acted, guard_log) -> None:
+    tools = GuardedTools()
+    tools.text_allowed = lambda text: True
+    assert (await type_into(tools, zoo, "b-submit", "Jane")).error == BLOCKED
+    assert acted == [] and guard_log[0]["refused"] == BLOCKED[:60]
+
+
+async def test_without_a_plan_typing_is_not_restricted(zoo, acted, guard_log) -> None:
+    tools = GuardedTools()
+    assert tools.text_allowed is None
+    assert (await type_into(tools, zoo, "first", "Totally made up")).error is None
+    assert len(acted) == 1 and guard_log == []
+
+
+async def test_make_tools_restricts_typing_to_the_fill_plan(zoo, acted, guard_log) -> None:
+    from harness.forms import context_for
+    from yahbah.agent.tools import make_tools
+
+    assert make_tools()[0].text_allowed is None
+    ctx = context_for(await get_form_schema(zoo), {"First name": "Jane Doe", "Notes": "Happy to relocate."})
+    tools, _ = make_tools(fill_ctx=ctx)
+    assert tools.text_allowed == ctx.text_allowed
+    assert (await type_into(tools, zoo, "notes", "happy to relocate")).error is None
+    assert (await type_into(tools, zoo, "notes", "I also hold a security clearance.")).error == VALUE_NOT_PLANNED
+    assert len(acted) == 1
 
 
 async def test_make_crew_builds_only_guarded_tools_and_run_agent_insists_on_them(zoo) -> None:

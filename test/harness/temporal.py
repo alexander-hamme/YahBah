@@ -207,8 +207,8 @@ class Stubs:
 
 
 STUB_FIELD = {"key": "1", "label": "First name", "field_type": "text", "required": True, "options": []}
-STUB_MAPPING = {"key": "1", "label": "First name", "field_type": "text", "source": "first_name",
-                "value": "Jane", "confidence": 1.0}
+STUB_MAPPING = {"key": "1", "label": "First name", "field_type": "text", "source": "autofill",
+                "value": "Jane", "basis": ["profile.first_name"], "generated": False}
 
 
 class _ClientShim:

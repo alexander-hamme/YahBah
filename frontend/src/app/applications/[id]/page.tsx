@@ -19,6 +19,7 @@ import { StepTimeline } from "@/components/step-timeline";
 import { ArtifactViewer } from "@/components/artifact-viewer";
 import { FieldMappingsTable } from "@/components/field-mappings-table";
 import { UncertainResolution } from "@/components/uncertain-resolution";
+import { UnansweredQuestions } from "@/components/unanswered-questions";
 
 function DetailSkeleton() {
   return (
@@ -53,7 +54,7 @@ export default function ApplicationDetailPage({
     refetchInterval: 10_000,
   });
 
-  const { data: artifacts } = useQuery({
+  const { data: artifacts, isError: artifactsFailed } = useQuery({
     queryKey: ["run-artifacts", id],
     queryFn: () => getRunArtifacts(id),
     refetchInterval: 10_000,
@@ -140,6 +141,11 @@ export default function ApplicationDetailPage({
       <UncertainResolution run={run} />
 
       <RunInfoCard run={run} statusUpdates={statusUpdates ?? []} />
+
+      {run.failure_reason === "needs_answer" && (
+        // undefined while the artifact list loads; a failed list reads as "couldn't load"
+        <UnansweredQuestions artifacts={artifacts ?? (artifactsFailed ? [] : undefined)} runId={id} />
+      )}
 
       {run.job_posting && (
         <JobMetadataCard jobPosting={run.job_posting} jobUrl={run.job_url} matchScore={run.match_score} matchRationale={run.match_rationale} />

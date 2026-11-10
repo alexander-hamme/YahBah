@@ -1,0 +1,67 @@
+<!doctype html>
+<!--
+  Field context for read_form_schema (harness fixture, test/yahbah/agent/test_form_schema_context.py):
+  - helper text tied to controls by aria-describedby (one id, two ids of which one is an empty error slot,
+    a fieldset's own, and a radio group that has it only on its first member);
+  - the nearest visible heading above each field as its section: two <h2> sections, a hidden <h2> that must be
+    skipped, a fieldset legend that is a section for the input inside it, and a legend that is the label of the
+    file input inside it (so not its section);
+  - a native select with 30 options (all of them must be read);
+  - a search box above every heading (no section).
+  Static page: no scripts, nothing is reported.
+-->
+<html lang="en"><head><meta charset="utf-8"><title>Apply - Platform Engineer</title></head>
+<body>
+<header><input id="search" type="search" aria-label="Search jobs"></header>
+<main>
+  <h1>Platform Engineer</h1>
+  <form id="application" novalidate>
+    <h2>Personal information</h2>
+    <div><label for="first">First name *</label>
+      <input id="first" required aria-describedby="first-hint">
+      <span id="first-hint">As it appears on your passport.</span></div>
+    <div><label for="email">Email *</label>
+      <input id="email" type="email" required aria-describedby="email-error email-hint">
+      <span id="email-error"></span><span id="email-hint">We only use it for this application.</span></div>
+    <div><label for="nick">Preferred name</label> <input id="nick"></div>
+
+    <h2>Work eligibility</h2>
+    <fieldset aria-describedby="auth-hint">
+      <legend>Are you authorized to work in the United States? *</legend>
+      <p id="auth-hint">Without needing visa sponsorship now or in the future.</p>
+      <label><input type="radio" name="auth" value="yes" required> Yes</label>
+      <label><input type="radio" name="auth" value="no"> No</label>
+    </fieldset>
+    <div>
+      <span>Willing to relocate?</span>
+      <label><input type="radio" name="relocate" value="yes" aria-describedby="relocate-hint"> Yes</label>
+      <label><input type="radio" name="relocate" value="no"> No</label>
+      <span id="relocate-hint">The role is based in Boston, MA.</span>
+    </div>
+    <fieldset>
+      <legend>Relocation details</legend>
+      <div><label for="city">Preferred city</label> <input id="city"></div>
+    </fieldset>
+    <h2 hidden>Old step</h2>
+    <div><label for="country">Country of residence</label>
+      <select id="country">
+        <option>Country 01</option><option>Country 02</option><option>Country 03</option><option>Country 04</option>
+        <option>Country 05</option><option>Country 06</option><option>Country 07</option><option>Country 08</option>
+        <option>Country 09</option><option>Country 10</option><option>Country 11</option><option>Country 12</option>
+        <option>Country 13</option><option>Country 14</option><option>Country 15</option><option>Country 16</option>
+        <option>Country 17</option><option>Country 18</option><option>Country 19</option><option>Country 20</option>
+        <option>Country 21</option><option>Country 22</option><option>Country 23</option><option>Country 24</option>
+        <option>Country 25</option><option>Country 26</option><option>Country 27</option><option>Country 28</option>
+        <option>Country 29</option><option>Country 30</option>
+      </select></div>
+
+    <h2>Documents</h2>
+    <fieldset>
+      <legend>Resume/CV</legend>
+      <input id="resume" type="file" style="position:absolute;left:-9999px">
+      <button type="button">Attach</button>
+    </fieldset>
+    <p><button type="submit">Submit application</button></p>
+  </form>
+</main>
+</body></html>

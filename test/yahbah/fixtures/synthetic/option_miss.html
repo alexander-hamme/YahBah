@@ -1,0 +1,30 @@
+<!doctype html>
+<!--
+  Option misses (harness fixture; two-pass answers plan 2c): a native select and a radio group whose options do
+  not contain the answer a test plans for them (the select offers Job board / Referral / Other, the group
+  Yes / No / Not sure), so the planned value matches none of them.
+    First name *            plain text field (fills normally)
+    How did you hear? *     native select: Select... / Job board / Referral / Other
+    Open to relocation? *   radio group (fieldset + legend): Yes / No / Not sure
+  Nothing reacts to input and nothing submits.
+-->
+<html lang="en"><head><meta charset="utf-8"><title>Apply</title></head>
+<body>
+<main>
+  <h1>Apply</h1>
+  <form id="application" novalidate>
+    <div><label for="first">First name *</label> <input id="first" required></div>
+    <div><label for="source">How did you hear? *</label>
+      <select id="source" required>
+        <option value="">Select...</option><option>Job board</option><option>Referral</option><option>Other</option>
+      </select></div>
+    <fieldset>
+      <legend>Open to relocation? *</legend>
+      <label><input type="radio" name="relocate" value="yes" required> Yes</label>
+      <label><input type="radio" name="relocate" value="no"> No</label>
+      <label><input type="radio" name="relocate" value="unsure"> Not sure</label>
+    </fieldset>
+    <p><button type="submit">Submit application</button></p>
+  </form>
+</main>
+</body></html>

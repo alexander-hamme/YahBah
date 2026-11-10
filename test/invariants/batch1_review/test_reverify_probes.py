@@ -116,22 +116,52 @@ async def test_a_superseded_attempt_cannot_take_the_lease_back(db, activity_env)
 
 # ── locked approved answers ───────────────────────────────────────────────────
 
+async def type_comment(step) -> list[dict]:
+    """An agent step that gets unapproved text into the comments box *past the tool guard* (which refuses `input`
+    text that is not part of a planned answer, see the next test): these probes check the layers behind it, the
+    baseline in problems_for and the submit gate. It then asks for the planned colour, which is harmless."""
+    from yahbah.agent.fill import fill_text
+
+    schema = await get_form_schema(step.session)
+    comments = next(f["key"] for f in schema if f["label"].startswith("Anything else"))
+    colour = next(f["key"] for f in schema if f["label"].startswith("Favourite colour"))
+    await fill_text(step.session, comments, "I would also accept a lower salary.")
+    return [{"fill_field": {"key": colour, "value": "Blue"}}]
+
+
 @pytest.mark.browser
-async def test_an_agent_cannot_add_unapproved_text_to_a_field_the_approval_left_empty(
-        browser, pages, agent_llm, llm) -> None:
+@pytest.mark.parametrize("first_fill", [False, True])
+async def test_an_agent_cannot_type_text_that_is_not_part_of_a_planned_answer(
+        browser, pages, agent_llm, llm, first_fill) -> None:
+    """The tool guard: in the fix phase an `input` of unplanned text is refused (VALUE_NOT_PLANNED), in a locked
+    re-fill (no mapper) as well as in a first fill (with one)."""
     from harness.browser import element_index
 
     await load(browser, pages.write("comments.html", FLAKY_WITH_COMMENTS))
     schema = await get_form_schema(browser)
-    ctx = context_for(schema, {"First name": "Jane", "Favourite colour": "Blue", "City": "Boston"})  # approved
+    ctx = context_for(schema, {"First name": "Jane", "Favourite colour": "Blue", "City": "Boston"})
 
-    async def type_comment(step):
+    async def input_comment(step):
         index = await element_index(step.session, id="comments")
         return [{"input": {"index": index, "text": "I would also accept a lower salary.", "clear": True}}]
 
-    colour = next(f["key"] for f in schema if f["label"].startswith("Favourite colour"))
-    agent_llm.step(type_comment).step(lambda step: [{"fill_field": {"key": colour, "value": "Blue"}}])
-    agent_llm.done(data={"fixed": True, "unresolved": []})
+    async def mapper(rows):
+        return []
+
+    agent_llm.step(input_comment).done(data={"fixed": True, "unresolved": []})
+    await fill_form(browser, GENERIC, ctx, map_new_fields=mapper if first_fill else None)
+    assert agent_llm.calls, "the fix agent was never reached"
+    assert await run_js(browser, "document.getElementById('comments').value") == ""
+
+
+@pytest.mark.browser
+async def test_an_agent_cannot_add_unapproved_text_to_a_field_the_approval_left_empty(
+        browser, pages, agent_llm, llm) -> None:
+    await load(browser, pages.write("comments.html", FLAKY_WITH_COMMENTS))
+    schema = await get_form_schema(browser)
+    ctx = context_for(schema, {"First name": "Jane", "Favourite colour": "Blue", "City": "Boston"})  # approved
+
+    agent_llm.step(type_comment).done(data={"fixed": True, "unresolved": []})
     await fill_form(browser, GENERIC, ctx, map_new_fields=None)
     assert agent_llm.calls, "the fix agent was never reached"
     typed = await run_js(browser, "document.getElementById('comments').value")
@@ -152,20 +182,12 @@ async def test_the_submit_activitys_fresh_context_still_refuses_unapproved_text(
     (_fill_context from SubmitInput.field_mappings, ctx.written = SubmitInput.written, ctx.baseline =
     SubmitInput.baseline). baseline_carried is the real approve path (the re-fill's FillOutput.baseline): the
     agent's text must be caught as a change; baseline_missing: the gate must fail closed."""
-    from harness.browser import element_index
-
     await load(browser, pages.write("comments.html", FLAKY_WITH_COMMENTS))
     schema = await get_form_schema(browser)
     approved = {"First name": "Jane", "Favourite colour": "Blue", "City": "Boston"}
     refill = context_for(schema, approved)
 
-    async def type_comment(step):
-        index = await element_index(step.session, id="comments")
-        return [{"input": {"index": index, "text": "I would also accept a lower salary.", "clear": True}}]
-
-    colour = next(f["key"] for f in schema if f["label"].startswith("Favourite colour"))
-    agent_llm.step(type_comment).step(lambda step: [{"fill_field": {"key": colour, "value": "Blue"}}])
-    agent_llm.done(data={"fixed": True, "unresolved": []})
+    agent_llm.step(type_comment).done(data={"fixed": True, "unresolved": []})
     await fill_form(browser, GENERIC, refill, map_new_fields=None)
     assert await run_js(browser, "document.getElementById('comments').value"), "probe setup: no agent text"
 
@@ -180,6 +202,50 @@ async def test_the_submit_activitys_fresh_context_still_refuses_unapproved_text(
     assert claim.calls == 0, "the submit activity's gate claimed a form holding unapproved text"
     expected = "Anything else" if handoff == "baseline_carried" else "baseline"
     assert refused.value.reason == "fill_failed" and expected in refused.value.detail, refused.value.detail
+
+
+# ── planned values only, through every way an agent can write text (Phase 4 QA, two-pass answers) ──
+
+def unplanned_text_step(path: str):
+    """A fix-agent step that writes unplanned text into the comments box through `path`, then asks for the
+    planned colour (harmless). `input_fragments` appends pieces that are each part of a planned answer
+    (`clear: false`), so every single `input` passes text_allowed while the result is in no plan."""
+    async def step(step):
+        from harness.browser import element_index
+
+        schema = await get_form_schema(step.session)
+        colour = next(f["key"] for f in schema if f["label"].startswith("Favourite colour"))
+        index = await element_index(step.session, id="comments")
+        if path == "send_keys":
+            writes = [{"click": {"index": index}}, {"send_keys": {"keys": "LowerSalaryIsFine"}}]
+        else:
+            writes = [{"input": {"index": index, "text": "Boston", "clear": True}},
+                      {"input": {"index": index, "text": "Jane", "clear": False}}]
+        return [*writes, {"fill_field": {"key": colour, "value": "Blue"}}]
+    return step
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("path", ["send_keys", "input_fragments"])
+@pytest.mark.parametrize("first_fill", [True, False], ids=["first_fill", "locked_refill"])
+async def test_unplanned_text_in_a_field_without_a_plan_is_refused_or_reported_whatever_the_write_path(
+        browser, pages, agent_llm, llm, first_fill, path) -> None:
+    """Contract §4 "Planned values only": text no plan holds never sits on the form unnoticed. Either the
+    guard refuses the write, or fill_form reports the field."""
+    await load(browser, pages.write("comments.html", FLAKY_WITH_COMMENTS))
+    schema = await get_form_schema(browser)
+    ctx = context_for(schema, {"First name": "Jane", "Favourite colour": "Blue", "City": "Boston"})
+
+    async def mapper(rows):
+        return []
+
+    agent_llm.step(unplanned_text_step(path)).done(data={"fixed": True, "unresolved": []})
+    problems = await fill_form(browser, GENERIC, ctx, map_new_fields=mapper if first_fill else None)
+    assert agent_llm.calls, "the fix agent was never reached"
+    typed = await run_js(browser, "document.getElementById('comments').value")
+    assert not typed or any("Anything else" in p for p in problems), (
+        f"unplanned text {typed!r} sits in a field with no plan and fill_form reports {problems}")
+
 
 
 # ── focus in a frame the guard can't read ────────────────────────────────────
