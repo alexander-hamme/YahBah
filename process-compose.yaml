@@ -1,0 +1,42 @@
+version: "0.5"
+
+processes:
+  temporal:
+    command: temporal server start-dev --db-filename ~/.temporal/yahbah.db
+    shutdown:
+      signal: 2
+      timeout_seconds: 15
+    readiness_probe:
+      exec:
+        command: temporal operator cluster health
+      initial_delay_seconds: 2
+      period_seconds: 2
+      timeout_seconds: 5
+      failure_threshold: 30
+
+  api:
+    command: uv run uvicorn yahbah.api.main:app --reload --port 8000
+    depends_on:
+      temporal:
+        condition: process_healthy
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: 8000
+        path: /health
+      initial_delay_seconds: 2
+      period_seconds: 2
+      failure_threshold: 30
+
+  worker:
+    command: uv run python -m yahbah.worker
+    depends_on:
+      temporal:
+        condition: process_healthy
+    shutdown:
+      signal: 2
+      timeout_seconds: 15
+
+  dashboard:
+    command: npm run dev
+    working_dir: frontend

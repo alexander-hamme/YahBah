@@ -48,6 +48,7 @@ For module-level detail, start at [docs/wiki/index.md](docs/wiki/index.md).
 | Ollama | `brew install ollama` |
 | Chrome/Chromium | launched locally by browser-use (headless unless `BROWSER_HEADLESS=false`; a visible window also opens for a run in the headed fallback, see Runtime settings); see setup step 1 |
 | Node.js + npm | frontend only |
+| [just](https://just.systems) + [process-compose](https://f1bonacc1.github.io/process-compose/) | optional one-command dev runner: `brew install just f1bonacc1/tap/process-compose` (process-compose is not in homebrew/core; the tap formula builds from source and needs current Xcode Command Line Tools) |
 
 The default Ollama models are large: `config.py` notes that the two default models stay loaded together (~71 GB). Pick smaller models via env vars if your machine needs it.
 
@@ -60,6 +61,8 @@ uv sync
 (cd frontend && npm install)
 uvx playwright install chromium   # optional, see below
 ```
+
+With `just` installed, `just setup` does `uv sync`, `npm install` in `frontend/`, creates `~/.temporal` and runs `uv run alembic upgrade head` (the database from step 4 must already exist and `DATABASE_URL` be set). It does not install Chromium.
 
 browser-use drives Chrome over CDP and does not use the `playwright` Python package. It uses an installed Google Chrome or Chromium, or the Playwright Chromium cache (`~/Library/Caches/ms-playwright/chromium-*`, or `PLAYWRIGHT_BROWSERS_PATH`). If it finds none, it runs `uvx playwright install chromium` on first launch, so pre-installing just avoids that delay.
 
@@ -134,7 +137,24 @@ Requires a Google Cloud project with the Gmail API enabled and an OAuth consent 
 
 ## Running
 
-Four processes (the frontend is optional):
+Postgres and Ollama are not started by any command below; they must already be running (for example the `postgresql` brew service and the Ollama app).
+
+### One command (`just` + `process-compose`)
+
+```bash
+just dev                  # Temporal, API, worker and dashboard in one TUI
+just down                 # from another terminal: stop everything
+just restart worker       # from another terminal: restart one of temporal | api | worker | dashboard
+just                      # list every recipe
+```
+
+`just dev` (see `justfile` and `process-compose.yaml`) runs the same four commands as the manual block below: Temporal (UI: http://localhost:8233), the API on :8000, the worker with the Gmail pollers, and the dashboard on :3000 (`npm run dev` in `frontend/`). The API and the worker start only after Temporal passes its health check (`temporal operator cluster health`), since both connect to it at startup. Temporal and the worker are stopped with SIGINT (15 s limit) so the worker can close its Chrome sessions. Nothing is restarted automatically: a crashed process stays visible in the TUI until you restart it.
+
+process-compose's control server listens on TCP port 8085 (`PC_PORT_NUM` in the `justfile`; its default 8080 was taken on the author's machine). `just down` and `just restart` reach the running instance through that port, so they must run with the same `justfile`, from another terminal. If 8085 is busy on your machine, change that one line.
+
+### Manual alternative
+
+The same four processes, one per terminal (the frontend is optional):
 
 ```bash
 mkdir -p ~/.temporal                                         # once; the CLI does not create the directory
@@ -153,7 +173,7 @@ There is no separate poller process: the status and job-alert pollers run inside
 ### Debug one URL without Temporal
 
 ```bash
-uv run python scripts/run_pipeline.py <url>
+uv run python scripts/run_pipeline.py <url>    # or: just pipeline <url> [--submit]
 ```
 
 Runs discover → map → answers → fill without Temporal or a run record. It does not submit unless `--submit` is passed. `--headed-fallback` enables the headed fallback for a page that blocks headless. Output goes to `artifacts/debug-<timestamp>/`, including `answer_plan.json` (how each answer was derived and which fact ids back it; no fact values) and `answer_plan_fill_<n>.json` for answers made while filling. Blocking questions are printed with their reason. See `--help` for the other flags.
@@ -172,6 +192,8 @@ npm test                         # Vitest + Testing Library
 npm run lint                     # ESLint
 npx tsc --noEmit                 # type check
 ```
+
+Shortcuts: `just test [pytest args]` (quoted args survive: `just test -m "not browser"`), `just test-all [args]` (`--complete`), `just c7` (the C7 gate), `just web-check` (frontend checks), `just check` (pytest plus frontend checks). Other recipes: `just migrate`, `just seed-profile`, `just gmail-auth`, and the live evals `just eval-answers <main|heldout> <out>`, `just eval-verify <out>`, `just eval-offers <out>` (each wraps the run in `caffeinate -i`; plug the laptop in and run one at a time).
 
 Tests live in `test/`; the shared harness is `test/harness/` and the safety-invariant suite `test/invariants/` (including the `c7_acceptance` end-to-end gate). Markers:
 - `browser`: headless Chrome against local fixture pages (`test/yahbah/fixtures/`), no network.

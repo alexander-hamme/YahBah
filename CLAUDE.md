@@ -21,10 +21,12 @@ Yahbah is an Autonomous job-application system: job URL in, form filled and subm
 
 
 ## Commands
+- Runner: `just` lists all recipes (`justfile`; needs `brew install just f1bonacc1/tap/process-compose`). `just setup` (deps, `~/.temporal`, migrations); `just dev` runs Temporal, API (:8000), worker and dashboard (:3000) in one process-compose TUI (`process-compose.yaml`; API and worker wait for Temporal health; Postgres and Ollama are NOT managed, they must already be running); from another terminal `just down` or `just restart <temporal|api|worker|dashboard>` (control server on TCP :8085, `PC_PORT_NUM` in the justfile). Never run `just dev` yourself (a blocking TUI); ask the user to.
+- `just test <pytest args>` (e.g. `just test -m "not browser"`), `just test-all`, `just check` (pytest + frontend checks), `just pipeline <url> [--submit]`. The raw commands below still work; just is a convenience layer.
 - Deps: `uv sync`. Tests: `uv run pytest` (offline, parallel via pytest-xdist, about 80 s; leaves out `e2e`, the C7 whole-run gate through Temporal and Chrome). `--complete` includes it; `-n 0` runs serially for debugging. Markers `slow` (real timeouts), `browser` (headless Chrome), `db` (disposable Postgres via `TEST_DATABASE_URL`, default `postgresql+psycopg://yahbah_test@localhost/postgres`), `temporal` (local dev server), `live_llm` (real models, opt-in via `-m live_llm`); skip with e.g. `-m "not browser"`. Shared harness in `test/harness/`, safety invariants in `test/invariants/`.
-- Frontend checks: `cd frontend && npm test && npx tsc --noEmit && npm run lint` (all clean; keep them so).
-- For full app, Ask the user to Run: `temporal server start-dev --db-filename ~/.temporal/yahbah.db` (persistent; `mkdir -p ~/.temporal` first); `uv run uvicorn yahbah.api.main:app --reload --port 8000`; `uv run python -m yahbah.worker`.
-- Debug one URL without Temporal: `uv run python scripts/run_pipeline.py <url>` (does not submit unless `--submit`).
+- Frontend checks: `cd frontend && npm test && npx tsc --noEmit && npm run lint` (all clean; keep them so; `just web-check`).
+- Full app without just, ask the user to run: `temporal server start-dev --db-filename ~/.temporal/yahbah.db` (persistent; `mkdir -p ~/.temporal` first); `uv run uvicorn yahbah.api.main:app --reload --port 8000`; `uv run python -m yahbah.worker`; `cd frontend && npm run dev`.
+- Debug one URL without Temporal: `uv run python scripts/run_pipeline.py <url>` (does not submit unless `--submit`; `just pipeline <url>`).
 - Migrations: `uv run alembic upgrade head` (same `.env` role as the app; `yahbah_app` owns the DB and tables).
 
 ## Current Conventions (subject to change as needed)

@@ -9,6 +9,15 @@ Running record of architectural, structural, decision-making and workflow-paradi
 
 ---
 
+## 2026-11-10: one-command dev runner (`just` + `process-compose`)
+
+- **What.** Two files at the repo root: `justfile` (recipes for setup, `dev`, `down`, `restart <proc>`, migrations, tests, `check`, `pipeline`, seeding, Gmail auth and the live evals) and `process-compose.yaml` (processes `temporal`, `api`, `worker`, `dashboard`). `just dev` runs all four in one TUI; `api` and `worker` wait for Temporal's health check, and `temporal` and `worker` stop on SIGINT so the worker's `finally` blocks close its Chrome sessions. Postgres and Ollama stay outside the runner. process-compose's control server uses TCP port 8085 (`PC_PORT_NUM` in the justfile) because 8080 is taken on the dev machine. Argument-taking recipes forward args with `set positional-arguments` and `"$@"`. The justfile never loads `.env`.
+- **Why.** Running the stack took four terminals. No Docker: containers on macOS cannot use the GPU Ollama needs, and Chrome runs locally.
+- **Not changed.** No application code, contract or test. The manual per-terminal commands still work; the runner is a convenience layer.
+- **Governs:** [development.md](development.md#run-four-processes--deps), root `README.md` "Running", `CLAUDE.md` Commands. **Supersedes:** "three processes" in `development.md`.
+
+---
+
 ## 2026-11-09: job offers for the verifier (contract C9)
 
 - **Request (user).** The answers need context from the job description (the user's examples: location and salary), without passing the raw page to the verifier. Until now the verifier saw only the job's location, so it could not check an answer that is right only because of the posting: picking a preferred city among the offices the posting lists, falling back to the job's own location, or a salary relative to the posted band. In particular, this makes the user's `work_location_preference` fallback ("else the job's listed location") checkable: the job's location and offered places now reach the verifier as claims, while the applicant's preference still has to come from the cited fact. Uncommitted.
